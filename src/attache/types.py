@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from attache.app import Services
 
-ROLES = ("owner", "member", "guest")
-
 
 @dataclass
 class Person:
@@ -45,9 +43,8 @@ class Inbound:
     sender_name: str
     text: str
     is_group: bool = False
-    mentioned: bool = False  # native mention, reply to the bot, or trigger word
+    mentioned: bool = False  # set by the channel: a native mention or a reply to the bot
     message_id: str = ""
-    thread_id: str | None = None
     files: list[str] = field(default_factory=list)  # local paths of downloaded attachments
     ts: float = field(default_factory=time.time)
 

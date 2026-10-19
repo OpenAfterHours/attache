@@ -229,15 +229,15 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
     local unless it has an offset), `in_minutes` or `cron` (5 fields, local time); kind
     "message" (default) sends the text then, "turn" runs it as a request. op list: pending
     tasks (all=true: every chat). op cancel: by id."""
-    op, owner, tasks = args["op"], access(ctx.role, ctx.is_group) == "owner", ctx.services.store
+    op, owner, saved = args["op"], access(ctx.role, ctx.is_group) == "owner", ctx.services.store
     if op == "list":
-        return json.dumps(tasks.task_list(None if owner and args.get("all") else ctx.chat_key))
+        return json.dumps(saved.task_list(None if owner and args.get("all") else ctx.chat_key))
     if op == "cancel":
         chat = None if owner else ctx.chat_key
-        mine = [t["id"] for t in tasks.task_list(chat) if owner or t["by"] == ctx.sender.id]
+        mine = [t["id"] for t in saved.task_list(chat) if owner or t["by"] == ctx.sender.id]
         if int(args["id"]) not in mine:
             raise KeyError(f"no pending task {args['id']} that you can cancel")
-        tasks.task_cancel(int(args["id"]))
+        saved.task_cancel(int(args["id"]))
         return f"cancelled task {args['id']}"
     if op != "add":
         raise ValueError(f"unknown op {op!r}: use add, list or cancel")
@@ -247,8 +247,9 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
     at = datetime.fromisoformat(args["at"]).timestamp() if args.get("at") else None  # naive: local
     if at is None and args.get("in_minutes") not in (None, ""):
         at = datetime.now().timestamp() + 60 * float(args["in_minutes"])
-    add, cron = ctx.services.scheduler.add, args.get("cron") or None
-    task = add(ctx.chat_key, str(args["text"]), at=at, cron=cron, kind=kind, by=ctx.sender.id)
+    cron = args.get("cron") or None
+    scheduler = ctx.services.scheduler
+    task = scheduler.add(ctx.chat_key, args["text"], at=at, cron=cron, kind=kind, by=ctx.sender.id)
     return json.dumps(task)
 
 

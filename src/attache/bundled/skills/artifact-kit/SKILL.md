@@ -86,8 +86,8 @@ They see only docs shared with that chat (and that chat's `_tasks`). They can ad
 - `templates/home.html`: the Home page (`home`): today's to-dos by status, an add form and
   upcoming reminders. Keep its `content="todos,_tasks"` when you change it.
 
-Read the template with `read_file` and adapt a copy; do not edit the templates themselves
-unless the owner asks for a new look.
+Read the template with `read_file` (or Claude Code's Read) and adapt a copy; do not edit the
+templates themselves unless the owner asks for a new look.
 
 ## Publishing
 

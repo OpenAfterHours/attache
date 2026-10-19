@@ -63,6 +63,8 @@ src/attache/
      requests) and only inside the Attaché window. The owner's UI token is random per run and
      only reaches the browser through the link Attaché prints.
    - The web server binds loopback only in phase 1. Tokens are compared with
-     `hmac.compare_digest`.
+     `hmac.compare_digest`; page tokens derive from the per-run UI token, so they rotate too.
+   - `claude -p` runs in `<home>-claude`, outside the home, so files in `<home>` never load as
+     Claude Code project config.
 7. **Contracts live in `types.py`** and the module docstrings. Change a public signature only
    together with every caller and its tests.

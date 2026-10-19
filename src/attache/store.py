@@ -42,9 +42,10 @@ class Store:
     def __init__(self, path: Path) -> None:
         self.on_change: list[DocListener] = []  # called after every doc_put / doc_delete
         # One connection shared by all threads, a lock around writes, and autocommit: every
-        # write is a single statement, so no transaction is ever left open.
+        # write is a single statement, so no transaction is ever left open. A short busy timeout:
+        # calls block the event loop, so a locked database should fail fast and be retried.
         self._lock = threading.Lock()
-        self._db = sqlite3.connect(path, timeout=10, check_same_thread=False, isolation_level=None)
+        self._db = sqlite3.connect(path, timeout=1, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)

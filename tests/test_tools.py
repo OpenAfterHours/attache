@@ -37,7 +37,7 @@ class Channels:
 @pytest.fixture
 def services(home: Path) -> Iterator[app.Services]:
     db = Store(home / "attache.db")
-    yield app.Services(config.load(home), db, Scheduler(db), Channels(), {}, "http://test", b"k")
+    yield app.Services(config.load(home), db, Scheduler(db), Channels(), {}, "http://test")
     db.close()
 
 

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import secrets
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from socket import AF_INET, AF_INET6, create_server, socket
@@ -23,10 +21,11 @@ class Services:
     channels: channels.ChannelManager
     gateway: dict[str, Turn]  # MCP token -> the turn it serves (the claude-cli backend's tools)
     web_url: str  # e.g. http://127.0.0.1:8765
-    secret: bytes  # HMAC key for artifact tokens and signed links, from <home>/.secret
-    ui_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))  # the web page's
+    ui_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))  # new every run
 
-    home = property(lambda self: self.config.home)  # <home>, the folder all state lives in
+    @property
+    def home(self) -> Path:
+        return self.config.home
 
 
 def listen(cfg: config.Config) -> socket:
@@ -38,18 +37,11 @@ def listen(cfg: config.Config) -> socket:
 
 
 def build(home: Path) -> Services:
-    """Load config and open the store, creating <home>/.secret, readable by this user only,
-    if it is missing. No network, no tasks started."""
-    key = home / ".secret"
-    if not key.exists():
-        key.write_text(secrets.token_hex(32), encoding="utf-8")
-        key.chmod(0o600)  # enough on POSIX; on Windows, also drop what the folder grants
-        if os.name == "nt":
-            acl = [str(key), "/inheritance:r", "/grant:r", f"{os.environ.get('USERNAME')}:F"]
-            subprocess.run(["icacls", *acl], capture_output=True)
-    cfg, db, secret = config.load(home), store.Store(home / "attache.db"), key.read_bytes().strip()
+    """Load config and open the store. No network, no tasks started."""
+    cfg = config.load(home)
+    db = store.Store(home / "attache.db")
     url = f"http://{'[::1]' if cfg.host == '::1' else cfg.host}:{cfg.port}"
-    return Services(cfg, db, scheduler.Scheduler(db), channels.ChannelManager(), {}, url, secret)
+    return Services(cfg, db, scheduler.Scheduler(db), channels.ChannelManager(), {}, url)
 
 
 async def run(home: Path, *, terminal: bool) -> None:
@@ -60,8 +52,9 @@ async def run(home: Path, *, terminal: bool) -> None:
     machine is a SystemExit saying so; so is the web server stopping. On the way out every
     task is cancelled and awaited (any that failed is logged), the channels are stopped, and
     only then is the store closed. fire is set before the scheduler starts: no wake() needed."""
+    cfg = config.load(home)
     try:
-        sock = listen(cfg := config.load(home))
+        sock = listen(cfg)
     except OSError:
         raise SystemExit(f"Port {cfg.port} is in use. Is `attache run` already running?") from None
     services = build(home)
@@ -79,7 +72,7 @@ async def run(home: Path, *, terminal: bool) -> None:
         if server in done:
             raise SystemExit("The web server stopped.")
     finally:
-        everything = [*tasks, *rt.background]  # background: scheduled turns still running
+        everything = [*tasks, *rt.background.values()]  # background: scheduled turns running
         for task in everything:
             task.cancel()
         for result in await asyncio.gather(*everything, return_exceptions=True):

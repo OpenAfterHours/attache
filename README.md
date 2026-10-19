@@ -2,8 +2,8 @@
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is about 1,400 lines of Python code, with a
-hard cap of 1,600; everything else is a skill.
+folder of skills it can edit itself. The core is just under 1,600 lines of Python code, the
+cap CI enforces; everything else is a skill.
 
 > **Status:** phase 1 of the [roadmap](docs/proposal.html): the local core, terminal and web
 > chat. Slack and Signal arrive in phase 2, email (Outlook, Gmail, Titan) in phase 3.
@@ -17,6 +17,8 @@ attache chat             # terminal chat, plus the web page
 attache run              # web page, reminders and channels, no terminal chat
 attache doctor           # check your setup
 ```
+
+![The web page: chat on the left, the Home page with to-dos and reminders on the right](docs/phase-1-ui.png)
 
 The terminal and the web page are one conversation. Attaché prints a link like
 `http://127.0.0.1:8765/#t=...` when it starts; open that link to use the web page. The token in
@@ -59,7 +61,9 @@ key_env = "ANTHROPIC_API_KEY"
   their chat, and never files, shell or email. Your own turns inside a group get member tools
   too, because the group's messages are untrusted.
 - **Claude Code** runs as a backend with `claude -p` on your own login, for your own chats only.
-  Attaché's tools reach it through an MCP endpoint on the local web server.
+  Attaché's tools reach it through an MCP endpoint on the local web server. It runs in a
+  working folder next to your home (`~/.attache-claude`), so nothing written into `~/.attache`
+  can load as Claude Code project settings.
 
 The full design, with the research behind it, is in [docs/proposal.html](docs/proposal.html).
 

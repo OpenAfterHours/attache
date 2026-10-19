@@ -89,7 +89,8 @@
   const log = $("log"), input = $("text"), frame = $("frame"), bar = $("bar"), hello = $("hello");
   const URLS = /(https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
   const KEY = "attache-token";
-  let current = null, thinking = null, loading = false, early = [];
+  let TOKEN = null, current = null, wanted = null, pages = [];
+  let thinking = null, loading = false, early = [];
 
   // Links look like http://127.0.0.1:<port>/#t=<token>&page=<name>; either part may be missing.
   // The token is random per run of Attaché: keep it for other tabs, and out of the address bar.
@@ -101,11 +102,26 @@
   // localStorage may be blocked; then the token lives in this page only.
   const storage = (action) => { try { return action(localStorage); } catch { return null; } };
   const link = fromHash();
-  if (link.token) storage((s) => s.setItem(KEY, link.token));
-  const TOKEN = link.token || storage((s) => s.getItem(KEY));
+
+  // A #t= token is kept only once the server accepts it, so a junk link from another site can
+  // never replace a token that works.
+  async function begin() {
+    const stored = storage((s) => s.getItem(KEY));
+    for (const token of [link.token, stored]) {
+      const check = { headers: { "X-Attache-Token": token } };
+      const res = token && (await fetch("/api/messages", check).catch(() => null));
+      if (!res || !res.ok) continue;
+      TOKEN = token;
+      if (token !== stored) storage((s) => s.setItem(KEY, token));
+      wanted = link.page;
+      connect();
+      return loadPages();
+    }
+    locked();
+  }
 
   function locked() {
-    storage((s) => s.removeItem(KEY));
+    storage((s) => TOKEN && s.getItem(KEY) === TOKEN && s.removeItem(KEY)); // only one that failed
     const note = el("p", "empty", "Open Attaché from the link printed in your terminal.");
     document.querySelector("main").replaceChildren(note);
   }
@@ -123,15 +139,14 @@
     Object.assign(document.createElement(tag), { className, textContent });
 
   // Message text is untrusted: text nodes and links only, never HTML. Links to a page of this
-  // Attaché (/#page=<name> or /a/<name>) open it in the Pages panel.
+  // Attaché (/#page=<name>) open it in the Pages panel.
   function writeText(node, text) {
     text.split(URLS).forEach((part, i) => {
       if (i % 2 === 0) return void (part && node.append(part));
       const a = el("a", "", part);
       Object.assign(a, { href: part, target: "_blank", rel: "noopener noreferrer" });
       const url = URL.canParse(part) ? new URL(part) : null;
-      const name = url && url.origin === location.origin
-        && (new URLSearchParams(url.hash.slice(1)).get("page") || url.pathname.match(/^\/a\/(.+)$/)?.[1]);
+      const name = url?.origin === location.origin && new URLSearchParams(url.hash.slice(1)).get("page");
       if (name) a.addEventListener("click", (e) => { e.preventDefault(); show(name, true); });
       node.append(a);
     });
@@ -164,9 +179,10 @@
       const wasThinking = Boolean(thinking);
       thinking = null;
       log.replaceChildren(...(past.length ? [] : [hello]));
-      for (const m of past) add(m.role === "user" ? "you" : "bot", m.text);
-      if (wasThinking && past.at(-1)?.role === "user") setThinking(true);
-      const fresh = past.filter((m) => m.role === "assistant" && m.ts >= since).map((m) => m.text);
+      const mine = (m) => m.role === "user" && m.sender_name !== "Reminder"; // reminders are ours
+      for (const m of past) add(mine(m) ? "you" : "bot", m.text);
+      if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
+      const fresh = past.filter((m) => !mine(m) && m.ts >= since).map((m) => m.text);
       early = early.filter((msg) => !fresh.includes(msg.text));
     }
     loading = false;
@@ -198,7 +214,7 @@
     $("send").requestSubmit();
   });
 
-  const press = (buttons, on) => buttons.forEach((b) => b.setAttribute("aria-pressed", String(on(b))));
+  const press = (all, on) => all.forEach((b) => b.setAttribute("aria-pressed", String(on(b))));
   const views = document.querySelectorAll(".views button");
   function setView(name) {
     document.body.dataset.view = name;
@@ -207,9 +223,12 @@
   views.forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
   const highlight = () => press(bar.querySelectorAll("button"), (b) => b.dataset.name === current);
 
-  // Showing a page always (re)loads it, so a page the agent rewrote is fresh when picked.
+  // Showing a page always (re)loads it, so a page the agent rewrote is fresh when picked. Its
+  // address, with the page's own token, comes from the list; until the list has it, it waits.
   function show(name, focus = false) {
-    frame.src = `/a/${encodeURIComponent(name)}`;
+    const page = pages.find((p) => p.name === name);
+    if (!page) return void (wanted = name);
+    frame.src = page.src;
     frame.hidden = false;
     current = name;
     highlight();
@@ -219,27 +238,35 @@
   const label = (name) => name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
 
   async function loadPages() {
-    const names = await api("GET", "/api/artifacts").catch(() => null);
-    if (!names) return;
-    if (!names.length) {
+    const list = await api("GET", "/api/artifacts").catch(() => null);
+    if (!list) return;
+    pages = list;
+    if (!list.length) {
       bar.replaceChildren(el("span", "muted", "No pages yet. Ask Attaché for a to-do board."));
       return;
     }
-    bar.replaceChildren(...names.map((name) => {
+    bar.replaceChildren(...list.map(({ name }) => {
       const button = el("button", "", label(name));
       Object.assign(button, { type: "button", onclick: () => show(name) });
       button.dataset.name = name;
       return button;
     }));
-    if (current) highlight();
-    else show(names.includes("home") ? "home" : names[0]);
+    const has = (name) => list.some((p) => p.name === name);
+    if (wanted && has(wanted)) show(wanted, true);
+    else if (current && has(current)) highlight();
+    else show(has("home") ? "home" : list[0].name);
+    wanted = null;
   }
 
   function connect() {
     const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
     const status = $("status");
     events.onopen = () => { status.className = "dot live"; status.title = "Connected"; loadHistory(); };
-    events.onerror = () => { status.className = "dot"; status.title = "Reconnecting…"; };
+    events.onerror = () => {
+      status.className = "dot";
+      status.title = "Reconnecting…";
+      if (events.readyState === EventSource.CLOSED) locked(); // refused: a token from an old run
+    };
     events.addEventListener("message", (event) => {
       const msg = JSON.parse(event.data);
       if (msg.chat_key === "local:me") receive(msg);
@@ -248,14 +275,9 @@
 
   addEventListener("hashchange", () => {
     const { page } = fromHash(); // a #page= link followed in this tab
-    if (page) show(page, true);
+    if (page && TOKEN) show(page, true);
   });
-  if (!TOKEN) locked();
-  else {
-    if (link.page) show(link.page, true);
-    connect();
-    loadPages();
-  }
+  begin();
 </script>
 </body>
 </html>

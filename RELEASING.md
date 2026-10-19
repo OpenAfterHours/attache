@@ -34,6 +34,8 @@ without one for now. When the repository is made public:
 2. On PyPI, edit the publisher and set **Environment name** to `pypi`.
 3. Optionally add a required reviewer under **Settings → Environments → pypi** so a person
    approves each upload.
+4. Add a tag ruleset (**Settings → Rules → Rulesets**) so only maintainers can create `v*`
+   tags. Until then, anyone with write access can publish by pushing a tag.
 
 ## Cutting a release
 

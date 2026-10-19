@@ -29,13 +29,6 @@ NEXT = """Next:
   3. Run `attache` to chat here, or `attache run` for the web page alone."""
 
 
-def _ask_name(default: str) -> str:
-    try:
-        return input(f"Your name [{default}]: ").strip() or default
-    except EOFError:  # nobody to ask
-        return default
-
-
 def main(argv: list[str] | None = None) -> int:
     """Run the `attache` command and return a process exit code."""
     with suppress(AttributeError, ValueError, OSError):  # Windows consoles and pipes: UTF-8
@@ -55,7 +48,10 @@ def main(argv: list[str] | None = None) -> int:
     home = (args.home or config.home_dir()).expanduser()
     user = os.environ.get("USERNAME") or os.environ.get("USER") or "you"
     if args.command == "init" or (args.command is None and not (home / "attache.toml").exists()):
-        name = args.name or (user if args.command else _ask_name(user))
+        name = args.name or user
+        if args.command is None:
+            with suppress(EOFError):  # nobody to ask: keep the default
+                name = input(f"Your name [{user}]: ").strip() or user
         made = config.init_home(home, name, args.endpoint)
         print(f"Home: {home}", *(f"  created {p.relative_to(home)}" for p in made), sep="\n")
         print(NEXT.format(home=home))
@@ -90,12 +86,15 @@ def _doctor(home: Path) -> int:
     routed |= {c.endpoint for c in cfg.chats.values() if c.endpoint} if cfg else set()
     for name in sorted(routed):
         ep = cfg.endpoints.get(name)
-        cli = ep is not None and ep.api == "claude-cli"
-        need = ep.options.get("bin", "claude") if cli else getattr(ep, "key_env", None)  # or None
-        ok = ep is not None and (shutil.which(need) if cli else not need or os.environ.get(need))
+        if ep is None:
+            need, ok = "an [endpoints] block", False
+        elif ep.api == "claude-cli":
+            need = ep.options.get("bin", "claude")
+            ok = shutil.which(need) is not None
+        else:
+            need, ok = ep.key_env, not ep.key_env or bool(os.environ.get(ep.key_env))
         mark = "✓" if ok else "✗" if name == cfg.own_chats else "!"  # "!": only groups need it
-        missing = f" needs {need or 'an [endpoints] block'}"
-        checks.append((mark, f"endpoint {name}" + ("" if ok else missing)))
+        checks.append((mark, f"endpoint {name}" + ("" if ok else f" needs {need}")))
     checks += [("✓" if shutil.which(tool) else "✗", f"{tool} installed") for tool in ("git", "uv")]
     if cfg:
         from attache import app  # the web stack, for the same bind check as `attache run`

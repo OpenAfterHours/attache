@@ -184,7 +184,12 @@ def test_run_serves_tools_over_http_mcp_and_cleans_up(tmp_path: Path) -> None:
     assert served.ctx is turn.ctx
     server = {"type": "http", "url": f"{WEB_URL}/mcp/{token}"}
     assert json.loads(call["files"]["mcp.json"]) == {"mcpServers": {"attache": server}}
-    assert call["files"]["system.md"] == f"You are Attaché.\n\nYour files live in {tmp_path}."
+    first_line, rest = call["files"]["system.md"].split("\n\n", 1)
+    assert first_line == (
+        "Your working directory is a scratch folder. Every relative path below is relative to "
+        f"{tmp_path}; use absolute paths under it."
+    )
+    assert rest == "You are Attaché."
     assert turn.ctx.services.gateway == {}  # token closed
     assert not call["temp"].exists()  # the turn's temp files are gone
 
@@ -259,7 +264,12 @@ def test_transcript_is_capped_and_fenced_safely(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "error",
-    [NOT_FOUND, error_result("Prompt is too long"), error_result("Context window exceeded")],
+    [
+        NOT_FOUND,
+        error_result("Prompt is too long"),
+        error_result("Input exceeds the context window"),
+        error_result("maximum context length reached"),
+    ],
 )
 def test_stuck_session_retries_fresh_with_transcript(tmp_path: Path, error: str) -> None:
     turn = make_turn(tmp_path, session={"session_id": "old"}, history=HISTORY)
@@ -281,6 +291,32 @@ def test_other_failures_do_not_retry_and_still_clean_up(tmp_path: Path) -> None:
     assert len(runner.calls) == 1
     assert turn.ctx.services.gateway == {}
     assert not runner.calls[0]["temp"].exists()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "API Error: 400 invalid context_management value",
+        "Could not load the MCP server: missing context",
+    ],
+)
+def test_errors_that_merely_mention_context_do_not_reset(tmp_path: Path, message: str) -> None:
+    turn = make_turn(tmp_path, session={"session_id": "old"})
+    runner = Runner(turn.ctx.services.gateway, [error_result(message)], STREAM)
+    with pytest.raises(RuntimeError, match="context"):
+        asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
+    assert len(runner.calls) == 1
+
+
+def test_no_retry_once_a_tool_has_run(tmp_path: Path) -> None:
+    # The tool may have sent a message or written a file; a second run would do it again.
+    tool_use = {"type": "tool_use", "id": "t1", "name": "mcp__attache__send", "input": {}}
+    assistant = json.dumps({"type": "assistant", "message": {"content": [tool_use]}})
+    turn = make_turn(tmp_path, session={"session_id": "old"})
+    runner = Runner(turn.ctx.services.gateway, [assistant, error_result("Prompt is too long")])
+    with pytest.raises(RuntimeError, match="Prompt is too long"):
+        asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
+    assert len(runner.calls) == 1
 
 
 # the default runner, driven with a Python child instead of the real claude

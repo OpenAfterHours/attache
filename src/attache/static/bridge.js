@@ -2,7 +2,8 @@
 //   <script src="/bridge.js" data-token="..." data-artifact="<slug>"></script>
 // and it gives the page window.attache = {db: {list, get, put, delete}, on}.
 // Pages run sandboxed at an opaque origin, so every call is a CORS request carrying the
-// page's token in headers; the server allows only the collections the page was made with.
+// page's token in headers; the server allows only the collections the page declares in its
+// <meta name="attache-collections" content="a,b">.
 (() => {
   "use strict";
   const { token, artifact } = document.currentScript.dataset;

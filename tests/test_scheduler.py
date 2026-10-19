@@ -155,20 +155,28 @@ def test_wake_fires_a_new_task_promptly(store: Store) -> None:
     assert store.task_list() == []
 
 
-def test_run_survives_store_errors(
+def locked_once(method: Callable[..., Any]) -> Callable[..., Any]:
+    """`method`, except that its first call fails as if another process held the database."""
+    calls: list[tuple[Any, ...]] = []
+
+    def wrapper(*args: Any) -> Any:
+        calls.append(args)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return method(*args)
+
+    return wrapper
+
+
+def test_store_errors_are_retried_and_never_repeat_a_reminder(
     store: Store, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(scheduler, "RETRY_SECONDS", 0.01)
-    real_task_due = store.task_due
-    failures = [sqlite3.OperationalError("database is locked")] * 2
-
-    def flaky_task_due(now: float) -> list[dict[str, Any]]:
-        if failures:
-            raise failures.pop()
-        return real_task_due(now)
-
-    monkeypatch.setattr(store, "task_due", flaky_task_due)
-    store.task_add(CHAT, "still fires", time.time() - 1)
+    # Fire-then-finish would deliver twice here: the reminder goes out, finishing it fails, and
+    # the retry finds it still pending. Finishing first delivers it once.
+    for name in ("task_due", "task_finish", "task_next"):
+        monkeypatch.setattr(store, name, locked_once(getattr(store, name)))
+    store.task_add(CHAT, "once", time.time() - 1)
     fired: list[str] = []
 
     async def fire(task: dict[str, Any]) -> None:
@@ -177,11 +185,32 @@ def test_run_survives_store_errors(
     async def main() -> None:
         runner = asyncio.create_task(Scheduler(store, fire).run())
         await until(lambda: bool(fired))
+        await asyncio.sleep(0.2)  # time for any wrong second delivery
         await stop(runner)
 
     asyncio.run(main())
-    assert fired == ["still fires"]
-    assert caplog.text.count("database is locked") == 2
+    assert fired == ["once"]
+    retries = [r for r in caplog.records if r.getMessage().startswith("scheduler error")]
+    assert [str(r.exc_info[1]) for r in retries if r.exc_info] == ["database is locked"] * 3
+    assert store.task_list() == []
+
+
+def test_a_task_is_finished_before_it_fires(store: Store) -> None:
+    store.task_add(CHAT, "once", time.time() - 1)
+    daily = store.task_add(CHAT, "daily", time.time() - 1, cron="0 7 * * *")
+    seen: list[list[str]] = []
+
+    async def fire(task: dict[str, Any]) -> None:
+        seen.append([t["text"] for t in store.task_due(time.time())])
+
+    async def main() -> None:
+        runner = asyncio.create_task(Scheduler(store, fire).run())
+        await until(lambda: len(seen) == 2)
+        await stop(runner)
+
+    asyncio.run(main())
+    assert seen == [["daily"], []]  # each task is no longer due while its own fire() runs
+    assert store.task_list()[0]["id"] == daily["id"]
 
 
 def test_run_needs_fire(store: Store) -> None:

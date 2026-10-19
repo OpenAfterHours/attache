@@ -29,7 +29,12 @@ OWNER_BUILTINS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "
 # Our tools that Claude Code's own Read/Write/Edit/Bash already cover, so they are not served.
 DUPLICATE_TOOLS = {"read_file", "write_file", "edit_file", "run"}
 # Errors a fresh session fixes: an unknown --resume id, or a conversation past the context limit.
-RESET_ON = ("no conversation found", "too long", "context")
+RESET_ON = ("no conversation found", "prompt is too long", "context window", "context length")
+SCRATCH = "Your working directory is a scratch folder. Every relative path below is relative to"
+
+
+class StaleSessionError(RuntimeError):
+    """The resumed session can't go on, and no tool ran, so a fresh session can safely retry."""
 
 
 async def _spawn(argv: list[str], text: str, cwd: Path, env: dict[str, str]) -> AsyncIterator[str]:
@@ -115,13 +120,12 @@ class ClaudeCLI:
             server = {"type": "http", "url": f"{services.web_url}/mcp/{token}"}
             config = json.dumps({"mcpServers": {"attache": server}})
             (files / "mcp.json").write_text(config, encoding="utf-8")
-            system = f"{turn.system}\n\nYour files live in {services.home}."
+            system = f"{SCRATCH} {services.home}; use absolute paths under it.\n\n{turn.system}"
             (files / "system.md").write_text(system, encoding="utf-8")
             try:
                 return await self._once(turn, files, cwd)
-            except RuntimeError as e:
-                stuck = any(s in str(e).lower() for s in RESET_ON)
-                if not stuck or not turn.session.get("session_id"):
+            except StaleSessionError:
+                if not turn.session.get("session_id"):
                     raise
                 return await self._once(replace(turn, session={}), files, cwd)  # full transcript
         finally:
@@ -136,16 +140,20 @@ class ClaudeCLI:
 def parse_events(lines: Iterable[str]) -> Reply:
     """Reply.text from the final "result" event (fall back to joined assistant text blocks),
     Reply.session = {"session_id": ...}, Reply.usage = {"cost_usd": ..., ...}. A result with
-    is_error true raises RuntimeError with its message. Non-JSON lines are ignored."""
+    is_error true raises RuntimeError with its message (StaleSessionError when a fresh session would
+    fix it and no tool has run yet, since running tools twice could repeat a send or a write).
+    Non-JSON lines are ignored."""
     events = []
     for line in lines:
         with contextlib.suppress(ValueError):
             events.append(json.loads(line))
     result = next((e for e in reversed(events) if e.get("type") == "result"), {})
-    if result.get("is_error"):
-        errors = "; ".join(result.get("errors") or [])
-        raise RuntimeError(result.get("result") or errors or result.get("subtype", "claude failed"))
     blocks = [b for e in events if e.get("type") == "assistant" for b in e["message"]["content"]]
+    if result.get("is_error"):
+        message = result.get("result") or "; ".join(result.get("errors") or ["claude failed"])
+        used_tools = any(b.get("type") == "tool_use" for b in blocks)
+        stale = not used_tools and any(s in message.lower() for s in RESET_ON)
+        raise (StaleSessionError if stale else RuntimeError)(message)
     usage = {k: (result.get("usage") or {}).get(k) for k in ("input_tokens", "output_tokens")}
     usage["cost_usd"] = result.get("total_cost_usd")
     text = result.get("result") or "\n\n".join(b["text"] for b in blocks if b.get("type") == "text")

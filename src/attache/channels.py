@@ -45,8 +45,10 @@ class TerminalChannel:
     exits at once. EOF, "/quit" or "/exit" sets `done`. Prints the web page's URL at start.
     Empty lines go through too: the router ignores them."""
 
+    name = "local"
+
     def __init__(self, owner_name: str, url: str) -> None:
-        self.name, self.done, self.lines = "local", asyncio.Event(), asyncio.Queue[str]()
+        self.done, self.lines = asyncio.Event(), asyncio.Queue[str]()
         self.owner_name, self.url = owner_name, url
 
     async def start(self, on_message: OnMessage) -> None:

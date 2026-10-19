@@ -1,13 +1,14 @@
-"""The local web server: chat page, artifacts, the data bridge, live events and MCP. Owner: web.
+"""The local web server: chat page, artifacts, the data bridge, live events and MCP.
 
 Routes
   GET  /                       static/ui.html. It holds no token: the terminal prints
                                http://127.0.0.1:<port>/#t=<services.ui_token> and the page keeps it.
   GET  /bridge.js              static/bridge.js
-  GET  /a/{name}               artifacts/<name>.html (name [a-z0-9-]+) with the bridge script
-                               injected and CSP; 403 when Sec-Fetch-Dest says it is not a frame
-  GET  /api/artifacts          the page names, sorted                                UI token
-  GET  /api/messages           the last 50 messages of local:me: [{role, text, ts}]  UI token
+  GET  /a/{name}?t=<token>     artifacts/<name>.html (name [a-z0-9-]+) with the bridge script
+                               injected and CSP; 403 without the page's token, or when
+                               Sec-Fetch-Dest says it is not loaded in a frame
+  GET  /api/artifacts          [{name, src}], src = "/a/<name>?t=<token>", sorted   UI token
+  GET  /api/messages           the last 50 of local:me: [{role, text, ts, sender_name}] UI token
   POST /api/chat {text}        an owner Inbound in local:me; the reply arrives over SSE UI token
   GET|POST /api/db/{c}         list | create   } the UI token or a page's token, under the db
   GET|PUT|DELETE /api/db/{c}/{id}             } tool's rules (store.db_access)
@@ -24,11 +25,15 @@ Security
   send CORS headers for that "null" origin (tokens travel in headers, never cookies). Other
   routes send none. The CSP also blocks every external resource, pop-ups, form posts and
   framing by other sites; pages open only inside the Attaché window. A page sends the headers
-  X-Attache-Artifact: <slug> and X-Attache-Token: artifact_token(secret, slug). Its collections
-  come only from its <meta name="attache-collections" content="a,b">. Pages published by a member
-  or in a group have an "_artifacts" record {chat_key}, and see only docs shared with that chat.
+  X-Attache-Artifact: <slug> and X-Attache-Token: artifact_token(ui_token, slug), so page
+  tokens change with every run, as the UI token does. Its collections come only from its
+  <meta name="attache-collections" content="a,b">. Pages published by a member or in a group
+  have an "_artifacts" record {chat_key}, and see only docs shared with that chat.
   Only loopback Host headers are served (against DNS rebinding); never a wildcard address.
-  Bad token 401, refused 403, missing 404, bad JSON 400.
+  Starlette keeps the brackets of an IPv6 host, so "[::1]" matches.
+  /mcp refuses any request with an Origin header (403), so web pages cannot post to it, and
+  wants Content-Type: application/json (415). Bad token 401, refused 403, missing 404, and a
+  body that is not a JSON object 400.
 """
 
 from __future__ import annotations
@@ -54,9 +59,9 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from attache import __version__
-from attache.agent import run_tool
+from attache.agent import run_tool, tool_spec
 from attache.store import _shared, db_access
-from attache.types import Inbound, OnMessage, Outbound, Tool, ToolCall
+from attache.types import Inbound, OnMessage, Outbound, ToolCall
 
 if TYPE_CHECKING:
     from attache.app import Services
@@ -66,7 +71,6 @@ UI = "_ui"  # the scope slug of the Attaché page itself
 PING_SECONDS = 15
 STATIC = Path(__file__).parent / "static"
 SLUG = re.compile(r"[a-z0-9-]+")
-LOOPBACK = ["127.0.0.1", "localhost", "[::1]"]  # Starlette keeps the brackets of IPv6 hosts
 META = re.compile(r"<meta\b(?=[^>]*name=.attache-collections.)[^>]*content=[\"']([^\"']*)", re.I)
 TAG = '<script src="/bridge.js" data-token="{}" data-artifact="{}"></script>'
 CSP = (
@@ -79,9 +83,9 @@ ERRORS = {PermissionError: 403, KeyError: 404, ValueError: 400}
 SERVER = {"capabilities": {"tools": {}}, "serverInfo": {"name": "attache", "version": __version__}}
 
 
-def artifact_token(secret: bytes, name: str) -> str:
-    """The token that lets the page `name` use the bridge."""
-    return hmac.new(secret, f"attache:{name}".encode(), "sha256").hexdigest()
+def artifact_token(key: bytes, name: str) -> str:
+    """The token that lets the page `name` load and use the bridge; key is the run's UI token."""
+    return hmac.new(key, f"attache:{name}".encode(), "sha256").hexdigest()
 
 
 class Scope(NamedTuple):
@@ -98,10 +102,11 @@ def scope_of(services: Services, request: Request, *, query: bool = False) -> Sc
     the Attaché page, whose token is services.ui_token. A wrong token raises 401. A page's
     collections are those its <meta> declares; an "_artifacts" record adds its chat_key."""
     source = request.query_params if query else request.headers
-    key = "{}" if query else "x-attache-{}"
-    artifact = source.get(key.format("artifact"))
-    token = source.get(key.format("token")) or ""
-    expected = artifact_token(services.secret, artifact) if artifact else services.ui_token
+    field = "{}" if query else "x-attache-{}"
+    artifact = source.get(field.format("artifact"))
+    token = source.get(field.format("token")) or ""
+    ui = services.ui_token
+    expected = artifact_token(ui.encode(), artifact) if artifact else ui
     valid = not artifact or SLUG.fullmatch(artifact)
     if not valid or not hmac.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(401, "bad or missing token")
@@ -114,8 +119,12 @@ def scope_of(services: Services, request: Request, *, query: bool = False) -> Sc
     return Scope(artifact, frozenset(n.strip() for n in names if n.strip()), record.get("chat_key"))
 
 
-def _mcp_tool(tool: Tool) -> dict[str, Any]:
-    return {"name": tool.name, "description": tool.description, "inputSchema": tool.schema}
+async def body(request: Request) -> dict[str, Any]:
+    """The request's JSON body, which must be an object: ValueError (so 400) otherwise."""
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise ValueError("send a JSON object")
+    return data
 
 
 class WebChannel:
@@ -134,11 +143,9 @@ class WebChannel:
         covers its collection, and for a chat's page only if the doc is shared with that chat
         (so deletions, where doc is None, never reach those)."""
         for (slug, collections, chat), loop, queue in list(self.subs):
-            if kind == "doc":
-                shared = chat is None or (event["doc"] is not None and _shared(event["doc"], chat))
-                wanted = shared and (collections is None or event["collection"] in collections)
-            else:
-                wanted = slug == UI
+            shared = chat is None or (event.get("doc") is not None and _shared(event["doc"], chat))
+            in_scope = collections is None or event.get("collection") in collections
+            wanted = (shared and in_scope) if kind == "doc" else slug == UI
             if wanted and not loop.is_closed():
                 loop.call_soon_threadsafe(queue.put_nowait, (kind, event))
 
@@ -170,10 +177,8 @@ class _BridgeCORS(CORSMiddleware):
     """CORS on the bridge routes only: artifact pages call them from the origin "null"."""
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope["type"] == "http" and scope["path"].startswith(("/api/db/", "/api/events")):
-            await super().__call__(scope, receive, send)
-        else:
-            await self.app(scope, receive, send)
+        bridge = scope["type"] == "http" and scope["path"].startswith(("/api/db/", "/api/events"))
+        await (super().__call__ if bridge else self.app)(scope, receive, send)
 
 
 async def _error(request: Request, exc: Exception) -> JSONResponse:
@@ -185,6 +190,9 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
     """The app. Registers a store listener, so doc changes reach open pages."""
     store, home = services.store, services.config.home
     store.on_change.append(lambda c, i, d: channel.publish("doc", collection=c, id=i, doc=d))
+
+    def page_token(name: str) -> str:
+        return artifact_token(services.ui_token.encode(), name)
 
     def static(name: str, **options: Any) -> Any:
         return lambda request: FileResponse(STATIC / name, **options)
@@ -198,26 +206,30 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         page = home / "artifacts" / f"{name}.html"
         if not SLUG.fullmatch(name) or not page.is_file():
             raise KeyError(f"no artifact {name!r}")
-        if request.headers.get("sec-fetch-dest", "iframe") != "iframe":
+        token = request.query_params.get("t", "")
+        framed = request.headers.get("sec-fetch-dest", "iframe") == "iframe"
+        if not framed or not hmac.compare_digest(token.encode(), page_token(name).encode()):
             raise PermissionError("pages open inside the Attaché window only")
         text = page.read_text(encoding="utf-8")
-        tag = TAG.format(artifact_token(services.secret, name), name)
+        tag = TAG.format(page_token(name), name)
         html, found = re.subn(r"</head\s*>", lambda end: tag + end[0], text, count=1, flags=re.I)
         headers = {"Content-Security-Policy": CSP}
         return Response(html if found else tag + text, headers=headers, media_type="text/html")
 
     async def artifacts(request: Request) -> Response:
         ui_only(request)
-        return JSONResponse(sorted(page.stem for page in (home / "artifacts").glob("*.html")))
+        files = (home / "artifacts").glob("*.html")
+        names = sorted(p.stem for p in files if SLUG.fullmatch(p.stem))
+        return JSONResponse([{"name": n, "src": f"/a/{n}?t={page_token(n)}"} for n in names])
 
     async def messages(request: Request) -> Response:
         ui_only(request)
-        keep = ("role", "text", "ts")
+        keep = ("role", "text", "ts", "sender_name")  # reminders come from "Reminder"
         return JSONResponse([{k: m[k] for k in keep} for m in store.history("local:me", 50)])
 
     async def chat(request: Request) -> Response:
         ui_only(request)
-        text = str((await request.json()).get("text", ""))  # the page never sends empty text
+        text = str((await body(request)).get("text", ""))  # the page never sends empty text
         msg = Inbound("local", "me", "owner", services.config.owner.name, text)
         return JSONResponse({"ok": True}, background=BackgroundTask(router.handle, msg))
 
@@ -228,7 +240,7 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
             raise PermissionError(f"this page may not use collection {collection!r}")
         ops = {"POST": "put", "PUT": "put", "DELETE": "delete"}
         op = ops.get(request.method) or ("get" if doc_id else "list")
-        data = await request.json() if op == "put" else None
+        data = await body(request) if op == "put" else None
         by, chat = f"web:{scope.slug}", scope.chat_key
         return JSONResponse(db_access(store, op, collection, doc_id, data, by=by, chat=chat))
 
@@ -238,26 +250,31 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
 
     async def mcp(request: Request) -> Response:
         """One JSON-RPC 2.0 request for the tools of the turn the token names."""
+        if "origin" in request.headers:  # a browser: MCP clients send no Origin
+            raise PermissionError("MCP takes no requests from web pages")
         if (turn := services.gateway.get(request.path_params["token"])) is None:
             raise KeyError("unknown or finished turn")
-        message = await request.json()
+        if request.headers.get("content-type", "").partition(";")[0] != "application/json":
+            raise HTTPException(415, "send Content-Type: application/json")
+        message = await body(request)  # a batch (a JSON array) is refused here too
         if "id" not in message:  # a notification: nothing to answer
             return Response(status_code=202)
         method, params = message.get("method"), message.get("params") or {}
-        results = {
-            "initialize": {**SERVER, "protocolVersion": params.get("protocolVersion")},
-            "ping": {},
-            "tools/list": {"tools": [_mcp_tool(tool) for tool in turn.tools]},
-        }
-        if method == "tools/call":
+        if method == "initialize":
+            result = {**SERVER, "protocolVersion": params.get("protocolVersion")}
+        elif method == "ping":
+            result = {}
+        elif method == "tools/list":
+            result = {"tools": [tool_spec(tool, key="inputSchema") for tool in turn.tools]}
+        elif method == "tools/call":
             args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             out = await run_tool(ToolCall(str(message["id"]), str(params.get("name")), args), turn)
             content = [{"type": "text", "text": out}]
-            results[method] = {"content": content, "isError": out.startswith("error:")}
-        reply = {"jsonrpc": "2.0", "id": message["id"]}
-        if method in results:
-            return JSONResponse({**reply, "result": results[method]})
-        return JSONResponse({**reply, "error": {"code": -32601, "message": f"no method {method}"}})
+            result = {"content": content, "isError": out.startswith("error:")}
+        else:
+            error = {"code": -32601, "message": f"no method {method}"}
+            return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "error": error})
+        return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "result": result})
 
     routes = [
         Route("/", static("ui.html", headers={"Content-Security-Policy": UI_CSP})),
@@ -274,10 +291,10 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
     headers = ["X-Attache-Token", "X-Attache-Artifact", "Content-Type"]
     methods = ["GET", "PUT", "DELETE", "POST"]
     middleware = [
-        Middleware(TrustedHostMiddleware, allowed_hosts=LOOPBACK),
+        Middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"]),
         Middleware(_BridgeCORS, allow_origins=["*"], allow_methods=methods, allow_headers=headers),
     ]
-    errors = dict.fromkeys(ERRORS, _error)  # HTTPException (401, 405) answers as plain text
+    errors = dict.fromkeys(ERRORS, _error)  # HTTPException (401, 405, 415) answers as plain text
     return Starlette(routes=routes, middleware=middleware, exception_handlers=errors)
 
 

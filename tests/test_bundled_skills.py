@@ -35,8 +35,10 @@ def test_skill_frontmatter(folder: Path) -> None:
 
 @pytest.mark.parametrize("name", ["todos", "reminders"])
 def test_member_skills(name: str) -> None:
-    meta = skills.parse((skills.BUNDLED / name / "SKILL.md").read_text(encoding="utf-8"))[0]
+    meta, body = skills.parse((skills.BUNDLED / name / "SKILL.md").read_text(encoding="utf-8"))
     assert meta["metadata"]["attache-roles"] == "member"
+    if name == "todos":  # members get the body too, but not pages, links or file tools
+        assert "## In group chats" in body and "plain text" in body
 
 
 @pytest.mark.parametrize("folder", FOLDERS, ids=lambda p: p.name)

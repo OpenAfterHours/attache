@@ -226,7 +226,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
 <div class="page">
   <header class="letterhead">
     <div class="wordmark">Attaché</div>
-    <div class="filed">Design proposal · v0.4 · 19 October 2026</div>
+    <div class="filed">Design proposal · v0.5 · 20 October 2026</div>
   </header>
 
   <div class="hero">
@@ -238,15 +238,17 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
 <span class="prompt">$</span> uv tool install attache     <span class="c"># keep it</span>
 <span class="prompt">$</span> attache init &amp;&amp; attache run</code></pre>
       <ul class="specline">
-        <li>Python 3.11+</li><li>about 1,500 lines of core</li><li>6 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
+        <li>Python 3.11+</li><li>about 1,500 lines of code</li><li>6 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
       </ul>
     </div>
     <p class="namenote">The name is <code>attache</code>, after the assistant on an ambassador's staff and the case an executive carries. It was unclaimed on PyPI on 19 October 2026, so register it before the first release.</p>
     <div class="memo changes">
-      <span class="tag">Changes in v0.4</span>
+      <span class="tag">Changes in v0.5</span>
       <ul>
-        <li>Outlook is now a choice per account: Outlook classic through COM, or Microsoft Graph with an OAuth sign-in (§5).</li>
-        <li>Phase 1 is under way in <code>OpenAfterHours/attache</code>.</li>
+        <li>Phase 1 is built: 1,576 lines of code and 242 tests, reviewed for correctness, security and simplicity, in a pull request on <code>OpenAfterHours/attache</code>.</li>
+        <li>The size budget now counts lines of code only, with a cap of 1,600 (D9, §10).</li>
+        <li>Claude Code reaches Attaché's tools through an MCP endpoint on the local web server (§6).</li>
+        <li>The terminal and the web page are one conversation, and the web link is printed at start with a token that changes every run (§9).</li>
       </ul>
     </div>
   </div>
@@ -286,7 +288,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
           <li><span class="d-id">D6</span><div><h3>Artifacts are local pages over real data</h3><p>The agent writes HTML. The built-in server adds a small <code>attache</code> bridge to the SQLite store, with live updates. People in chat apps get a PNG snapshot and a signed link.</p></div></li>
           <li><span class="d-id">D7</span><div><h3>Group chats follow a fixed policy</h3><p>Access, then trigger, then role. Each role has its own toolset, and a guest's turn never has private data and outbound sending at the same time.</p></div></li>
           <li><span class="d-id">D8</span><div><h3>Three surfaces, each with one job</h3><p>The CLI sets up and operates. One local web page holds chat and artifacts. Chat apps cover the phone and the group.</p></div></li>
-          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 2,000 lines of Python. New features arrive as skills, and the contribution guide says so.</p></div></li>
+          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 1,600 lines of code. Blank lines, comments and docstrings don't count, so the budget never rewards dense code. New features arrive as skills, and the contribution guide says so.</p></div></li>
           <li><span class="d-id">D10</span><div><h3>One mail skill for every account</h3><p>Outlook through Outlook classic's COM interface or Microsoft Graph with OAuth, your choice per account. Gmail and Titan over IMAP. All behind the same commands. It reads and files on its own, saves replies as drafts, and sends only after your yes.</p></div></li>
         </ol>
       </section>
@@ -300,7 +302,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
             <thead><tr><th></th><th>nanoclaw v1</th><th>nanoclaw v2</th><th>OpenClaw</th><th>nanobot</th><th>Attaché</th></tr></thead>
             <tbody>
               <tr><th>Language</th><td>TypeScript</td><td>TypeScript</td><td>TypeScript</td><td>Python</td><td>Python</td></tr>
-              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>~1,500 target, 2,000 hard cap</td></tr>
+              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>1,576 lines of code in phase 1, 1,600 cap</td></tr>
               <tr><th>Install</th><td>Fork, then <code>/setup</code> in Claude Code</td><td>Same, Docker required</td><td>npm, gateway daemon</td><td><code>uv tool install nanobot-ai</code></td><td><code>uvx attache</code></td></tr>
               <tr><th>Models</th><td>Claude via the Agent SDK</td><td>Claude; Codex, OpenCode, Ollama as skills</td><td>Many, via config</td><td>Native OpenAI and Anthropic SDKs</td><td>Four adapters, any endpoint</td></tr>
               <tr><th>Extending it</th><td>Skills that rewrite your fork</td><td>Skills copy code from registry branches</td><td>Plugins, ClawHub skills</td><td>Built-in channels, skills</td><td>Runtime skills folder, no code changes</td></tr>
@@ -459,15 +461,15 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
               <text x="274" y="508" class="d-label">how the assistant edits its own skills</text>
             </svg>
           </div>
-          <figcaption>A message's path through Attaché. Dashed boxes are skills that run as separate processes. The brass path is how the assistant edits its own skills. With the <code>claude-cli</code> backend, Claude Code runs the loop itself and reaches the same tools through a small MCP shim, <code>attache mcp</code>.</figcaption>
+          <figcaption>A message's path through Attaché. Dashed boxes are skills that run as separate processes. The brass path is how the assistant edits its own skills. With the <code>claude-cli</code> backend, Claude Code runs the loop itself and reaches the same tools through an MCP endpoint on the local web server.</figcaption>
         </figure>
 
         <h3>One message, start to finish</h3>
         <ol>
           <li>Jo writes “@Attaché can you send the packing list as a PDF?” in the family Signal group. The Signal sidecar, a thin wrapper around signal-cli's JSON-RPC mode, turns it into one JSON line on its stdout.</li>
           <li>The router checks that the chat is allowed, sees the mention and looks Jo up as a member. Members can use this chat's files, send to this chat only, use shared collections and make artifacts.</li>
-          <li>It builds the turn: the persona, <code>USER.md</code>, this chat's memory file, the skills index (names and one-line descriptions only), the last 30 messages, and Jo's identity in a structured header.</li>
-          <li>The backend runs the loop. The model opens <code>skills/pdf/SKILL.md</code>, runs its script with <code>uv run</code>, and calls <code>send</code> with the file.</li>
+          <li>It builds the turn: the persona, this chat's memory file, the full text of the skills members may use, the last 30 messages with other people's words fenced and labelled as data, and Jo's identity taken from the config. Your own <code>USER.md</code> stays out of anyone else's turn.</li>
+          <li>The backend runs the loop. The model follows the pdf skill, runs its script through the <code>script</code> tool (which uses <code>uv run</code>), and calls <code>send</code> with the file.</li>
           <li>The core writes a <code>send</code> line to the sidecar's stdin, and the bot posts the PDF to the group with a caption.</li>
         </ol>
       </section>
@@ -764,7 +766,7 @@ async def tool_loop(complete, turn, steps=20):
         <ul>
           <li><strong>Official SDKs only.</strong> <code>anthropic</code> and <code>openai</code> together resolve to 17 packages. LiteLLM resolves to 59, shipped 241 releases in 2026, and had two compromised PyPI releases (1.82.7 and 1.82.8) on 24 March 2026. nanobot replaced it with the two SDKs that day.</li>
           <li><strong>Why two OpenAI adapters.</strong> From GPT-5.4 on, Chat Completions only allows tool calls when <code>reasoning_effort</code> is <code>none</code>, so OpenAI's own reasoning models need Responses. Local and hosted compatible servers mostly speak Chat Completions.</li>
-          <li><strong>How <code>claude-cli</code> works.</strong> It runs <code>claude -p --output-format stream-json --verbose --resume &lt;session&gt;</code>, keeps one Claude session per chat, and passes <code>--mcp-config</code> pointing at <code>attache mcp</code>. <code>--allowedTools</code> is set from the sender's role. The <code>claude-agent-sdk</code> package does the same thing in-process, but it bundles the CLI (104 to 117 MB per platform wheel), so it stays an optional extra.</li>
+          <li><strong>How <code>claude-cli</code> works.</strong> It runs <code>claude -p --output-format stream-json --verbose --resume &lt;session&gt;</code> in a folder outside your home, keeps one Claude session per chat, and points <code>--mcp-config</code> at an MCP endpoint on the local web server, which serves only Attaché's own tools (Claude Code brings its own file and shell tools). When a session starts fresh it gets the earlier conversation as a transcript. It only answers your own chats, never a group. The <code>claude-agent-sdk</code> package does the same thing in-process, but it bundles the CLI (104 to 117 MB per platform wheel), so it stays an optional extra.</li>
           <li><strong>Subscriptions.</strong> Anthropic's terms allow a Pro or Max login for your own individual use. Anything that serves other people should use an API key. Your choice follows that: <code>claude-cli</code> on your login for your own chats, <code>claude-api</code> with a key for group chats. A chat can still name its own endpoint. If <code>ANTHROPIC_API_KEY</code> is set, <code>claude -p</code> uses it instead of your login.</li>
         </ul>
       </section>
@@ -798,15 +800,14 @@ async def tool_loop(complete, turn, steps=20):
 await attache.db.put("todos", id,
                 {...t, status: "done"})
 attache.on("todos", render)   <span class="c">// live, over SSE</span>
-await attache.ask(
-  "Draft a chase to Dan about the quote")</code></pre>
-            <p class="small muted">The names follow Claude.ai's artifact storage API, which models already write against. Each artifact gets a token that reaches only the collections it was created with.</p>
+<span class="c">// attache.ask(prompt) arrives in phase 3</span></code></pre>
+            <p class="small muted">The names follow Claude.ai's artifact storage API, which models already write against. Each page gets a token that reaches only the collections named in its <code>attache-collections</code> meta tag.</p>
           </div>
           <div>
             <h3>How it reaches people</h3>
             <ol>
-              <li>The agent calls <code>artifact(name="trip-checklist", html=…, collections=["trip"])</code>.</li>
-              <li>In the web app the page opens in a sandboxed frame.</li>
+              <li>The agent calls <code>artifact(name="trip-checklist", html=…)</code>; the page declares <code>&lt;meta name="attache-collections" content="trip"&gt;</code>.</li>
+              <li>In the web app the page opens in a sandboxed frame. It can't reach the internet, other pages or any data it didn't declare.</li>
               <li>In a chat app the reply is a PNG snapshot plus a signed link that expires. The signature is an HMAC from the standard library. Links are not single-use, because link-preview crawlers open them first.</li>
               <li>On a laptop, links go out through Tailscale Funnel when you turn sharing on. In the cloud they use the public URL. Cloudflare quick tunnels also work but drop live updates, since they don't pass SSE.</li>
             </ol>
@@ -858,7 +859,7 @@ await attache.ask(
             <ul>
               <li>A guest's turn never gets private data and outbound sending together. That combination, plus untrusted input, is what Simon Willison calls the “lethal trifecta”.</li>
               <li>Unmentioned messages enter the prompt fenced and labelled as transcript, never as instructions. Forged headers in message text are stripped.</li>
-              <li>Each sender and each chat has a rate limit, and non-owner turns have a daily cost cap.</li>
+              <li>Each sender and each chat gets a rate limit, and non-owner turns a daily cost cap (phase 2).</li>
               <li>The bot ignores its own messages and other bots.</li>
               <li>Sending to a different chat needs your confirmation.</li>
               <li>In Slack the bot only sees channels it has been invited to. In Signal it only sees groups it has been added to, and it knows people by their Signal account ID, because phone numbers are hidden by default.</li>
@@ -956,7 +957,7 @@ await attache.ask(
 ✓ Started a git repo in ~/.attache
 
 <span class="prompt">$</span> attache run
-  web    http://localhost:8765
+  Open http://127.0.0.1:8765/#t=…
   chats  terminal, slack (3), signal (2)
   tasks  3 scheduled, next 07:30</code></pre>
           </div>
@@ -971,27 +972,28 @@ await attache.ask(
       <!-- §9 -->
       <section id="budget">
         <div class="sec-head"><span class="sec-no">§10</span><h2>Code budget</h2></div>
-        <p>The target is about 1,500 lines of Python in <code>src/attache</code>. Bundled skills, static files and tests don't count toward it, but each bundled skill has its own cap: 300 lines by default, 1,200 for <code>mail</code>, which has three backends. These figures are estimates for planning.</p>
+        <p>Phase 1 came in at 1,576 lines of code in <code>src/attache</code>, against a cap of 1,600 that CI enforces. Blank lines, comments and docstrings don't count, so the budget never pushes code to be denser than it should be. Bundled skills, static files and tests don't count either, but each bundled skill has its own cap: 300 lines by default, 1,200 for <code>mail</code>, which has three backends.</p>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Module</th><th>Job</th><th>Lines</th><th class="bar">Share</th></tr></thead>
+            <thead><tr><th>Module</th><th>Job</th><th>Code lines</th><th class="bar">Share</th></tr></thead>
             <tbody>
-              <tr><th>cli.py</th><td>init, run, chat, skills, service, doctor</td><td class="num">120</td><td class="bar"><span style="--w:66.7%"></span></td></tr>
-              <tr><th>config.py</th><td>attache.toml: endpoints, people, chats</td><td class="num">50</td><td class="bar"><span style="--w:27.8%"></span></td></tr>
-              <tr><th>store.py</th><td>SQLite: messages, docs, tasks, people</td><td class="num">110</td><td class="bar"><span style="--w:61.1%"></span></td></tr>
-              <tr><th>router.py</th><td>Access, trigger, roles, per-chat queue, context</td><td class="num">150</td><td class="bar"><span style="--w:83.3%"></span></td></tr>
-              <tr><th>agent.py</th><td>Turn and Reply types, shared tool loop</td><td class="num">70</td><td class="bar"><span style="--w:38.9%"></span></td></tr>
-              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">70</td><td class="bar"><span style="--w:38.9%"></span></td></tr>
-              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">150</td><td class="bar"><span style="--w:83.3%"></span></td></tr>
-              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code> stream-json, sessions</td><td class="num">100</td><td class="bar"><span style="--w:55.6%"></span></td></tr>
-              <tr><th>mcp.py</th><td>stdio MCP shim that exposes tools to Claude Code</td><td class="num">60</td><td class="bar"><span style="--w:33.3%"></span></td></tr>
-              <tr><th>tools.py</th><td>Files, run, send, db, artifact, schedule, role filter</td><td class="num">180</td><td class="bar"><span style="--w:100%"></span></td></tr>
-              <tr><th>skills.py</th><td>Discovery, index, git commit and undo</td><td class="num">70</td><td class="bar"><span style="--w:38.9%"></span></td></tr>
-              <tr><th>channels.py</th><td>Sidecar manager, JSON lines, terminal channel</td><td class="num">110</td><td class="bar"><span style="--w:61.1%"></span></td></tr>
-              <tr><th>scheduler.py</th><td>Due-task loop</td><td class="num">40</td><td class="bar"><span style="--w:22.2%"></span></td></tr>
-              <tr><th>web.py</th><td>Chat page, artifacts, bridge API, SSE, signed links</td><td class="num">160</td><td class="bar"><span style="--w:88.9%"></span></td></tr>
-              <tr><th>service.py</th><td>launchd, systemd, Task Scheduler</td><td class="num">60</td><td class="bar"><span style="--w:33.3%"></span></td></tr>
-              <tr><th>Total</th><td></td><td class="num"><strong>1,500</strong></td><td class="bar"></td></tr>
+              <tr><th>cli.py</th><td>init, chat, run, doctor, skills</td><td class="num">100</td><td class="bar"><span style="--w:51.3%"></span></td></tr>
+              <tr><th>app.py</th><td>Wiring, supervision, clean shutdown</td><td class="num">65</td><td class="bar"><span style="--w:33.3%"></span></td></tr>
+              <tr><th>config.py</th><td>attache.toml, init_home</td><td class="num">117</td><td class="bar"><span style="--w:60.0%"></span></td></tr>
+              <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">165</td><td class="bar"><span style="--w:84.6%"></span></td></tr>
+              <tr><th>router.py</th><td>Access, roles, fencing, prompt, turns</td><td class="num">160</td><td class="bar"><span style="--w:82.1%"></span></td></tr>
+              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">53</td><td class="bar"><span style="--w:27.2%"></span></td></tr>
+              <tr><th>types.py</th><td>Shared types</td><td class="num">88</td><td class="bar"><span style="--w:45.1%"></span></td></tr>
+              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">47</td><td class="bar"><span style="--w:24.1%"></span></td></tr>
+              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">75</td><td class="bar"><span style="--w:38.5%"></span></td></tr>
+              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">115</td><td class="bar"><span style="--w:59.0%"></span></td></tr>
+              <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">26</td><td class="bar"><span style="--w:13.3%"></span></td></tr>
+              <tr><th>tools.py</th><td>Tools by role, path confinement</td><td class="num">174</td><td class="bar"><span style="--w:89.2%"></span></td></tr>
+              <tr><th>skills.py</th><td>Discovery, index, git history</td><td class="num">94</td><td class="bar"><span style="--w:48.2%"></span></td></tr>
+              <tr><th>channels.py</th><td>Channel manager, terminal</td><td class="num">40</td><td class="bar"><span style="--w:20.5%"></span></td></tr>
+              <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">59</td><td class="bar"><span style="--w:30.3%"></span></td></tr>
+              <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP endpoint</td><td class="num">195</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
+              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>1,576</strong></td><td class="bar"></td></tr>
             </tbody>
           </table>
         </div>
@@ -1015,12 +1017,12 @@ attache = "attache.cli:main"</code></pre>
           </div>
           <div>
             <div class="code-label">tests/test_budget.py</div>
-<pre><code>def test_core_stays_small():
-    lines = sum(
-        len(p.read_text().splitlines())
-        for p in Path("src/attache").rglob("*.py"))
-    assert lines &lt;= 2000, (
-        f"core is {lines} lines; "
+<pre><code>CORE_LIMIT = 1600  <span class="c"># blanks, comments, docstrings free</span>
+
+def test_core_stays_small():
+    lines = sum(code_lines(p) for p in core_files())
+    assert lines &lt;= CORE_LIMIT, (
+        f"core is {lines} lines of code; "
         "move the feature into a skill")</code></pre>
             <p class="small muted">pyyaml and cronsim have no dependencies of their own. Starlette needs only anyio. Everything else, such as slack-bolt, pywin32, IMAPClient or python-docx, is declared by the skill script that needs it and never touches the core install.</p>
           </div>
@@ -1054,7 +1056,7 @@ attache = "attache.cli:main"</code></pre>
               <tr><th>Signal flags the bot's number</th><td>A dedicated number, low volume, and replies only to people who write to it, plus your own reminders.</td></tr>
               <tr><th>Slack free plan limits</th><td>Attaché keeps its own message history in SQLite, so 90 days of visible Slack history doesn't limit its memory.</td></tr>
               <tr><th>Prompt injection in groups</th><td>Toolsets by role, the trifecta rule, fenced context <span class="ref">D7</span>.</td></tr>
-              <tr><th>Shell access on the host</th><td><code>run</code> is owner-only, file tools are confined to <code>~/.attache</code>, and <code>claude-cli</code> brings Claude Code's own sandbox. Docker for <code>run</code> comes later as an option.</td></tr>
+              <tr><th>Shell access on the host</th><td><code>run</code> and the file tools are owner-only and confined to <code>~/.attache</code>, with <code>.secret</code>, the database and git blocked. <code>claude-cli</code> uses Claude Code's own permissions on your login, runs outside your home, and only answers your own chats. Docker for <code>run</code> comes later as an option.</td></tr>
               <tr><th>Subscription terms</th><td>Group chats default to an API-key endpoint.</td></tr>
               <tr><th>Weak tool calling on local models</th><td>Tolerant argument parsing, a list of tested models, and a model choice per chat.</td></tr>
               <tr><th>CLI output formats change</th><td>Parse only <code>assistant</code> text and the final <code>result</code>, and test against recorded fixtures. Pin versions.</td></tr>
@@ -1084,7 +1086,7 @@ attache = "attache.cli:main"</code></pre>
         </ul>
         <div class="memo">
           <span class="tag">Next step</span>
-          <p>Phase 1 is under way in the private repo <code>OpenAfterHours/attache</code>, starting with a repo skeleton: the budget test, the store, the router, the <code>anthropic</code> and <code>claude-cli</code> adapters, and the terminal channel. A read-only <code>mail doctor</code> run against Outlook classic early on would prove COM access on this PC well before phase 3.</p>
+          <p>Phase 1 is built and in review as a pull request in the private repo <code>OpenAfterHours/attache</code>. It started from a repo skeleton: the budget test, the store, the router, the <code>anthropic</code> and <code>claude-cli</code> adapters, and the terminal channel. A read-only <code>mail doctor</code> run against Outlook classic early on would prove COM access on this PC well before phase 3.</p>
         </div>
       </section>
 

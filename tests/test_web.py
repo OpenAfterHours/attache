@@ -20,8 +20,8 @@ from attache import __version__, config, skills, web
 from attache.store import Store
 from attache.types import Endpoint, Inbound, Outbound, Person, Tool, Turn, TurnContext
 
-SECRET = b"0123456789abcdef0123456789abcdef"
 UI_TOKEN = "ui-token-made-fresh-by-app-build"
+KEY = UI_TOKEN.encode()  # page tokens derive from the run's UI token
 BASE = "http://127.0.0.1:8765"
 UI = {"X-Attache-Token": UI_TOKEN}
 CSP = (
@@ -52,7 +52,6 @@ def services(home: Path) -> Any:
     yield SimpleNamespace(
         config=config.load(home),
         store=store,
-        secret=SECRET,
         gateway={},
         ui_token=UI_TOKEN,
         web_url=BASE,
@@ -75,8 +74,13 @@ def page(sv: Any, name: str, collections: str | None = "todos", head: bool = Tru
 
 
 def auth(name: str, token_for: str | None = None) -> dict[str, str]:
-    token = web.artifact_token(SECRET, token_for or name)
+    token = web.artifact_token(KEY, token_for or name)
     return {"X-Attache-Artifact": name, "X-Attache-Token": token}
+
+
+def src(name: str) -> str:
+    """Where the Attaché page loads a page from, as /api/artifacts lists it."""
+    return f"/a/{name}?t={web.artifact_token(KEY, name)}"
 
 
 def group_page(sv: Any, name: str = "family", collections: str = "todos") -> None:
@@ -115,8 +119,8 @@ def test_bridge_js_is_served(env: Any) -> None:
 
 def test_artifact_gets_the_bridge_and_the_exact_csp(env: Any) -> None:
     page(env.sv, "home")
-    r = env.client.get("/a/home", headers={"Sec-Fetch-Dest": "iframe"})
-    token = web.artifact_token(SECRET, "home")
+    r = env.client.get(src("home"), headers={"Sec-Fetch-Dest": "iframe"})
+    token = web.artifact_token(KEY, "home")
     tag = f'<script src="/bridge.js" data-token="{token}" data-artifact="home"></script></head>'
     assert r.status_code == 200 and tag in r.text
     assert r.headers["content-security-policy"] == CSP
@@ -125,27 +129,36 @@ def test_artifact_gets_the_bridge_and_the_exact_csp(env: Any) -> None:
 def test_artifact_opened_outside_a_frame_is_refused(env: Any) -> None:
     page(env.sv, "home")
     for dest in ("document", "empty", "script"):
-        r = env.client.get("/a/home", headers={"Sec-Fetch-Dest": dest})
+        r = env.client.get(src("home"), headers={"Sec-Fetch-Dest": dest})
         assert r.status_code == 403 and "inside the Attaché window" in r.json()["error"]
-    assert env.client.get("/a/home").status_code == 200  # no Sec-Fetch-Dest: an older client
+    assert env.client.get(src("home")).status_code == 200  # no Sec-Fetch-Dest: an older client
+
+
+@pytest.mark.parametrize("query", ["", "?t=", "?t=wrong", f"?t={web.artifact_token(KEY, 'trip')}"])
+def test_artifact_needs_its_own_token(env: Any, query: str) -> None:
+    page(env.sv, "home")  # any local process could read a page's token before this check
+    r = env.client.get(f"/a/home{query}", headers={"Sec-Fetch-Dest": "iframe"})
+    assert r.status_code == 403 and "data-token" not in r.text
 
 
 def test_artifact_without_head_gets_the_bridge_first(env: Any) -> None:
     page(env.sv, "bare", head=False)
-    assert env.client.get("/a/bare").text.startswith('<script src="/bridge.js"')
+    assert env.client.get(src("bare")).text.startswith('<script src="/bridge.js"')
 
 
 @pytest.mark.parametrize("name", ["missing", "Home", "HOME", "a.b", "a_b", "%2e%2e", "home.html"])
 def test_bad_or_missing_artifact_names_are_404(env: Any, name: str) -> None:
     page(env.sv, "home")  # exists, so "Home" fails on the name even on a case-insensitive disk
-    assert env.client.get(f"/a/{name}").status_code == 404
+    assert env.client.get(f"/a/{name}?t={web.artifact_token(KEY, name)}").status_code == 404
 
 
-def test_artifact_list_is_the_page_names(env: Any) -> None:
+def test_artifact_list_gives_each_page_with_its_token(env: Any) -> None:
     page(env.sv, "trip")
     page(env.sv, "home")
+    (env.sv.config.home / "artifacts" / "Not A Slug.html").write_text("x", encoding="utf-8")
     r = env.client.get("/api/artifacts", headers=UI)
-    assert r.json() == ["home", "trip"]
+    assert r.json() == [{"name": "home", "src": src("home")}, {"name": "trip", "src": src("trip")}]
+    assert env.client.get(r.json()[0]["src"]).status_code == 200
     assert "access-control-allow-origin" not in r.headers
     assert env.client.get("/api/artifacts", headers=auth("home")).status_code == 403
     assert env.client.get("/api/artifacts").status_code == 401
@@ -195,10 +208,11 @@ def test_scope_from_headers(services: Any) -> None:
     [
         {},
         {"X-Attache-Token": "wrong"},
-        {"X-Attache-Token": web.artifact_token(SECRET, "home")},  # a page token is not the UI's
+        {"X-Attache-Token": web.artifact_token(KEY, "home")},  # a page token is not the UI's
         {"X-Attache-Artifact": "home", "X-Attache-Token": UI_TOKEN},  # nor the reverse
-        {"X-Attache-Artifact": "home", "X-Attache-Token": web.artifact_token(SECRET, "other")},
-        {"X-Attache-Artifact": "../home", "X-Attache-Token": web.artifact_token(SECRET, "../home")},
+        {"X-Attache-Artifact": "home", "X-Attache-Token": web.artifact_token(KEY, "other")},
+        {"X-Attache-Artifact": "home", "X-Attache-Token": web.artifact_token(b"old run", "home")},
+        {"X-Attache-Artifact": "../home", "X-Attache-Token": web.artifact_token(KEY, "../home")},
         {"X-Attache-Artifact": "home", "X-Attache-Token": "ünicode"},
     ],
 )
@@ -211,7 +225,7 @@ def test_scope_refuses_bad_tokens(services: Any, headers: dict[str, str]) -> Non
 
 def test_scope_from_the_event_stream_query(services: Any) -> None:
     page(services, "home")
-    token = web.artifact_token(SECRET, "home")
+    token = web.artifact_token(KEY, "home")
     found = web.scope_of(services, request(query=f"artifact=home&token={token}"), query=True)
     assert found == web.Scope("home", frozenset({"todos"}))
     assert web.scope_of(services, request(query=f"token={UI_TOKEN}"), query=True).slug == "_ui"
@@ -321,23 +335,28 @@ def test_messages_are_the_last_fifty_of_the_owner_chat(env: Any) -> None:
     st = env.sv.store
     for n in range(60):
         st.add_message("local:me", "user" if n % 2 else "assistant", f"m{n}", "owner", "Alex")
+    st.add_message("local:me", "user", "Reminder: call Sam", "", "Reminder")
     st.add_message("slack:C1", "user", "elsewhere", "sam", "Sam")
     r = env.client.get("/api/messages", headers=UI)
     got = r.json()
-    assert [m["text"] for m in got] == [f"m{n}" for n in range(10, 60)]
-    assert set(got[0]) == {"role", "text", "ts"} and got[-1]["role"] == "user"
+    assert [m["text"] for m in got] == [f"m{n}" for n in range(11, 60)] + ["Reminder: call Sam"]
+    assert set(got[0]) == {"role", "text", "ts", "sender_name"} and got[0]["sender_name"] == "Alex"
+    assert got[-1]["sender_name"] == "Reminder"  # the page shows these as Attaché's, not yours
     assert "access-control-allow-origin" not in r.headers
     page(env.sv, "home")
     assert env.client.get("/api/messages", headers=auth("home")).status_code == 403
     assert env.client.get("/api/messages").status_code == 401
 
 
-@pytest.mark.parametrize("body", [b"not json", b"{"])
-def test_bodies_must_be_json(env: Any, body: bytes) -> None:
+@pytest.mark.parametrize("body", [b"[1, 2]", b'"text"', b"42", b"null", b"not json"])
+def test_bodies_must_be_json_objects(env: Any, body: bytes) -> None:
     page(env.sv, "home")
     env.sv.gateway["tok"] = make_turn(env.sv)
-    for path, headers in (("/api/chat", UI), ("/mcp/tok", {}), ("/api/db/todos", auth("home"))):
-        r = env.client.post(path, headers=headers, content=body)
+    json_type = {"Content-Type": "application/json"}
+    targets = [("/api/chat", UI), ("/mcp/tok", {}), ("/api/db/todos", auth("home"))]
+    for path, headers in [*targets, ("/api/db/todos/x", auth("home"))]:
+        method = "PUT" if path.endswith("/x") else "POST"
+        r = env.client.request(method, path, headers={**headers, **json_type}, content=body)
         assert r.status_code == 400 and r.json()["error"], path
     assert env.router.seen == [] and env.sv.store.doc_list("todos") == []
 
@@ -410,14 +429,31 @@ def test_mcp_errors(env: Any) -> None:
     assert rpc(env, "tools/list").status_code == 404
 
 
+def test_mcp_refuses_browsers_and_other_content(env: Any) -> None:
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    ping = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    for origin in ("https://attacker.example", "null", "http://127.0.0.1:8765"):
+        r = env.client.post("/mcp/tok", json=ping, headers={"Origin": origin})
+        assert r.status_code == 403  # a web page, even a simple cross-origin POST
+    for content_type in ("text/plain", "application/x-www-form-urlencoded", ""):
+        r = env.client.post(
+            "/mcp/tok", content=json.dumps(ping), headers={"Content-Type": content_type}
+        )
+        assert r.status_code == 415, content_type
+    batch = env.client.post("/mcp/tok", json=[ping, ping])
+    assert batch.status_code == 400 and batch.json()["error"] == "send a JSON object"
+    charset = {"Content-Type": "application/json; charset=utf-8"}
+    assert env.client.post("/mcp/tok", content=json.dumps(ping), headers=charset).status_code == 200
+
+
 # tokens
 
 
 def test_artifact_tokens() -> None:
-    token = web.artifact_token(SECRET, "home")
-    assert re.fullmatch(r"[0-9a-f]{64}", token) and token == web.artifact_token(SECRET, "home")
-    assert token != web.artifact_token(SECRET, "trip")
-    assert token != web.artifact_token(b"another secret", "home")
+    token = web.artifact_token(KEY, "home")
+    assert re.fullmatch(r"[0-9a-f]{64}", token) and token == web.artifact_token(KEY, "home")
+    assert token != web.artifact_token(KEY, "trip")
+    assert token != web.artifact_token(b"the next run's ui token", "home")  # rotates per run
 
 
 # live events

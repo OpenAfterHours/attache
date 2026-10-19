@@ -80,8 +80,10 @@ dependencies on first use, outside Attaché:
 
 ## Making the change
 
-1. For an existing skill, read its SKILL.md first and change only what was asked.
-2. Write with `write_file` (new files) or `edit_file` (changes) under `skills/<name>/`.
+1. For an existing skill, read its SKILL.md first with `read_file` (or Claude Code's Read)
+   and change only what was asked.
+2. Write with `write_file` (or Claude Code's Write) for new files, and `edit_file` (or Claude
+   Code's Edit) for changes, under `skills/<name>/`.
 3. Your edits are committed to git after the turn, with the request as the message. The owner
    can see them with `attache skills log <name>` and revert with `attache skills undo <name>`,
    or just say "undo that".

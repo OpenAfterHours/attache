@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import os
 import shutil
 import socket
 import sqlite3
@@ -19,31 +18,16 @@ from attache import app, config, web
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 def test_build_on_an_initialised_home(home: Path) -> None:
     config.init_home(home, "Alex")
-    services = app.build(home)
+    services, again = app.build(home), app.build(home)
     try:
         assert services.home == home and services.config.owner.name == "Alex"
         assert services.web_url == "http://127.0.0.1:8765" and services.gateway == {}
-        assert len(services.secret) == 64 and services.secret == (home / ".secret").read_bytes()
-        assert len(services.ui_token) >= 32 and services.ui_token != app.build(home).ui_token
+        assert len(services.ui_token) >= 32 and services.ui_token != again.ui_token  # per run
+        assert not hasattr(services, "secret") and not (home / ".secret").exists()
         services.store.add_message("local:me", "user", "hi")
     finally:
         services.store.close()
-
-
-def test_build_protects_a_new_secret(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
-    monkeypatch.setattr(app.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
-    app.build(home).store.close()
-    secret = home / ".secret"
-    if os.name == "nt":
-        assert calls == [
-            ["icacls", str(secret), "/inheritance:r", "/grant:r", f"{os.environ['USERNAME']}:F"]
-        ]
-    else:
-        assert calls == [] and secret.stat().st_mode & 0o777 == 0o600
-    before = secret.read_bytes()
-    app.build(home).store.close()  # kept, not replaced
-    assert secret.read_bytes() == before and len(calls) == (1 if os.name == "nt" else 0)
+        again.store.close()
 
 
 def test_ipv6_loopback_url(home: Path) -> None:
