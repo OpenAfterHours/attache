@@ -1,0 +1,48 @@
+[project]
+name = "attache"
+version = "0.1.0"
+description = "A personal assistant you install with one command. Small core; channels, email and file formats are skills."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "openai>=1.66",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+    "pyyaml>=6",
+    "cronsim>=2.6",
+]
+
+[project.scripts]
+attache = "attache.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx",  # starlette.testclient
+    "ruff>=0.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/attache"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["attache"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
