@@ -8,12 +8,13 @@ name = "Attaché"  # how the assistant names itself; also its trigger word in gr
 name = "{owner}"
 
 # Your own sender id on each chat app, so your direct messages there reach you as the owner.
+# Ids can also go straight in [owner] (or [people.<id>]), like slack = "U0123".
 [owner.ids]
 slack = ""
 
 [routing]
-own_chats = "{endpoint}"    # terminal, web and your direct messages
-group_chats = "claude-api"  # group chats
+own_chats = "{endpoint}"    # your own chat (terminal and web) and your direct messages
+group_chats = "claude-api"  # group chats, and anyone but you
 
 [web]
 host = "127.0.0.1"  # only this machine can reach the web page
@@ -40,7 +41,7 @@ key_env = "ANTHROPIC_API_KEY"
 # base_url = "http://localhost:11434/v1"
 # model = "qwen3:32b"
 
-# People you share chats with. Keys other than name and role are their ids per chat app.
+# People you share chats with. Keys other than name, role and ids are their ids per chat app.
 # [people.sam]
 # name = "Sam"
 # role = "member"  # member | guest

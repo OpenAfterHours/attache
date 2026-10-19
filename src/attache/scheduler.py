@@ -1,4 +1,4 @@
-"""Fire due tasks. Owner: foundation. Budget ~45 lines.
+"""Fire due tasks.
 
 Tasks live in the store. `kind="message"` tasks are delivered as text; `kind="turn"` tasks run
 as an agent turn (e.g. a morning triage). The router does the firing via the `fire` callback.
@@ -22,12 +22,13 @@ from attache.store import Store
 
 Fire = Callable[[dict[str, Any]], Awaitable[None]]
 logger = logging.getLogger(__name__)
+RETRY_SECONDS = 5.0  # after an unexpected error, such as "database is locked"
 
 
 class Scheduler:
     def __init__(self, store: Store, fire: Fire | None = None) -> None:
         self.store = store
-        self.fire = fire  # set later by app.run once the router exists
+        self.fire = fire  # set by app.run before run() starts
         self._wake = asyncio.Event()
 
     def add(
@@ -43,34 +44,43 @@ class Scheduler:
         """Exactly one of `at` (epoch seconds) or `cron` (5 fields, local time). Wakes the loop."""
         if (at is None) == (cron is None):
             raise ValueError("give exactly one of `at` or `cron`")
-        due = at if at is not None else next_cron(str(cron), time.time())
-        task = self.store.task_add(chat_key, text, due, kind=kind, cron=cron, by=by)
-        self.wake()
-        return task
+        due = next_cron(cron, time.time()) if cron is not None else at
+        self.wake()  # safe before the insert: the loop cannot run until this returns
+        return self.store.task_add(chat_key, text, due, kind=kind, cron=cron, by=by)
 
     def wake(self) -> None:
         self._wake.set()
 
     async def run(self) -> None:
-        """Forever: fire due tasks, then sleep until the next one (60 s at most) or wake()."""
+        """Forever: fire due tasks, then sleep until the next one (60 s at most) or wake().
+
+        An error from the store (e.g. "database is locked") is logged and retried, never fatal.
+        """
+        assert self.fire is not None, "set Scheduler.fire before run()"  # or tasks would be lost
         while True:
-            fire = self.fire  # until it is set, due tasks wait instead of being lost
-            for task in self.store.task_due(time.time()) if fire else []:
-                try:
-                    await fire(task)
-                except Exception:
-                    logger.exception("task %s failed", task["id"])
-                if task["cron"]:  # from now, not from `due`, so a slow turn cannot fire twice
-                    self.store.task_reschedule(task["id"], next_cron(task["cron"], time.time()))
-                else:
-                    self.store.task_finish(task["id"])
-            due = self.store.task_next() if fire else None
-            delay = 60.0 if due is None else min(60.0, max(0.0, due - time.time()))
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._wake.wait(), delay)
-            self._wake.clear()
+            try:
+                for task in self.store.task_due(time.time()):
+                    try:
+                        await self.fire(task)
+                    except Exception:
+                        logger.exception("task %s failed", task["id"])
+                    if task["cron"]:  # from now, not from `due`, so a slow turn can't fire twice
+                        self.store.task_reschedule(task["id"], next_cron(task["cron"], time.time()))
+                    else:
+                        self.store.task_finish(task["id"])
+                due = self.store.task_next()
+                delay = 60.0 if due is None else min(60.0, max(0.0, due - time.time()))
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), delay)
+                self._wake.clear()
+            except Exception:
+                logger.exception("scheduler error; retrying in %s s", RETRY_SECONDS)
+                await asyncio.sleep(RETRY_SECONDS)
 
 
 def next_cron(expr: str, after: float) -> float:
     """Next time strictly after `after` (epoch seconds) matching a 5-field cron expression."""
-    return next(CronSim(expr, datetime.fromtimestamp(after).astimezone())).timestamp()
+    # Naive local time, so "0 7 * * *" stays at 07:00 across clock changes. When the clocks go
+    # back, the repeated hour's times map to their first pass, so skip any that are not later.
+    moments = CronSim(expr, datetime.fromtimestamp(after))
+    return next(m.timestamp() for m in moments if m.timestamp() > after)

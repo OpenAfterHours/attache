@@ -6,20 +6,29 @@ import re
 import shutil
 import socket
 import threading
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
-from attache import config, skills, web
+from attache import __version__, config, skills, web
 from attache.store import Store
 from attache.types import Endpoint, Inbound, Outbound, Person, Tool, Turn, TurnContext
 
 SECRET = b"0123456789abcdef0123456789abcdef"
+UI_TOKEN = "ui-token-made-fresh-by-app-build"
 BASE = "http://127.0.0.1:8765"
-UI = {"X-Attache-Token": web.artifact_token(SECRET, "_ui")}
+UI = {"X-Attache-Token": UI_TOKEN}
+CSP = (
+    "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; "
+    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'none'; "
+    "base-uri 'none'; frame-ancestors 'self'"
+)
 PREFLIGHT = {
     "Origin": "null",
     "Access-Control-Request-Method": "PUT",
@@ -44,7 +53,8 @@ def services(home: Path) -> Any:
         config=config.load(home),
         store=store,
         secret=SECRET,
-        gateway=web.ToolGateway(),
+        gateway={},
+        ui_token=UI_TOKEN,
         web_url=BASE,
     )
     store.close()
@@ -57,9 +67,9 @@ def env(services: Any) -> Any:
     return SimpleNamespace(client=client, router=router, channel=channel, sv=services)
 
 
-def page(sv: Any, name: str, collections: str = "todos", head: bool = True) -> None:
-    meta = f'<meta name="attache-collections" content="{collections}"><title>{name} page</title>'
-    html = f"<!doctype html><html><head>{meta}</head><body>hi</body></html>"
+def page(sv: Any, name: str, collections: str | None = "todos", head: bool = True) -> None:
+    meta = f'<meta name="attache-collections" content="{collections}">' if collections else ""
+    html = f"<!doctype html><html><head>{meta}<title>{name} page</title></head><body>hi</body>"
     path = sv.config.home / "artifacts" / f"{name}.html"
     path.write_text(html if head else "<p>no head</p>", encoding="utf-8")
 
@@ -69,41 +79,55 @@ def auth(name: str, token_for: str | None = None) -> dict[str, str]:
     return {"X-Attache-Artifact": name, "X-Attache-Token": token}
 
 
-def group_page(sv: Any) -> None:
-    record = {"name": "family", "collections": ["todos"], "chat_key": "slack:C1", "by": "owner"}
-    sv.store.doc_put("_artifacts", "family", record)
+def group_page(sv: Any, name: str = "family", collections: str = "todos") -> None:
+    page(sv, name, collections)
+    sv.store.doc_put("_artifacts", name, {"chat_key": "slack:C1"})
+
+
+def request(headers: dict[str, str] | None = None, query: str = "") -> Request:
+    raw = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": raw}
+    return Request({**scope, "query_string": query.encode()})
 
 
 # pages
 
 
-def test_index_embeds_the_ui_token(env: Any) -> None:
+def test_index_holds_no_token(env: Any) -> None:
     r = env.client.get("/")
-    assert r.status_code == 200 and UI["X-Attache-Token"] in r.text
-    assert "__ATTACHE_UI_TOKEN__" not in r.text
+    assert r.status_code == 200 and UI_TOKEN not in r.text
+    assert "Open Attaché from the link printed in your terminal." in r.text
+    assert 'params.get("t")' in r.text and 'params.get("page")' in r.text  # #t=...&page=...
+    assert "history.replaceState" in r.text and "localStorage" in r.text
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert "access-control-allow-origin" not in r.headers
     assert not re.search(r"""(src|href)=["']?(https?:)?//""", r.text)  # no external requests
     assert ".innerHTML" not in r.text and "insertAdjacentHTML" not in r.text
-    assert 'sandbox="allow-scripts allow-forms allow-popups"' in r.text
+    assert 'sandbox="allow-scripts allow-forms"' in r.text
+    assert "new tab" not in r.text.lower() and "allow-popups" not in r.text
 
 
 def test_bridge_js_is_served(env: Any) -> None:
     r = env.client.get("/bridge.js")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
-    assert "window.attache" in r.text and "X-Attache-Token" in r.text
+    assert "window.attache = Object.freeze({ db, on })" in r.text
 
 
-def test_artifact_gets_the_bridge_and_a_sandbox(env: Any) -> None:
+def test_artifact_gets_the_bridge_and_the_exact_csp(env: Any) -> None:
     page(env.sv, "home")
-    r = env.client.get("/a/home")
+    r = env.client.get("/a/home", headers={"Sec-Fetch-Dest": "iframe"})
     token = web.artifact_token(SECRET, "home")
     tag = f'<script src="/bridge.js" data-token="{token}" data-artifact="home"></script></head>'
     assert r.status_code == 200 and tag in r.text
-    csp = r.headers["content-security-policy"]
-    assert csp.startswith("sandbox allow-scripts allow-forms allow-popups;")
-    assert "allow-same-origin" not in csp and "connect-src 'self'" in csp
-    assert "default-src 'self' 'unsafe-inline' data: https://cdnjs.cloudflare.com" in csp
+    assert r.headers["content-security-policy"] == CSP
+
+
+def test_artifact_opened_outside_a_frame_is_refused(env: Any) -> None:
+    page(env.sv, "home")
+    for dest in ("document", "empty", "script"):
+        r = env.client.get("/a/home", headers={"Sec-Fetch-Dest": dest})
+        assert r.status_code == 403 and "inside the Attaché window" in r.json()["error"]
+    assert env.client.get("/a/home").status_code == 200  # no Sec-Fetch-Dest: an older client
 
 
 def test_artifact_without_head_gets_the_bridge_first(env: Any) -> None:
@@ -111,30 +135,90 @@ def test_artifact_without_head_gets_the_bridge_first(env: Any) -> None:
     assert env.client.get("/a/bare").text.startswith('<script src="/bridge.js"')
 
 
-@pytest.mark.parametrize("name", ["missing", "Home", "a.b", "a_b", "%2e%2e", "home.html"])
+@pytest.mark.parametrize("name", ["missing", "Home", "HOME", "a.b", "a_b", "%2e%2e", "home.html"])
 def test_bad_or_missing_artifact_names_are_404(env: Any, name: str) -> None:
-    page(env.sv, "home")
-    (env.sv.config.home / "artifacts" / "Home.html").write_text("x", encoding="utf-8")
+    page(env.sv, "home")  # exists, so "Home" fails on the name even on a case-insensitive disk
     assert env.client.get(f"/a/{name}").status_code == 404
 
 
-def test_artifact_list_uses_titles(env: Any) -> None:
+def test_artifact_list_is_the_page_names(env: Any) -> None:
+    page(env.sv, "trip")
     page(env.sv, "home")
-    (env.sv.config.home / "artifacts" / "plain.html").write_text("<p>x</p>", encoding="utf-8")
-    (env.sv.config.home / "artifacts" / "Not A Slug.html").write_text("x", encoding="utf-8")
     r = env.client.get("/api/artifacts", headers=UI)
-    assert r.json() == [
-        {"name": "home", "title": "home page", "url": "/a/home"},
-        {"name": "plain", "title": "plain", "url": "/a/plain"},
-    ]
+    assert r.json() == ["home", "trip"]
     assert "access-control-allow-origin" not in r.headers
     assert env.client.get("/api/artifacts", headers=auth("home")).status_code == 403
     assert env.client.get("/api/artifacts").status_code == 401
 
 
-def test_only_loopback_hosts_are_served(services: Any) -> None:
+# the Host check
+
+
+@pytest.mark.parametrize(
+    ("base", "status"),
+    [
+        ("http://127.0.0.1:8765", 200),
+        ("http://localhost:8765", 200),
+        ("http://[::1]:8765", 200),  # IPv6 keeps its brackets
+        ("http://[::1]", 200),
+        ("http://0.0.0.0:8765", 400),
+        ("http://[::]:8765", 400),
+        ("http://attacker.example", 400),
+        ("http://127.0.0.1.attacker.example", 400),
+    ],
+)
+def test_only_loopback_hosts_are_served(services: Any, base: str, status: int) -> None:
     app = web.create_app(services, FakeRouter(), web.WebChannel())
-    assert TestClient(app, base_url="http://attacker.example").get("/").status_code == 400
+    assert TestClient(app, base_url=base).get("/").status_code == status
+
+
+# scopes
+
+
+def test_scope_from_headers(services: Any) -> None:
+    page(services, "home", "todos, _tasks")
+    page(services, "plain", collections=None)
+    group_page(services)
+    assert web.scope_of(services, request(UI)) == web.Scope("_ui", None)
+    assert web.scope_of(services, request(auth("home"))) == web.Scope(
+        "home", frozenset({"todos", "_tasks"})
+    )
+    assert web.scope_of(services, request(auth("family"))) == web.Scope(
+        "family", frozenset({"todos"}), "slack:C1"
+    )
+    assert web.scope_of(services, request(auth("plain"))).collections == frozenset()
+    assert web.scope_of(services, request(auth("gone"))).collections == frozenset()
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"X-Attache-Token": "wrong"},
+        {"X-Attache-Token": web.artifact_token(SECRET, "home")},  # a page token is not the UI's
+        {"X-Attache-Artifact": "home", "X-Attache-Token": UI_TOKEN},  # nor the reverse
+        {"X-Attache-Artifact": "home", "X-Attache-Token": web.artifact_token(SECRET, "other")},
+        {"X-Attache-Artifact": "../home", "X-Attache-Token": web.artifact_token(SECRET, "../home")},
+        {"X-Attache-Artifact": "home", "X-Attache-Token": "ünicode"},
+    ],
+)
+def test_scope_refuses_bad_tokens(services: Any, headers: dict[str, str]) -> None:
+    page(services, "home")
+    with pytest.raises(HTTPException) as refused:
+        web.scope_of(services, request(headers))
+    assert refused.value.status_code == 401
+
+
+def test_scope_from_the_event_stream_query(services: Any) -> None:
+    page(services, "home")
+    token = web.artifact_token(SECRET, "home")
+    found = web.scope_of(services, request(query=f"artifact=home&token={token}"), query=True)
+    assert found == web.Scope("home", frozenset({"todos"}))
+    assert web.scope_of(services, request(query=f"token={UI_TOKEN}"), query=True).slug == "_ui"
+    with pytest.raises(HTTPException):  # the query form ignores headers
+        web.scope_of(services, request(UI), query=True)
+    with pytest.raises(HTTPException):  # and the header form ignores the query
+        web.scope_of(services, request(query=f"token={UI_TOKEN}"))
 
 
 # the data bridge
@@ -144,9 +228,14 @@ def test_db_needs_the_right_token(env: Any) -> None:
     page(env.sv, "home")
     assert env.client.get("/api/db/todos").status_code == 401
     assert env.client.get("/api/db/todos", headers=auth("home", "other")).status_code == 401
-    assert env.client.get("/api/db/todos", headers=auth("../home", "../home")).status_code == 401
     r = env.client.get("/api/db/notes", headers=auth("home"))
     assert r.status_code == 403 and "notes" in r.json()["error"]
+
+
+def test_page_without_meta_reaches_nothing(env: Any) -> None:
+    page(env.sv, "plain", collections=None)
+    for collection in ("todos", "_tasks", "notes"):
+        assert env.client.get(f"/api/db/{collection}", headers=auth("plain")).status_code == 403
 
 
 def test_owner_page_can_create_read_update_and_delete(env: Any) -> None:
@@ -161,11 +250,9 @@ def test_owner_page_can_create_read_update_and_delete(env: Any) -> None:
     assert c.delete(f"/api/db/todos/{doc['id']}", headers=h).json() is True
     r = c.get(f"/api/db/todos/{doc['id']}", headers=h)
     assert r.status_code == 404 and "no document" in r.json()["error"]
-    assert c.put("/api/db/todos/x", headers=h, content=b"not json").status_code == 400
 
 
 def test_group_page_sees_only_shared_docs_and_cannot_delete(env: Any) -> None:
-    page(env.sv, "family", collections="todos,notes")  # the "_artifacts" doc wins over <meta>
     group_page(env.sv)
     st, c, h = env.sv.store, env.client, auth("family")
     shared = st.doc_put("todos", None, {"title": "Passports", "_shared": ["slack:C1"]})
@@ -203,15 +290,14 @@ def test_cors_only_on_bridge_routes(env: Any) -> None:
         assert {"GET", "PUT", "DELETE", "POST"} <= set(methods.split(", "))
     denied = env.client.get("/api/db/todos", headers={"Origin": "null"})
     assert denied.status_code == 401 and denied.headers["access-control-allow-origin"] == "*"
-    for path in ("/", "/api/chat", "/api/artifacts", "/api/mcp/x/tools"):
-        assert (
-            "access-control-allow-origin" not in env.client.options(path, headers=PREFLIGHT).headers
-        )
+    for path in ("/", "/api/chat", "/api/artifacts", "/api/messages", "/mcp/x"):
+        headers = env.client.options(path, headers=PREFLIGHT).headers
+        assert "access-control-allow-origin" not in headers, path
     r = env.client.post("/api/chat", headers={**UI, "Origin": "null"}, json={"text": "hi"})
     assert r.status_code == 200 and "access-control-allow-origin" not in r.headers
 
 
-# chat
+# chat and history
 
 
 def test_chat_hands_an_owner_message_to_the_router(env: Any) -> None:
@@ -219,41 +305,44 @@ def test_chat_hands_an_owner_message_to_the_router(env: Any) -> None:
     assert r.json() == {"ok": True}
     [msg] = env.router.seen
     assert (msg.channel, msg.chat_id, msg.sender_id, msg.sender_name) == (
-        "web",
         "local",
+        "me",
         "owner",
         "Alex",
     )
-    assert msg.text == "hello" and msg.chat_key == "web:local"
+    assert msg.text == "hello" and msg.chat_key == "local:me"
     page(env.sv, "home")
     assert env.client.post("/api/chat", headers=auth("home"), json={"text": "x"}).status_code == 403
-    assert env.client.post("/api/chat", headers=UI, json={"text": " "}).status_code == 400
     assert env.client.post("/api/chat", json={"text": "x"}).status_code == 401
     assert len(env.router.seen) == 1
 
 
-def test_pages_cannot_ask_the_agent(env: Any) -> None:
+def test_messages_are_the_last_fifty_of_the_owner_chat(env: Any) -> None:
+    st = env.sv.store
+    for n in range(60):
+        st.add_message("local:me", "user" if n % 2 else "assistant", f"m{n}", "owner", "Alex")
+    st.add_message("slack:C1", "user", "elsewhere", "sam", "Sam")
+    r = env.client.get("/api/messages", headers=UI)
+    got = r.json()
+    assert [m["text"] for m in got] == [f"m{n}" for n in range(10, 60)]
+    assert set(got[0]) == {"role", "text", "ts"} and got[-1]["role"] == "user"
+    assert "access-control-allow-origin" not in r.headers
     page(env.sv, "home")
-    r = env.client.post("/api/ask", headers=auth("home"), json={"prompt": "Chase Dan"})
-    assert r.status_code == 404 and env.router.seen == []
-    assert "/api/ask" not in env.client.get("/bridge.js").text
+    assert env.client.get("/api/messages", headers=auth("home")).status_code == 403
+    assert env.client.get("/api/messages").status_code == 401
 
 
-@pytest.mark.parametrize("body", [b"[1, 2]", b'"text"', b"42", b"null", b"not json"])
-def test_bodies_must_be_json_objects(env: Any, body: bytes) -> None:
+@pytest.mark.parametrize("body", [b"not json", b"{"])
+def test_bodies_must_be_json(env: Any, body: bytes) -> None:
     page(env.sv, "home")
-    token = env.sv.gateway.open(make_turn(env.sv))
-    for path, headers in (
-        ("/api/chat", UI),
-        (f"/api/mcp/{token}/call", {}),
-        ("/api/db/todos", auth("home")),
-    ):
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    for path, headers in (("/api/chat", UI), ("/mcp/tok", {}), ("/api/db/todos", auth("home"))):
         r = env.client.post(path, headers=headers, content=body)
         assert r.status_code == 400 and r.json()["error"], path
     assert env.router.seen == [] and env.sv.store.doc_list("todos") == []
 
 
-# the tool gateway
+# MCP
 
 
 def make_turn(services: Any) -> Turn:
@@ -265,38 +354,60 @@ def make_turn(services: Any) -> Turn:
 
     schema = {"type": "object", "properties": {"x": {"type": "string"}}}
     tools = [Tool("echo", "Echo x.", schema, echo), Tool("boom", "Fails.", {}, boom)]
-    ctx = TurnContext("terminal:local", Person("owner", "Alex", "owner"), False, services)
+    ctx = TurnContext("local:me", Person("owner", "Alex", "owner"), False, services)
     return Turn(ctx, Endpoint("e", "claude-cli", "m"), "", [], "hi", tools)
 
 
-def test_mcp_lists_and_calls_through_the_gateway(env: Any) -> None:
-    gateway, c = env.sv.gateway, env.client
-    token = gateway.open(make_turn(env.sv))
-    tools = c.get(f"/api/mcp/{token}/tools").json()["tools"]
-    assert tools[0] == {
-        "name": "echo",
-        "description": "Echo x.",
-        "inputSchema": tools[0]["inputSchema"],
+def rpc(env: Any, method: str, params: dict[str, Any] | None = None, token: str = "tok") -> Any:
+    message = {"jsonrpc": "2.0", "id": 7, "method": method, "params": params or {}}
+    return env.client.post(f"/mcp/{token}", json=message)
+
+
+def test_mcp_initialize_and_ping(env: Any) -> None:
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    r = rpc(env, "initialize", {"protocolVersion": "2025-03-26", "capabilities": {}})
+    assert r.status_code == 200 and r.headers["content-type"] == "application/json"
+    assert r.json() == {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "attache", "version": __version__},
+        },
     }
+    assert rpc(env, "ping").json() == {"jsonrpc": "2.0", "id": 7, "result": {}}
+
+
+def test_mcp_notifications_get_202(env: Any) -> None:
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    notification = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    r = env.client.post("/mcp/tok", json=notification)
+    assert r.status_code == 202 and r.content == b""
+
+
+def test_mcp_lists_and_calls_the_turns_tools(env: Any) -> None:
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    tools = rpc(env, "tools/list").json()["result"]["tools"]
     assert [t["name"] for t in tools] == ["echo", "boom"]
-    r = c.post(f"/api/mcp/{token}/call", json={"name": "echo", "arguments": {"x": "1"}}).json()
-    assert r == {"content": [{"type": "text", "text": "echo 1 for Alex"}], "isError": False}
-    r = c.post(f"/api/mcp/{token}/call", json={"name": "boom", "arguments": {}}).json()
-    assert r["isError"] is True and "ValueError: bad" in r["content"][0]["text"]
-    assert c.post(f"/api/mcp/{token}/call", json={"name": "nope"}).json()["isError"] is True
-    gateway.close(token)
-    assert c.get(f"/api/mcp/{token}/tools").json() == {"tools": []}
-    r = c.post(f"/api/mcp/{token}/call", json={"name": "echo", "arguments": {"x": "1"}}).json()
-    assert r["isError"] is True and "unknown" in r["content"][0]["text"]
+    assert tools[0]["description"] == "Echo x." and tools[0]["inputSchema"]["type"] == "object"
+    result = rpc(env, "tools/call", {"name": "echo", "arguments": {"x": "1"}}).json()["result"]
+    assert result == {"content": [{"type": "text", "text": "echo 1 for Alex"}], "isError": False}
+    result = rpc(env, "tools/call", {"name": "boom", "arguments": {}}).json()["result"]
+    assert result["isError"] is True and "ValueError: bad" in result["content"][0]["text"]
+    result = rpc(env, "tools/call", {"name": "nope"}).json()["result"]
+    assert result["isError"] is True and "unknown tool" in result["content"][0]["text"]
 
 
-def test_gateway_tokens_are_random_and_separate(services: Any) -> None:
-    gateway = web.ToolGateway()
-    a, b = gateway.open(make_turn(services)), gateway.open(make_turn(services))
-    assert a != b and len(a) >= 32
-    gateway.close(a)
-    assert gateway.list(a) == [] and len(gateway.list(b)) == 2
-    assert asyncio.run(gateway.call("nope", "echo", {}))[1] is True
+def test_mcp_errors(env: Any) -> None:
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    error = rpc(env, "resources/list").json()["error"]
+    assert error["code"] == -32601 and "resources/list" in error["message"]
+    assert rpc(env, "tools/list", token="gone").status_code == 404
+    assert env.client.get("/mcp/tok").status_code == 405
+    assert env.client.delete("/mcp/tok").status_code == 405
+    del env.sv.gateway["tok"]  # the turn finished
+    assert rpc(env, "tools/list").status_code == 404
 
 
 # tokens
@@ -305,7 +416,7 @@ def test_gateway_tokens_are_random_and_separate(services: Any) -> None:
 def test_artifact_tokens() -> None:
     token = web.artifact_token(SECRET, "home")
     assert re.fullmatch(r"[0-9a-f]{64}", token) and token == web.artifact_token(SECRET, "home")
-    assert token != web.artifact_token(SECRET, "_ui")
+    assert token != web.artifact_token(SECRET, "trip")
     assert token != web.artifact_token(b"another secret", "home")
 
 
@@ -316,64 +427,70 @@ def test_events_need_a_token(env: Any) -> None:
     page(env.sv, "home")
     assert env.client.get("/api/events").status_code == 401
     assert env.client.get("/api/events?artifact=home&token=nope").status_code == 401
+    assert env.client.get("/api/events", headers=UI).status_code == 401  # query form only
 
 
-def test_doc_events_reach_only_pages_whose_scope_covers_them(services: Any) -> None:
+async def drain(stream: AsyncIterator[str]) -> list[tuple[str, dict[str, Any]]]:
+    """Every event the stream has ready, until it goes quiet (which also closes it)."""
+    events = []
+    while True:
+        try:
+            chunk = await asyncio.wait_for(anext(stream), 0.2)
+        except TimeoutError:
+            return events
+        if not chunk.startswith(":"):  # comments: connected, ping
+            kind, data = chunk.strip().split("\n")
+            events.append((kind.removeprefix("event: "), json.loads(data.removeprefix("data: "))))
+
+
+def test_events_reach_only_the_streams_whose_scope_covers_them(services: Any) -> None:
     channel = web.WebChannel()
     web.create_app(services, FakeRouter(), channel)  # registers the store listener
     scopes = {
-        "ui": ("_ui", None, None),
-        "home": ("home", {"todos"}, None),
-        "notes": ("notes", {"notes"}, None),
-        "family": ("family", {"todos"}, "slack:C1"),
+        "ui": web.Scope("_ui", None),
+        "home": web.Scope("home", frozenset({"todos"})),
+        "notes": web.Scope("notes", frozenset({"notes"})),
+        "family": web.Scope("family", frozenset({"todos"}), "slack:C1"),
     }
 
-    async def scenario() -> dict[str, list[Any]]:
+    async def scenario() -> dict[str, list[tuple[str, dict[str, Any]]]]:
         streams = {name: channel.stream(scope) for name, scope in scopes.items()}
         for stream in streams.values():
-            assert await anext(stream) == ": connected\n\n"
+            assert await anext(stream) == ": connected\n\n"  # subscribed from here on
         services.store.doc_put("todos", "p", {"title": "private"})
-        thread = threading.Thread(  # the store may call listeners from any thread
-            target=services.store.doc_put,
-            args=("todos", "s", {"title": "x", "_shared": ["slack:C1"]}),
-        )
-        thread.start()
+        shared = {"title": "x", "_shared": ["slack:C1"]}
+        thread = threading.Thread(target=services.store.doc_put, args=("todos", "s", shared))
+        thread.start()  # the store may call its listeners from any thread
         thread.join()
         services.store.doc_delete("todos", "p")
-        await channel.send(Outbound("web:local", "hello", ["files/a.txt"]))
-        await asyncio.sleep(0.01)  # run the call_soon_threadsafe callbacks
-        seen = {scope[0]: list(queue._queue) for scope, _, queue in channel.subs}
-        assert (await anext(streams["home"])).startswith('event: doc\ndata: {"collection": "todos"')
-        for stream in streams.values():
-            await stream.aclose()
-        assert channel.subs == []
+        await channel.send(Outbound("local:me", "hello", ["files/a.txt"]))
+        seen = {name: await drain(stream) for name, stream in streams.items()}
+        assert channel.subs == []  # each closed stream unsubscribed
         return seen
 
     seen = asyncio.run(scenario())
-    events = {
-        name: [(kind, e.get("id")) for kind, e in seen[slug]] for name, (slug, *_) in scopes.items()
-    }
-    assert events["ui"] == [("doc", "p"), ("doc", "s"), ("doc", "p"), ("message", None)]
-    assert events["home"] == [("doc", "p"), ("doc", "s"), ("doc", "p")]
-    assert events["notes"] == []
-    assert events["family"] == [("doc", "s")]  # only the doc shared with its chat
-    message = seen["_ui"][-1][1]
-    assert message == {"chat_key": "web:local", "text": "hello", "files": ["files/a.txt"]}
-    assert json.loads(json.dumps(seen["home"][1][1]))["doc"]["title"] == "x"
+    summary = {name: [(kind, e.get("id")) for kind, e in events] for name, events in seen.items()}
+    assert summary["ui"] == [("doc", "p"), ("doc", "s"), ("doc", "p"), ("message", None)]
+    assert summary["home"] == [("doc", "p"), ("doc", "s"), ("doc", "p")]
+    assert summary["notes"] == []
+    assert summary["family"] == [("doc", "s")]  # only the doc shared with its chat
+    assert seen["ui"][-1][1] == {"chat_key": "local:me", "text": "hello", "files": ["files/a.txt"]}
+    assert seen["home"][1][1]["doc"]["title"] == "x"
 
 
 def test_stream_pings_when_idle(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(web, "PING", 0.01)
+    monkeypatch.setattr(web, "PING_SECONDS", 0.01)
     channel = web.WebChannel()
 
     async def scenario() -> str:
-        stream = channel.stream(("_ui", None, None))
+        stream = channel.stream(web.Scope("_ui", None))
         await anext(stream)
         ping = await anext(stream)
         await stream.aclose()
         return ping
 
     assert asyncio.run(scenario()) == ": ping\n\n"
+    assert channel.subs == []
 
 
 def test_web_channel_runs_until_stopped() -> None:
@@ -389,13 +506,32 @@ def test_web_channel_runs_until_stopped() -> None:
         await asyncio.wait_for(task, 1)
 
     asyncio.run(scenario())
-    assert web.WebChannel.name == "web"
+    assert web.WebChannel.name == "local"
 
 
-def test_serve_raises_oserror_when_the_port_is_taken(services: Any) -> None:
+# serving
+
+
+def test_serve_answers_on_the_socket_it_is_given(services: Any) -> None:
     app = web.create_app(services, FakeRouter(), web.WebChannel())
-    with socket.socket() as taken:
-        taken.bind(("127.0.0.1", 0))
-        taken.listen()
-        with pytest.raises(OSError):
-            asyncio.run(web.serve(app, "127.0.0.1", taken.getsockname()[1]))
+
+    async def scenario(sock: socket.socket) -> bytes:
+        server = asyncio.create_task(web.serve(app, sock))
+        port = sock.getsockname()[1]
+        for _ in range(100):  # until uvicorn is listening
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        writer.write(b"GET /bridge.js HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        reply = await reader.read()
+        writer.close()
+        server.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await server
+        return reply
+
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        reply = asyncio.run(scenario(sock))
+    assert reply.startswith(b"HTTP/1.1 200") and b"window.attache" in reply

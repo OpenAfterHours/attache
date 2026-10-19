@@ -1,13 +1,10 @@
-"""Anthropic Messages API adapter. Owner: models. Budget ~65 lines.
-
-Works with the Claude API and any Anthropic-compatible base_url. Uses anthropic.AsyncAnthropic.
-"""
+"""Anthropic Messages API adapter, for the Claude API and any Anthropic-compatible base_url."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from attache.agent import Step, api_key
+from attache.agent import Step, api_key, tool_spec
 from attache.types import Endpoint, ToolCall, Turn
 
 
@@ -15,7 +12,8 @@ class AnthropicAdapter:
     def __init__(self, endpoint: Endpoint, client: Any = None) -> None:
         """client: an AsyncAnthropic-like object; tests pass a fake. None builds one lazily from
         endpoint.base_url and the env var named by endpoint.key_env."""
-        self.endpoint, self.client = endpoint, client
+        self.endpoint = endpoint
+        self.client = client
 
     def _client(self) -> Any:
         if self.client is None:
@@ -36,10 +34,7 @@ class AnthropicAdapter:
         return msgs
 
     async def step(self, state: list[dict[str, Any]], turn: Turn) -> Step:
-        tools = [
-            {"name": t.name, "description": t.description, "input_schema": t.schema}
-            for t in turn.tools
-        ]
+        tools = [tool_spec(t, key="input_schema") for t in turn.tools]
         resp = await self._client().messages.create(
             model=self.endpoint.model,
             max_tokens=self.endpoint.options.get("max_tokens", 4096),
@@ -47,20 +42,21 @@ class AnthropicAdapter:
             messages=state,
             **({"tools": tools} if tools else {}),
         )
-        blocks: list[dict[str, Any]] = []
-        for b in resp.content:
-            if b.type == "text":
-                blocks.append({"type": "text", "text": b.text})
-            elif b.type == "tool_use":
-                blocks.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
+        # Send the blocks back as they came, so thinking blocks keep their signatures.
+        blocks = [b.model_dump(exclude_none=True) for b in resp.content]
         state.append({"role": "assistant", "content": blocks})
-        u = resp.usage
         return Step(
-            text="".join(b["text"] for b in blocks if b["type"] == "text"),
-            calls=[ToolCall(b["id"], b["name"], b["input"]) for b in blocks if "input" in b],
-            usage={"input_tokens": u.input_tokens, "output_tokens": u.output_tokens},
+            text="".join(b.text for b in resp.content if b.type == "text"),
+            calls=[ToolCall(b.id, b.name, b.input) for b in resp.content if b.type == "tool_use"],
+            usage={
+                "input_tokens": resp.usage.input_tokens,
+                "output_tokens": resp.usage.output_tokens,
+            },
         )
 
     def add_results(self, state: list[dict[str, Any]], results: list[tuple[ToolCall, str]]) -> None:
-        blocks = [{"type": "tool_result", "tool_use_id": c.id, "content": o} for c, o in results]
+        blocks = [
+            {"type": "tool_result", "tool_use_id": call.id, "content": output}
+            for call, output in results
+        ]
         state.append({"role": "user", "content": blocks})

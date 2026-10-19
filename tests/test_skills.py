@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from attache import skills
+from attache import config, skills
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
@@ -142,12 +142,64 @@ def test_undo_restores_previous_version(repo: Path) -> None:
 
 
 @needs_git
-def test_undo_removes_new_skill(repo: Path) -> None:
+def test_undo_never_deletes_a_skill(repo: Path) -> None:
     write_skill(repo, "pdf", "name: pdf\ndescription: v1")
     skills.commit(repo, "first")
     write_skill(repo, "todos", "name: todos\ndescription: t")
     skills.commit(repo, "add todos")
-    assert skills.undo(repo, "todos") is not None
-    assert not (repo / "skills" / "todos").exists()
-    assert (repo / "skills" / "pdf" / "SKILL.md").exists()
+    before = skills.log(repo)
+    assert skills.undo(repo, "todos") is None  # added by its latest commit: nothing earlier
+    assert skills.undo(repo, "pdf") is None  # only in the root commit
     assert skills.undo(repo, "never-existed") is None
+    assert (repo / "skills" / "todos" / "SKILL.md").exists()
+    assert (repo / "skills" / "pdf" / "SKILL.md").exists()
+    assert skills.log(repo) == before
+
+
+@needs_git
+def test_undo_keeps_bundled_skills_on_a_fresh_home(home: Path) -> None:
+    config.init_home(home, "Alex")
+    assert (home / "skills" / "todos" / "SKILL.md").exists()
+    assert skills.undo(home, "todos") is None
+    assert (home / "skills" / "todos" / "SKILL.md").exists()
+    assert len(skills.log(home)) == 1
+
+
+@needs_git
+def test_undo_commits_uncommitted_edits_first(repo: Path) -> None:
+    md = write_skill(repo, "pdf", "name: pdf\ndescription: v1")
+    skills.commit(repo, "add pdf")
+    write_skill(repo, "pdf", "name: pdf\ndescription: v2")
+    skills.commit(repo, "pdf v2")
+    write_skill(repo, "pdf", "name: pdf\ndescription: v3, not committed yet")
+    assert skills.undo(repo, "pdf") is not None
+    assert "v2" in md.read_text(encoding="utf-8")  # back to before the latest change
+    subjects = [line.split(" ", 1)[1] for line in skills.log(repo)]
+    assert subjects[:2] == ["undo: pdf", "before undo: pdf"]
+    kept = skills.git(repo, "show", "HEAD~1:skills/pdf/SKILL.md") or ""
+    assert "v3, not committed yet" in kept  # still in history
+
+
+@needs_git
+def test_undo_cannot_reach_outside_skills(repo: Path) -> None:
+    user = repo / "memory" / "USER.md"
+    user.parent.mkdir()
+    user.write_text("v1", encoding="utf-8")
+    skills.commit(repo, "memory v1")
+    user.write_text("v2", encoding="utf-8")
+    skills.commit(repo, "memory v2")
+    with pytest.raises(ValueError, match="not a skill name"):
+        skills.undo(repo, "../memory")
+    assert user.read_text(encoding="utf-8") == "v2"
+
+
+@pytest.mark.parametrize("name", ["..", "Pdf", "a/b", "a\\b", "-x", "", "x" * 65])
+def test_undo_rejects_bad_names_before_running_git(
+    home: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(skills, "git", lambda home, *args: calls.append(args))
+    with pytest.raises(ValueError, match="not a skill name"):
+        skills.undo(home, name)
+    assert calls == []
+    assert skills.SKILL_NAME.fullmatch("pdf-tools-2")

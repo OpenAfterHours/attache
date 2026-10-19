@@ -21,11 +21,18 @@ skills/<name>/
 
 Metadata keys Attaché reads:
 
-- `attache-roles: "member"` lets group members use the skill's scripts (owner-only otherwise).
+- `attache-roles: "member"` makes the skill available in group chats: members see its full
+  text in their prompt and may run its scripts. Without it a skill is owner-only.
 - `attache-channel: "<command>"` marks a channel sidecar (phase 2).
 
 Bundled skills live in `src/attache/bundled/skills/` and are copied into a user's home by
-`attache init`. Each bundled skill's scripts are capped at 300 lines by `tests/test_budget.py`.
+`attache init`. Each bundled skill's scripts are capped at 300 lines of code by
+`tests/test_budget.py`.
+
+## The size budget
+
+`tests/test_budget.py` fails when the core passes 1,600 lines of code. Blank lines, comments
+and docstrings don't count, so write the clearest version of the code, not the shortest.
 
 ## Before you open a pull request
 

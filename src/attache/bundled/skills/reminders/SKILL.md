@@ -3,6 +3,8 @@ name: reminders
 description: Set, list and cancel reminders and recurring routines with the `schedule` tool.
   Use when someone says remind me, later, tomorrow, at a time, every morning or every week, or
   asks which reminders are set.
+metadata:
+  attache-roles: "member"
 ---
 
 # Reminders
@@ -60,7 +62,7 @@ conversation's context.
 
 - `schedule {op: "list"}` shows this chat's pending tasks, earliest first. The owner can add
   `all: true` to see every chat.
-- `schedule {op: "cancel", id: 12}` with an id from the list. Match "cancel the dentist one"
+- `schedule {op: "cancel", id: "12"}` with an id from the list. Match "cancel the dentist one"
   against the texts; ask if two fit.
 - To change a reminder, cancel it and add the new one.
 

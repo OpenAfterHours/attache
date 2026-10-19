@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sqlite3
 import time
 from collections.abc import Callable, Iterator
 from datetime import datetime
@@ -11,10 +12,11 @@ from typing import Any
 import pytest
 from cronsim import CronSimError
 
+from attache import scheduler
 from attache.scheduler import Scheduler, next_cron
 from attache.store import Store
 
-CHAT = "web:local"
+CHAT = "local:me"
 
 
 @pytest.fixture
@@ -45,6 +47,24 @@ def test_next_cron_is_local_and_strictly_after() -> None:
     assert next_cron("* * * * *", at_730) == at_730 + 60
     with pytest.raises(CronSimError):
         next_cron("not a cron", at_730)
+
+
+def test_daily_cron_keeps_its_hour_across_clock_changes() -> None:
+    # 40 days from 20 October cover the autumn change in Europe (25 Oct) and the US (1 Nov),
+    # so this fails in any zone with DST if next_cron used a fixed UTC offset.
+    t = datetime(2026, 10, 20).timestamp()
+    for _ in range(40):
+        t = next_cron("0 7 * * *", t)
+        assert datetime.fromtimestamp(t).hour == 7
+
+
+def test_next_cron_always_moves_forward() -> None:
+    # Through the hour that repeats when the clocks go back, every step must still be later.
+    t = datetime(2026, 10, 24).timestamp()
+    for _ in range(4 * 24 * 10):
+        later = next_cron("*/15 * * * *", t)
+        assert t < later <= t + 75 * 60  # 75 min at most: skipping the repeated hour
+        t = later
 
 
 def test_add(store: Store) -> None:
@@ -135,13 +155,35 @@ def test_wake_fires_a_new_task_promptly(store: Store) -> None:
     assert store.task_list() == []
 
 
-def test_without_fire_tasks_wait(store: Store) -> None:
-    store.task_add(CHAT, "due", time.time() - 1)
+def test_run_survives_store_errors(
+    store: Store, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(scheduler, "RETRY_SECONDS", 0.01)
+    real_task_due = store.task_due
+    failures = [sqlite3.OperationalError("database is locked")] * 2
+
+    def flaky_task_due(now: float) -> list[dict[str, Any]]:
+        if failures:
+            raise failures.pop()
+        return real_task_due(now)
+
+    monkeypatch.setattr(store, "task_due", flaky_task_due)
+    store.task_add(CHAT, "still fires", time.time() - 1)
+    fired: list[str] = []
+
+    async def fire(task: dict[str, Any]) -> None:
+        fired.append(task["text"])
 
     async def main() -> None:
-        runner = asyncio.create_task(Scheduler(store).run())
-        await asyncio.sleep(0.1)
+        runner = asyncio.create_task(Scheduler(store, fire).run())
+        await until(lambda: bool(fired))
         await stop(runner)
 
     asyncio.run(main())
-    assert [t["text"] for t in store.task_list()] == ["due"]
+    assert fired == ["still fires"]
+    assert caplog.text.count("database is locked") == 2
+
+
+def test_run_needs_fire(store: Store) -> None:
+    with pytest.raises(AssertionError, match="fire"):
+        asyncio.run(Scheduler(store).run())

@@ -9,6 +9,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  UV_LOCKED: "1"  # a stale uv.lock fails CI instead of being re-resolved
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -17,9 +20,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Ruff lint
-        run: uv run ruff check .
+        run: uvx ruff check .
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: uvx ruff format --check .
 
   test:
     runs-on: ${{ matrix.os }}
@@ -47,4 +50,9 @@ jobs:
         run: uv build
       - name: Smoke-test the built wheel
         run: |
-          uvx --from dist/*.whl attache --help
+          wheel=$(ls dist/*.whl)
+          uvx --isolated --from "$wheel" attache --help
+          uvx --isolated --from "$wheel" attache init --home "$RUNNER_TEMP/home" --name CI
+          test -f "$RUNNER_TEMP/home/skills/todos/SKILL.md"
+          test -f "$RUNNER_TEMP/home/artifacts/home.html"
+          uv run --isolated --no-project --with "$wheel" python -c "import attache.app, attache.web"

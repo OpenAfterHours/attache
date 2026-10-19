@@ -23,7 +23,7 @@
     } catch {
       data = text;
     }
-    if (!res.ok) throw new Error((data && data.error) || `${res.status} ${res.statusText}`);
+    if (!res.ok) throw new Error((data && data.error) || text || `${res.status} ${res.statusText}`);
     return data;
   }
 

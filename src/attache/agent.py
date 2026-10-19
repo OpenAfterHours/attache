@@ -1,4 +1,4 @@
-"""The shared tool loop for API backends. Owner: models. Budget ~55 lines.
+"""The shared tool loop for API backends.
 
 An Adapter speaks one wire protocol and keeps its own native message list (`state`). The loop
 asks it for one model step at a time, runs any tool calls, and feeds the results back.
@@ -6,7 +6,6 @@ asks it for one model step at a time, runs any tool calls, and feeds the results
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -46,9 +45,9 @@ def api_key(endpoint: Endpoint) -> str | None:
     return os.environ[env] if env else None
 
 
-def tool_spec(tool: Tool) -> dict[str, Any]:
-    """Neutral description adapters translate: {"name", "description", "parameters"}."""
-    return {"name": tool.name, "description": tool.description, "parameters": tool.schema}
+def tool_spec(tool: Tool, key: str = "parameters") -> dict[str, Any]:
+    """{"name", "description", <key>: schema}; Anthropic and MCP call the schema key differently."""
+    return {"name": tool.name, "description": tool.description, key: tool.schema}
 
 
 async def run_tool(call: ToolCall, turn: Turn) -> str:
@@ -63,7 +62,6 @@ async def run_tool(call: ToolCall, turn: Turn) -> str:
         out = await tool.fn(call.args, turn.ctx)
     except Exception as e:
         return f"error: {type(e).__name__}: {e}"
-    out = out if isinstance(out, str) else json.dumps(out, default=str)
     if len(out) > MAX_TOOL_OUTPUT:
         out = f"{out[:MAX_TOOL_OUTPUT]}\n[cut: showing {MAX_TOOL_OUTPUT} of {len(out)} characters]"
     return out
@@ -72,12 +70,16 @@ async def run_tool(call: ToolCall, turn: Turn) -> str:
 async def tool_loop(adapter: Adapter, turn: Turn, max_steps: int = MAX_STEPS) -> Reply:
     """Step until the model stops calling tools or max_steps is hit (then say so in the reply).
     Usage from every step is summed into Reply.usage."""
-    state, text, usage = adapter.start(turn), "", {}
+    state = adapter.start(turn)
+    usage: dict[str, Any] = {}
+    text = ""
     for _ in range(max_steps):
         step = await adapter.step(state, turn)
-        usage = {k: (usage.get(k) or 0) + (step.usage.get(k) or 0) for k in usage | step.usage}
+        for key, value in step.usage.items():
+            usage[key] = usage.get(key, 0) + (value or 0)
         text = step.text or text
         if not step.calls:
             return Reply(step.text, usage=usage)
-        adapter.add_results(state, [(c, await run_tool(c, turn)) for c in step.calls])
+        results = [(call, await run_tool(call, turn)) for call in step.calls]
+        adapter.add_results(state, results)
     return Reply(f"{text}\n\n(I stopped after {max_steps} steps.)".lstrip(), usage=usage)

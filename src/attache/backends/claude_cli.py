@@ -1,20 +1,12 @@
-"""Claude Code as a backend: `claude -p` runs its own loop. Owner: models. Budget ~100 lines.
+"""Claude Code as a backend: `claude -p` runs its own tool loop and reaches our tools over MCP.
 
-Per turn:
-  1. Open a tool-gateway token (services.gateway.open(turn)) so our tools are reachable.
-  2. Write a temp MCP config naming one stdio server, "attache":
-     [sys.executable, "-m", "attache", "mcp", "--url", services.web_url, "--token", token].
-  3. Write turn.system to a temp file for --append-system-prompt-file.
-  4. Run: <bin> -p --output-format stream-json --verbose --model <model>
-          --append-system-prompt-file <file> --mcp-config <file> --strict-mcp-config
-          --allowedTools <owner built-ins + mcp__attache> [--resume <session_id>]
-     with cwd = home, and the user's text on stdin (avoids Windows command-line limits).
-  5. Parse stream-json lines; the final "result" event carries the text and session_id.
-  6. Close the gateway token and delete the temp files, even on error.
-
-Only the owner's turns may use this backend (Anthropic's terms: a subscription login is for
-your own use). Raise PermissionError for any other role. A missing `claude` binary raises
-RuntimeError naming endpoint.options["bin"] (default "claude", resolved with shutil.which).
+Only the owner's turns may use it, because a Claude subscription login is for your own use
+(Anthropic's terms). The message goes on stdin, which avoids Windows command-line length
+limits. claude runs in a private directory next to <home> ("<home>-claude"), with <home> added
+by --add-dir, so a CLAUDE.md or .claude/settings.json (hooks) planted in <home> is never loaded
+as project config; Claude Code looks for those in its working directory and the ones above it.
+That directory stays the same across turns so every session is in one Claude Code project and
+--resume finds it. The user's own ~/.claude config still applies; that is the owner's choice.
 """
 
 from __future__ import annotations
@@ -22,8 +14,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import secrets
 import shutil
-import sys
 import tempfile
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import replace
@@ -33,18 +26,21 @@ from typing import Any
 from attache.types import Endpoint, Reply, Turn
 
 OWNER_BUILTINS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"]
-NO_SESSION = "No conversation found"  # what claude says when --resume names an unknown session
+# Our tools that Claude Code's own Read/Write/Edit/Bash already cover, so they are not served.
+DUPLICATE_TOOLS = {"read_file", "write_file", "edit_file", "run"}
+# Errors a fresh session fixes: an unknown --resume id, or a conversation past the context limit.
+RESET_ON = ("no conversation found", "too long", "context")
 
 
-async def _subprocess(argv: list[str], stdin_text: str, cwd: Path) -> AsyncIterator[str]:
+async def _spawn(argv: list[str], text: str, cwd: Path, env: dict[str, str]) -> AsyncIterator[str]:
     pipe = asyncio.subprocess.PIPE
     proc = await asyncio.create_subprocess_exec(
-        *argv, cwd=cwd, stdin=pipe, stdout=pipe, stderr=pipe, limit=2**24
+        *argv, cwd=cwd, env=env, stdin=pipe, stdout=pipe, stderr=pipe, limit=2**24
     )
     try:
         stderr = asyncio.ensure_future(proc.stderr.read())  # drain so a full pipe can't block it
         with contextlib.suppress(ConnectionError):  # it exited early; stderr says why
-            proc.stdin.write(stdin_text.encode("utf-8"))
+            proc.stdin.write(text.encode("utf-8"))
             await proc.stdin.drain()
             proc.stdin.close()
         got_result = False
@@ -61,10 +57,36 @@ async def _subprocess(argv: list[str], stdin_text: str, cwd: Path) -> AsyncItera
             proc.kill()
 
 
+def _env() -> dict[str, str]:
+    """os.environ, with our local MCP traffic kept off proxies and room for 10-minute tools."""
+    skip = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+    no_proxy = ",".join(filter(None, [skip, "127.0.0.1,localhost,::1"]))
+    env = {**os.environ, "NO_PROXY": no_proxy, "no_proxy": no_proxy, "MCP_TOOL_TIMEOUT": "660000"}
+    env.pop("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", None)  # keep <home>'s CLAUDE.md out
+    return env
+
+
+def prompt(turn: Turn) -> str:
+    """turn.text after a fenced transcript of the history this Claude session hasn't seen: all
+    of it (the last 30 messages, 20,000 characters) when fresh, else what followed its last reply.
+    """
+    history, label = turn.history, "Earlier messages in this chat"
+    replies = [i for i, m in enumerate(history) if m["role"] == "assistant"]
+    if turn.session.get("session_id") and replies:
+        history, label = history[replies[-1] + 1 :], "Messages in this chat since your last reply"
+    body = "\n\n".join(f"{m['role']}: {m['content']}" for m in history[-30:])[-20_000:]
+    if not body:
+        return turn.text
+    fence = "```"
+    while fence in body:  # longer than any run of backticks inside, so the text can't close it
+        fence += "`"
+    return f"{label}, oldest first:\n{fence}\n{body}\n{fence}\n\nNew message:\n{turn.text}"
+
+
 class ClaudeCLI:
     def __init__(self, endpoint: Endpoint, runner: Any = None) -> None:
-        """runner(argv, stdin_text, cwd) -> async iterable of stdout lines; tests pass a fake."""
-        self.endpoint, self.runner = endpoint, runner or _subprocess
+        """runner(argv, stdin_text, cwd, env) -> async iterable of stdout lines; tests pass one."""
+        self.endpoint, self.runner = endpoint, runner or _spawn
 
     def command(self, turn: Turn, mcp_config: Path, system_file: Path) -> list[str]:
         name = self.endpoint.options.get("bin", "claude")
@@ -73,36 +95,42 @@ class ClaudeCLI:
         argv = [exe, "-p", "--output-format", "stream-json", "--verbose"]
         argv += ["--model", self.endpoint.model, "--append-system-prompt-file", str(system_file)]
         argv += ["--mcp-config", str(mcp_config), "--strict-mcp-config"]
+        argv += ["--add-dir", str(turn.ctx.services.home)]
         argv += ["--allowedTools", ",".join([*OWNER_BUILTINS, "mcp__attache"])]
         if session_id := turn.session.get("session_id"):
             argv += ["--resume", session_id]
         return argv
 
     async def run(self, turn: Turn) -> Reply:
-        if turn.ctx.role != "owner":
-            raise PermissionError("the claude-cli backend only answers the owner's own turns")
+        if turn.ctx.role != "owner" or turn.ctx.is_group:  # groups carry untrusted text
+            raise PermissionError("the claude-cli backend only answers the owner's own chats")
         services = turn.ctx.services
-        token = services.gateway.open(turn)
-        tmp = Path(tempfile.mkdtemp(prefix="attache-"))
+        token = secrets.token_urlsafe(24)
+        cwd = services.home.parent / f"{services.home.name}-claude"  # outside <home>: see above
+        cwd.mkdir(exist_ok=True)
+        files = Path(tempfile.mkdtemp(prefix="attache-"))  # this turn's MCP config and prompt
         try:
-            mcp_config, system_file = tmp / "mcp.json", tmp / "system.md"
-            args = ["-m", "attache", "mcp", "--url", services.web_url, "--token", token]
-            server = {"type": "stdio", "command": sys.executable, "args": args}
-            mcp_config.write_text(json.dumps({"mcpServers": {"attache": server}}), encoding="utf-8")
-            system_file.write_text(turn.system, encoding="utf-8")
+            tools = [t for t in turn.tools if t.name not in DUPLICATE_TOOLS]
+            services.gateway[token] = replace(turn, tools=tools)
+            server = {"type": "http", "url": f"{services.web_url}/mcp/{token}"}
+            config = json.dumps({"mcpServers": {"attache": server}})
+            (files / "mcp.json").write_text(config, encoding="utf-8")
+            system = f"{turn.system}\n\nYour files live in {services.home}."
+            (files / "system.md").write_text(system, encoding="utf-8")
             try:
-                return await self._once(turn, mcp_config, system_file)
+                return await self._once(turn, files, cwd)
             except RuntimeError as e:
-                if not turn.session.get("session_id") or NO_SESSION not in str(e):
+                stuck = any(s in str(e).lower() for s in RESET_ON)
+                if not stuck or not turn.session.get("session_id"):
                     raise
-                return await self._once(replace(turn, session={}), mcp_config, system_file)
+                return await self._once(replace(turn, session={}), files, cwd)  # full transcript
         finally:
-            services.gateway.close(token)
-            shutil.rmtree(tmp, ignore_errors=True)
+            services.gateway.pop(token, None)
+            shutil.rmtree(files, ignore_errors=True)
 
-    async def _once(self, turn: Turn, mcp_config: Path, system_file: Path) -> Reply:
-        argv, home = self.command(turn, mcp_config, system_file), turn.ctx.services.home
-        return parse_events([line async for line in self.runner(argv, turn.text, home)])
+    async def _once(self, turn: Turn, files: Path, cwd: Path) -> Reply:
+        argv = self.command(turn, files / "mcp.json", files / "system.md")
+        return parse_events([line async for line in self.runner(argv, prompt(turn), cwd, _env())])
 
 
 def parse_events(lines: Iterable[str]) -> Reply:
@@ -113,20 +141,12 @@ def parse_events(lines: Iterable[str]) -> Reply:
     for line in lines:
         with contextlib.suppress(ValueError):
             events.append(json.loads(line))
-    events = [e for e in events if isinstance(e, dict)]
     result = next((e for e in reversed(events) if e.get("type") == "result"), {})
     if result.get("is_error"):
         errors = "; ".join(result.get("errors") or [])
         raise RuntimeError(result.get("result") or errors or result.get("subtype", "claude failed"))
-    texts = [
-        b.get("text", "")
-        for e in events
-        if e.get("type") == "assistant"
-        for b in (e.get("message") or {}).get("content") or []
-        if b.get("type") == "text"
-    ]
-    u = result.get("usage") or {}
-    usage = {"cost_usd": result.get("total_cost_usd")}
-    usage |= {k: u.get(k) for k in ("input_tokens", "output_tokens")}
-    text = result.get("result") or "\n\n".join(texts)
+    blocks = [b for e in events if e.get("type") == "assistant" for b in e["message"]["content"]]
+    usage = {k: (result.get("usage") or {}).get(k) for k in ("input_tokens", "output_tokens")}
+    usage["cost_usd"] = result.get("total_cost_usd")
+    text = result.get("result") or "\n\n".join(b["text"] for b in blocks if b.get("type") == "text")
     return Reply(text, {"session_id": result.get("session_id")}, usage)

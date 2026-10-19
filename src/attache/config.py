@@ -1,11 +1,10 @@
-"""Load <home>/attache.toml into dataclasses; create a fresh home. Owner: foundation. ~80 lines."""
+"""Load <home>/attache.toml into dataclasses, and create a fresh home."""
 
 from __future__ import annotations
 
 import os
-import secrets
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,9 @@ from attache import skills
 from attache.types import Endpoint, Person
 
 BUNDLED = Path(__file__).parent / "bundled"
+PERSON_KEYS = ("name", "role", "ids")  # any other key is a channel id, like slack = "U0123"
+# The [routing], [web] and [assistant] keys, which are all Config fields.
+SECTIONS = {"routing": ["own_chats", "group_chats"], "web": ["host", "port"], "assistant": ["name"]}
 
 
 @dataclass
@@ -32,18 +34,20 @@ class Config:
     people: dict[str, Person]
     chats: dict[str, ChatConfig]
     endpoints: dict[str, Endpoint]
-    own_chats: str = "claude"  # endpoint for your own chats (terminal, web, your DMs)
-    group_chats: str = "claude-api"  # endpoint for group chats
+    own_chats: str = "claude"  # endpoint for your own chats (local, your direct messages)
+    group_chats: str = "claude-api"  # endpoint for group chats and anyone but you
     host: str = "127.0.0.1"
     port: int = 8765
     name: str = "Attaché"  # how the assistant names itself; also its default trigger word
 
     def person(self, channel: str, sender_id: str) -> Person | None:
-        """Who sent this? `terminal` and `web` senders are always the owner."""
-        if channel in ("terminal", "web"):
+        """Who sent this? Senders on the `local` channel (terminal and web) are the owner."""
+        if channel == "local":
             return self.owner
-        known = [self.owner, *self.people.values()]  # empty ids were dropped by load()
-        return next((p for p in known if p.ids.get(channel) == sender_id), None)
+        for person in [self.owner, *self.people.values()]:
+            if person.ids.get(channel) == sender_id:  # load() drops empty ids
+                return person
+        return None
 
     def chat(self, chat_key: str) -> ChatConfig | None:
         return self.chats.get(chat_key)
@@ -51,7 +55,8 @@ class Config:
     def endpoint_for(self, chat_key: str, is_group: bool) -> Endpoint:
         """The chat's own endpoint if set, else [routing] group_chats or own_chats."""
         chat = self.chats.get(chat_key)
-        name = (chat and chat.endpoint) or (self.group_chats if is_group else self.own_chats)
+        default = self.group_chats if is_group else self.own_chats
+        name = chat.endpoint if chat and chat.endpoint else default
         if name not in self.endpoints:
             raise ValueError(f"endpoint {name!r} (for {chat_key}) is not in attache.toml")
         return self.endpoints[name]
@@ -59,70 +64,96 @@ class Config:
 
 def home_dir() -> Path:
     """$ATTACHE_HOME if set, else ~/.attache."""
-    return Path(os.environ.get("ATTACHE_HOME") or Path.home() / ".attache").expanduser()
-
-
-def _template(owner: str, endpoint: str) -> str:
-    text = (BUNDLED / "attache.toml").read_text(encoding="utf-8")
-    for key, value in (("{owner}", owner), ("{endpoint}", endpoint)):
-        text = text.replace(key, value.replace("\\", "\\\\").replace('"', '\\"'))
-    return text
-
-
-def _ids(table: dict[str, Any]) -> dict[str, str]:
-    return {k: str(v) for k, v in table.items() if k not in ("name", "role") and v}
-
-
-def _endpoint(name: str, table: dict[str, Any]) -> Endpoint:
-    known = {k: table.pop(k) for k in ("api", "model", "base_url", "key_env") if k in table}
-    return Endpoint(name, **{"model": "", **known}, options=table)
+    env = os.environ.get("ATTACHE_HOME")
+    return Path(env).expanduser() if env else Path.home() / ".attache"
 
 
 def load(home: Path | None = None) -> Config:
-    """Read <home>/attache.toml. A missing file gives the defaults from bundled/attache.toml."""
+    """Read <home>/attache.toml. A missing file gives the defaults from bundled/attache.toml.
+
+    Raises ValueError, naming the file, for bad TOML, an unknown key or a bad port.
+    """
     home = home or home_dir()
     path = home / "attache.toml"
-    text = path.read_text(encoding="utf-8") if path.exists() else _template("you", "claude")
-    raw = tomllib.loads(text)
+    # utf-8-sig: PowerShell writes a byte order mark.
+    text = path.read_text(encoding="utf-8-sig") if path.exists() else _template("you", "claude")
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"{path}: {e}") from None
+
     own = raw.get("owner", {})
-    owner = Person("owner", own.get("name", "you"), "owner", _ids(own.get("ids", {})))
-    people = {
-        pid: Person(pid, p.get("name", pid), p.get("role", "member"), _ids(p))
-        for pid, p in raw.get("people", {}).items()
-    }
-    chats = {key: ChatConfig(key, **c) for key, c in raw.get("chats", {}).items()}
-    endpoints = {name: _endpoint(name, e) for name, e in raw.get("endpoints", {}).items()}
-    # [routing], [web] and [assistant] keys are Config fields; an unknown key raises TypeError.
-    tables = {**raw.get("routing", {}), **raw.get("web", {}), **raw.get("assistant", {})}
-    return Config(home, owner, people, chats, endpoints, **tables)
+    owner = Person("owner", own.get("name", "you"), "owner", _ids(own))
+    people = {}
+    for pid, table in raw.get("people", {}).items():
+        people[pid] = Person(pid, table.get("name", pid), table.get("role", "member"), _ids(table))
+    chat_keys = [f.name for f in fields(ChatConfig) if f.name != "key"]
+    chats = {}
+    for key, table in raw.get("chats", {}).items():
+        chats[key] = ChatConfig(key, **_check(path, f'chats."{key}"', table, chat_keys))
+    endpoints = {}
+    for name, table in raw.get("endpoints", {}).items():
+        api, model = table.pop("api", ""), table.pop("model", "")
+        base_url, key_env = table.pop("base_url", None), table.pop("key_env", None)
+        endpoints[name] = Endpoint(name, api, model, base_url, key_env, options=table)
+    settings: dict[str, Any] = {}
+    for section, keys in SECTIONS.items():
+        settings.update(_check(path, section, raw.get(section, {}), keys))
+    try:
+        settings["port"] = int(settings.get("port", 8765))
+    except (TypeError, ValueError):
+        raise ValueError(f"{path}: [web] port must be a number, not {settings['port']!r}") from None
+    return Config(home, owner, people, chats, endpoints, **settings)
+
+
+def _template(owner: str, endpoint: str) -> str:
+    """The bundled attache.toml with {owner} and {endpoint} filled in as TOML strings."""
+    text = (BUNDLED / "attache.toml").read_text(encoding="utf-8")
+    for placeholder, value in (("{owner}", owner), ("{endpoint}", endpoint)):
+        text = text.replace(placeholder, value.replace("\\", "\\\\").replace('"', '\\"'))
+    return text
+
+
+def _check(path: Path, section: str, table: dict[str, Any], known: list[str]) -> dict[str, Any]:
+    """Return `table`, or raise ValueError naming the keys it has that are not `known`."""
+    unknown = ", ".join(sorted(set(table) - set(known)))
+    if unknown:
+        raise ValueError(f"{path}: unknown key {unknown} in [{section}]; known: {', '.join(known)}")
+    return table
+
+
+def _ids(table: dict[str, Any]) -> dict[str, str]:
+    """Channel ids from an `ids` subtable and from plain `<channel> = "<id>"` keys."""
+    ids = {key: value for key, value in table.items() if key not in PERSON_KEYS}
+    ids.update(table.get("ids", {}))
+    return {channel: str(sender) for channel, sender in ids.items() if sender}
 
 
 def init_home(home: Path, owner_name: str, endpoint: str = "claude") -> list[Path]:
-    """Create a home: attache.toml, memory/, skills/ (bundled copies), artifacts/home.html,
-    .secret (32 random bytes, hex) and a git repo with a first commit.
+    """Create a home: attache.toml, memory/, skills/ (bundled copies), artifacts/home.html and
+    a git repo with a first commit. app.build makes .secret.
 
     Never overwrites an existing file. Returns the paths it created.
     """
+    home_page = skills.BUNDLED / "artifact-kit" / "templates" / "home.html"
     files = {
         "attache.toml": _template(owner_name, endpoint),
-        ".secret": secrets.token_hex(32),
         ".gitignore": "attache.db*\n.secret\nfiles/\nlogs/\n",
+        "artifacts/home.html": home_page.read_text(encoding="utf-8"),
     }
     for name in ("USER.md", "ATTACHE.md"):
         text = (BUNDLED / "memory" / name).read_text(encoding="utf-8")
         files[f"memory/{name}"] = text.replace("{owner}", owner_name)
-    page = skills.BUNDLED / "artifact-kit" / "templates" / "home.html"
-    if page.exists():  # the artifact-kit skill provides it; skip until it does
-        files["artifacts/home.html"] = page.read_text(encoding="utf-8")
+
     created = []
-    for rel, text in files.items():
-        if not (home / rel).exists():
-            (home / rel).parent.mkdir(parents=True, exist_ok=True)
-            (home / rel).write_text(text, encoding="utf-8")
-            created.append(home / rel)
-    (home / ".secret").chmod(0o600)  # the HMAC key for artifact and UI tokens
-    for rel in ("memory/chats", "artifacts", "files", "logs"):
-        (home / rel).mkdir(parents=True, exist_ok=True)
+    for relative, text in files.items():
+        path = home / relative
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            created.append(path)
+    for folder in ("memory/chats", "files", "logs"):
+        (home / folder).mkdir(parents=True, exist_ok=True)
     created += skills.install_bundled(home)
     skills.git(home, "init", "-b", "main")
     skills.commit(home, "attache init")

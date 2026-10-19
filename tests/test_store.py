@@ -10,7 +10,7 @@ import pytest
 
 from attache.store import Store, db_access
 
-FAMILY, WORK = "slack:C0123", "slack:C0456"
+ME, FAMILY, WORK = "local:me", "slack:C0123", "slack:C0456"
 
 
 @pytest.fixture
@@ -23,22 +23,22 @@ def store(home: Path) -> Iterator[Store]:
 def test_wal_and_reopen(home: Path) -> None:
     s = Store(home / "attache.db")
     assert s._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-    s.add_message("web:local", "user", "hello")
+    s.add_message(ME, "user", "hello")
     s.doc_put("todos", "a", {"text": "milk"})
     s.close()
     s = Store(home / "attache.db")
-    assert s.history("web:local")[0]["text"] == "hello"
+    assert s.history(ME)[0]["text"] == "hello"
     assert s.doc_get("todos", "a")["text"] == "milk"
     s.close()
 
 
 def test_messages(store: Store) -> None:
-    first = store.add_message("web:local", "user", "one", "owner", "Alex")
+    first = store.add_message(ME, "user", "one", "owner", "Alex")
     assert isinstance(first, int)
-    store.add_message("web:local", "assistant", "two")
+    store.add_message(ME, "assistant", "two")
     store.add_message("slack:C1", "user", "elsewhere")
-    store.add_message("web:local", "user", "three")
-    history = store.history("web:local")
+    store.add_message(ME, "user", "three")
+    history = store.history(ME)
     assert [m["text"] for m in history] == ["one", "two", "three"]
     assert set(history[0]) == {"role", "text", "sender_id", "sender_name", "ts"}
     assert (history[0]["role"], history[0]["sender_id"], history[0]["sender_name"]) == (
@@ -46,8 +46,16 @@ def test_messages(store: Store) -> None:
         "owner",
         "Alex",
     )
-    assert [m["text"] for m in store.history("web:local", limit=2)] == ["two", "three"]
+    assert [m["text"] for m in store.history(ME, limit=2)] == ["two", "three"]
     assert store.history("nobody") == []
+
+
+def test_history_before(store: Store) -> None:
+    ids = [store.add_message(ME, "user", f"m{i}") for i in range(5)]
+    assert [m["text"] for m in store.history(ME, before=ids[3])] == ["m0", "m1", "m2"]
+    assert [m["text"] for m in store.history(ME, limit=2, before=ids[3])] == ["m1", "m2"]
+    assert store.history(ME, before=ids[0]) == []
+    assert len(store.history(ME, before=None)) == 5
 
 
 def test_docs(store: Store) -> None:
@@ -59,8 +67,6 @@ def test_docs(store: Store) -> None:
     replaced = store.doc_put("todos", doc["id"], {"text": "oat milk"}, by="sam")
     assert "done" not in replaced and replaced["_by"] == "sam"  # replace, not merge
     assert [d["text"] for d in store.doc_list("todos")] == ["oat milk", "eggs"]  # oldest first
-    store.doc_put("notes", "n", {})
-    assert store.collections() == ["notes", "todos"]
     assert store.doc_delete("todos", "b") is True
     assert store.doc_delete("todos", "b") is False
     assert store.doc_get("todos", "b") is None
@@ -93,7 +99,7 @@ def test_concurrent_writes(store: Store) -> None:
     def work(n: int) -> None:
         for i in range(25):
             store.doc_put("load", f"{n}-{i}", {"n": n})
-            store.add_message("web:local", "user", f"{n}-{i}")
+            store.add_message(ME, "user", f"{n}-{i}")
 
     threads = [threading.Thread(target=work, args=(n,)) for n in range(4)]
     for t in threads:
@@ -101,7 +107,7 @@ def test_concurrent_writes(store: Store) -> None:
     for t in threads:
         t.join()
     assert len(store.doc_list("load")) == 100
-    assert len(store.history("web:local", limit=1000)) == 100
+    assert len(store.history(ME, limit=1000)) == 100
 
 
 def test_tasks(store: Store) -> None:
@@ -125,12 +131,12 @@ def test_tasks(store: Store) -> None:
 
 
 def test_sessions(store: Store) -> None:
-    assert store.session_get("web:local", "claude") == {}
-    store.session_set("web:local", "claude", {"session_id": "abc"})
-    store.session_set("web:local", "claude-api", {"other": 1})
-    assert store.session_get("web:local", "claude") == {"session_id": "abc"}
-    store.session_set("web:local", "claude", {"session_id": "def"})
-    assert store.session_get("web:local", "claude") == {"session_id": "def"}
+    assert store.session_get(ME, "claude") == {}
+    store.session_set(ME, "claude", {"session_id": "abc"})
+    store.session_set(ME, "claude-api", {"other": 1})
+    assert store.session_get(ME, "claude") == {"session_id": "abc"}
+    store.session_set(ME, "claude", {"session_id": "def"})
+    assert store.session_get(ME, "claude") == {"session_id": "def"}
 
 
 # db_access: the rules shared by the db tool and the web bridge

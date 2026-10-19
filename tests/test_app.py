@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import logging
+import os
 import shutil
 import socket
+import sqlite3
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,20 +22,41 @@ def test_build_on_an_initialised_home(home: Path) -> None:
     services = app.build(home)
     try:
         assert services.home == home and services.config.owner.name == "Alex"
-        assert services.web_url == "http://127.0.0.1:8765"
-        assert (
-            services.secret == (home / ".secret").read_bytes().strip()
-            and len(services.secret) == 64
-        )
-        assert services.scheduler.store is services.store and services.channels.channels == {}
-        assert isinstance(services.gateway, web.ToolGateway)
-        services.store.add_message("terminal:local", "user", "hi")
+        assert services.web_url == "http://127.0.0.1:8765" and services.gateway == {}
+        assert len(services.secret) == 64 and services.secret == (home / ".secret").read_bytes()
+        assert len(services.ui_token) >= 32 and services.ui_token != app.build(home).ui_token
+        services.store.add_message("local:me", "user", "hi")
     finally:
         services.store.close()
-    (home / ".secret").unlink()
-    again = app.build(home)  # a missing .secret is created
-    again.store.close()
-    assert len((home / ".secret").read_bytes().strip()) == 64
+
+
+def test_build_protects_a_new_secret(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(app.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    app.build(home).store.close()
+    secret = home / ".secret"
+    if os.name == "nt":
+        assert calls == [
+            ["icacls", str(secret), "/inheritance:r", "/grant:r", f"{os.environ['USERNAME']}:F"]
+        ]
+    else:
+        assert calls == [] and secret.stat().st_mode & 0o777 == 0o600
+    before = secret.read_bytes()
+    app.build(home).store.close()  # kept, not replaced
+    assert secret.read_bytes() == before and len(calls) == (1 if os.name == "nt" else 0)
+
+
+def test_ipv6_loopback_url(home: Path) -> None:
+    (home / "attache.toml").write_text('[web]\nhost = "::1"\nport = 9001\n', encoding="utf-8")
+    services = app.build(home)
+    services.store.close()
+    assert services.web_url == "http://[::1]:9001"
+
+
+def test_listen_refuses_other_hosts(home: Path) -> None:
+    for host in ("0.0.0.0", "192.168.1.5", "example.com"):
+        with pytest.raises(SystemExit, match=r"use 127\.0\.0\.1, localhost or ::1"):
+            app.listen(config.Config(home, config.load(home).owner, {}, {}, {}, host=host))
 
 
 def test_run_reports_a_taken_port(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,3 +73,55 @@ def test_run_reports_a_taken_port(home: Path, monkeypatch: pytest.MonkeyPatch) -
             asyncio.run(app.run(home, terminal=False))
     assert str(port) in str(exit.value) and "attache run" in str(exit.value)
     assert not (home / "attache.db").exists()  # checked before anything was opened
+
+
+def free_home(home: Path) -> None:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    (home / "attache.toml").write_text(f"[web]\nport = {port}\n", encoding="utf-8")
+
+
+def test_run_stops_when_the_web_server_dies(
+    home: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def broken(app: Any, sock: socket.socket) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(web, "serve", broken)
+    free_home(home)
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit, match="web server stopped"):
+        asyncio.run(app.run(home, terminal=False))
+    assert "boom" in caplog.text  # the failure is logged
+    assert "_GatheringFuture" not in caplog.text
+
+
+def test_run_shuts_down_in_order(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    stores: list[Any] = []
+    real_build, real_stop = app.build, app.channels.ChannelManager.stop
+
+    async def serving(app_: Any, sock: socket.socket) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append("web cancelled")
+
+    def build(where: Path) -> app.Services:
+        stores.append((services := real_build(where)).store)
+        return services
+
+    async def stop(self: Any) -> None:
+        events.append("channels stopped")
+        stores[0].add_message("local:me", "user", "the store is still open")
+        await real_stop(self)
+
+    monkeypatch.setattr(web, "serve", serving)
+    monkeypatch.setattr(app, "build", build)
+    monkeypatch.setattr(app.channels.ChannelManager, "stop", stop)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("/quit\n"))
+    free_home(home)
+    asyncio.run(asyncio.wait_for(app.run(home, terminal=True), 10))
+    assert events == ["web cancelled", "channels stopped"]
+    with pytest.raises(sqlite3.ProgrammingError):  # closed last
+        stores[0].add_message("local:me", "user", "too late")

@@ -41,8 +41,10 @@ metadata:
   characters. A mismatch means the skill is skipped.
 - `description` is all you see until you open the file, so say what it does **and when to use
   it**, with the words people actually say. One to three sentences, at most 1024 characters.
-- `metadata: {attache-roles: "member"}` lets members of group chats see the skill and run its
-  scripts. Leave it out for anything private (mail, files, money).
+- `metadata: {attache-roles: "member"}` lets members of group chats use the skill and run its
+  scripts. Their turns get the whole SKILL.md inline, so a member skill must hold nothing
+  private: no names of other chats, addresses, accounts or learned personal rules. Leave the
+  metadata out for anything private (mail, files, money).
 - Quote values that contain a colon. Check the YAML is valid before saving.
 
 ## The body

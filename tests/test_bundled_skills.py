@@ -33,6 +33,19 @@ def test_skill_frontmatter(folder: Path) -> None:
     assert len(text.splitlines()) < 120
 
 
+@pytest.mark.parametrize("name", ["todos", "reminders"])
+def test_member_skills(name: str) -> None:
+    meta = skills.parse((skills.BUNDLED / name / "SKILL.md").read_text(encoding="utf-8"))[0]
+    assert meta["metadata"]["attache-roles"] == "member"
+
+
+@pytest.mark.parametrize("folder", FOLDERS, ids=lambda p: p.name)
+def test_skills_match_the_tools(folder: Path) -> None:
+    text = (folder / "SKILL.md").read_text(encoding="utf-8")
+    assert "attache.ask" not in text and '"collections"' not in text  # neither exists any more
+    assert "`collections:" not in text and "id: 1" not in text  # schedule ids are strings
+
+
 def test_installed_skills_are_discovered(home: Path) -> None:
     skills.install_bundled(home)
     assert [s.name for s in skills.discover(home)] == [p.name for p in FOLDERS]

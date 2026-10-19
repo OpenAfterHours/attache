@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,58 +10,81 @@ from typing import Any
 
 import pytest
 
-from attache.backends.claude_cli import ClaudeCLI, _subprocess, parse_events
-from attache.types import Endpoint, Person, Turn, TurnContext
+from attache.backends.claude_cli import ClaudeCLI, _spawn, parse_events, prompt
+from attache.types import Endpoint, Person, Tool, Turn, TurnContext
 
 FIXTURE = Path(__file__).parent / "fixtures" / "claude_stream.jsonl"
 STREAM = FIXTURE.read_text(encoding="utf-8").splitlines(keepends=True)
 SESSION = "5b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"  # the session id in the fixture
-NOT_FOUND = json.dumps(
-    {
-        "type": "result",
-        "subtype": "error_during_execution",
-        "is_error": True,
-        "session_id": "old",
-        "errors": ["No conversation found with session ID: old"],
-    }
-)
+WEB_URL = "http://127.0.0.1:8765"
 ENDPOINT = Endpoint("claude", "claude-cli", "claude-sonnet-5-5", options={"bin": sys.executable})
 
 
-class Gateway:
-    def __init__(self) -> None:
-        self.opened: list[Turn] = []
-        self.closed: list[str] = []
+def error_result(message: str) -> str:
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "session_id": "old",
+            "errors": [message],
+        }
+    )
 
-    def open(self, turn: Turn) -> str:
-        self.opened.append(turn)
-        return "tok123"
 
-    def close(self, token: str) -> None:
-        self.closed.append(token)
+NOT_FOUND = error_result("No conversation found with session ID: old")
+
+
+async def _noop(args: dict[str, Any], ctx: TurnContext) -> str:
+    return ""
+
+
+TOOL_NAMES = ["read_file", "write_file", "edit_file", "run", "script", "send", "db"]
+TOOLS = [Tool(name, name, {"type": "object"}, _noop) for name in TOOL_NAMES]
 
 
 class Runner:
-    """Fake runner: records each call (and the temp files it was given), then replays lines."""
+    """Fake runner: records each call, including what the gateway and temp files held while
+    claude was "running", then replays the given stdout lines."""
 
-    def __init__(self, *outputs: list[str]) -> None:
-        self.outputs, self.calls = list(outputs), []
+    def __init__(self, gateway: dict[str, Turn], *outputs: list[str]) -> None:
+        self.gateway = gateway
+        self.outputs = list(outputs)
+        self.calls: list[dict[str, Any]] = []
 
-    async def __call__(self, argv: list[str], stdin_text: str, cwd: Path) -> Any:
-        files = {
-            a: Path(a).read_text(encoding="utf-8")
-            for a in argv
-            if Path(a).suffix in {".json", ".md"}
-        }
-        self.calls.append({"argv": argv, "stdin": stdin_text, "cwd": cwd, "files": files})
+    async def __call__(self, argv: list[str], stdin_text: str, cwd: Path, env: dict[str, str]):
+        temp = Path(flag(argv, "--mcp-config")).parent
+        files = {p.name: p.read_text(encoding="utf-8") for p in temp.iterdir()}
+        call = {"argv": argv, "stdin": stdin_text, "cwd": cwd, "env": env, "temp": temp}
+        self.calls.append(call | {"files": files, "gateway": dict(self.gateway)})
         for line in self.outputs.pop(0):
             yield line
 
 
-def make_turn(home: Path, role: str = "owner", session: dict[str, Any] | None = None) -> Turn:
-    services = SimpleNamespace(gateway=Gateway(), web_url="http://127.0.0.1:8765", home=home)
-    ctx = TurnContext("web:local", Person("p", "Phil", role), False, services)
-    return Turn(ctx, ENDPOINT, "You are Attaché.", [], "Reply with: ok", [], session or {})
+def make_turn(
+    home: Path,
+    role: str = "owner",
+    session: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> Turn:
+    services = SimpleNamespace(gateway={}, web_url=WEB_URL, home=home)
+    ctx = TurnContext("local:me", Person("p", "Phil", role), False, services)
+    return Turn(
+        ctx, ENDPOINT, "You are Attaché.", history or [], "Reply with: ok", TOOLS, session or {}
+    )
+
+
+def run_turn(turn: Turn, *outputs: list[str]) -> tuple[Any, Runner]:
+    runner = Runner(turn.ctx.services.gateway, *outputs)
+    reply = asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
+    return reply, runner
+
+
+def flag(argv: list[str], name: str) -> str:
+    return argv[argv.index(name) + 1]
+
+
+# command
 
 
 def test_command_without_and_with_resume(tmp_path: Path) -> None:
@@ -80,6 +104,8 @@ def test_command_without_and_with_resume(tmp_path: Path) -> None:
         "--mcp-config",
         str(mcp),
         "--strict-mcp-config",
+        "--add-dir",
+        str(tmp_path),
         "--allowedTools",
         "Read,Write,Edit,Glob,Grep,Bash,WebFetch,WebSearch,mcp__attache",
     ]
@@ -93,6 +119,9 @@ def test_missing_binary_names_it(tmp_path: Path) -> None:
         ClaudeCLI(endpoint).command(make_turn(tmp_path), tmp_path / "a", tmp_path / "b")
 
 
+# parse_events
+
+
 def test_parse_events_on_real_stream() -> None:
     reply = parse_events(STREAM)
     assert reply.text == "ok"
@@ -101,15 +130,19 @@ def test_parse_events_on_real_stream() -> None:
 
 
 def test_parse_events_falls_back_to_assistant_text() -> None:
+    def assistant(*blocks: dict[str, Any]) -> str:
+        return json.dumps({"type": "assistant", "message": {"content": list(blocks)}})
+
     lines = [
         "not json at all\n",
-        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "a"}]}}),
-        json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}),
-        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "b"}]}}),
+        assistant({"type": "text", "text": "a"}),
+        assistant({"type": "tool_use"}),
+        assistant({"type": "text", "text": "b"}),
         json.dumps({"type": "result", "subtype": "success", "is_error": False, "session_id": "s"}),
     ]
     reply = parse_events(lines)
-    assert reply.text == "a\n\nb" and reply.session == {"session_id": "s"}
+    assert reply.text == "a\n\nb"
+    assert reply.session == {"session_id": "s"}
 
 
 def test_parse_events_raises_on_error_result() -> None:
@@ -119,79 +152,165 @@ def test_parse_events_raises_on_error_result() -> None:
         parse_events([json.dumps({"type": "result", "is_error": True, "result": "credit balance"})])
 
 
+# run
+
+
 def test_only_the_owner_may_use_it(tmp_path: Path) -> None:
-    runner = Runner(STREAM)
     turn = make_turn(tmp_path, role="member")
+    runner = Runner(turn.ctx.services.gateway, STREAM)
     with pytest.raises(PermissionError):
         asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
-    assert runner.calls == [] and turn.ctx.services.gateway.opened == []
+    assert runner.calls == []
 
 
-def test_run_wires_gateway_mcp_and_cleans_up(tmp_path: Path) -> None:
-    runner = Runner(STREAM)
+def test_owner_turns_in_groups_are_refused(tmp_path: Path) -> None:
     turn = make_turn(tmp_path)
-    reply = asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
-    assert reply.text == "ok" and reply.session == {"session_id": SESSION}
-    gateway = turn.ctx.services.gateway
-    assert gateway.opened == [turn] and gateway.closed == ["tok123"]
-    (call,) = runner.calls
-    assert call["stdin"] == "Reply with: ok" and call["cwd"] == tmp_path
-    mcp_path = call["argv"][call["argv"].index("--mcp-config") + 1]
-    server = json.loads(call["files"][mcp_path])["mcpServers"]["attache"]
-    assert server["command"] == sys.executable
-    assert server["args"] == [
-        "-m",
-        "attache",
-        "mcp",
-        "--url",
-        "http://127.0.0.1:8765",
-        "--token",
-        "tok123",
-    ]
-    system_path = call["argv"][call["argv"].index("--append-system-prompt-file") + 1]
-    assert call["files"][system_path] == "You are Attaché."
-    assert not Path(mcp_path).parent.exists()  # temp files are gone
+    turn.ctx.is_group = True  # group text is untrusted; Claude Code's own tools are unconfined
+    runner = Runner(turn.ctx.services.gateway, STREAM)
+    with pytest.raises(PermissionError):
+        asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
+    assert runner.calls == []
 
 
-def test_unknown_resume_session_retries_fresh(tmp_path: Path) -> None:
-    runner = Runner([NOT_FOUND], STREAM)
-    turn = make_turn(tmp_path, session={"session_id": "old"})
-    reply = asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
+def test_run_serves_tools_over_http_mcp_and_cleans_up(tmp_path: Path) -> None:
+    turn = make_turn(tmp_path)
+    reply, runner = run_turn(turn, STREAM)
+    assert reply.text == "ok"
     assert reply.session == {"session_id": SESSION}
-    first, second = (c["argv"] for c in runner.calls)
-    assert first[-2:] == ["--resume", "old"] and "--resume" not in second
+    (call,) = runner.calls
+    ((token, served),) = call["gateway"].items()
+    assert len(token) >= 32  # token_urlsafe(24)
+    assert [t.name for t in served.tools] == ["script", "send", "db"]  # no duplicates of built-ins
+    assert served.ctx is turn.ctx
+    server = {"type": "http", "url": f"{WEB_URL}/mcp/{token}"}
+    assert json.loads(call["files"]["mcp.json"]) == {"mcpServers": {"attache": server}}
+    assert call["files"]["system.md"] == f"You are Attaché.\n\nYour files live in {tmp_path}."
+    assert turn.ctx.services.gateway == {}  # token closed
+    assert not call["temp"].exists()  # the turn's temp files are gone
 
 
-def test_failure_still_closes_token_and_removes_files(tmp_path: Path) -> None:
-    runner = Runner(['{"type":"result","is_error":true,"result":"boom"}'])
+def test_run_uses_a_stable_cwd_outside_home(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _, runner = run_turn(make_turn(home), STREAM)
+    _, again = run_turn(make_turn(home, session={"session_id": SESSION}), STREAM)
+    cwd = runner.calls[0]["cwd"]
+    assert cwd == tmp_path / "home-claude"
+    assert cwd.is_dir()  # kept, so every session is in one Claude Code project
+    assert again.calls[0]["cwd"] == cwd
+    assert home not in cwd.parents  # so <home>/CLAUDE.md is never found walking up
+    assert runner.calls[0]["temp"] != cwd
+    assert flag(runner.calls[0]["argv"], "--add-dir") == str(home)
+
+
+def test_env_keeps_local_traffic_off_proxies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("no_proxy", raising=False)  # on Windows this is also NO_PROXY
+    monkeypatch.setenv("NO_PROXY", "corp.example")
+    monkeypatch.setenv("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "1")
+    _, runner = run_turn(make_turn(tmp_path), STREAM)
+    env = runner.calls[0]["env"]
+    assert env["NO_PROXY"] == env["no_proxy"] == "corp.example,127.0.0.1,localhost,::1"
+    assert env["MCP_TOOL_TIMEOUT"] == "660000"
+    assert "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" not in env
+    assert env["PATH"] == os.environ["PATH"]  # otherwise the caller's environment
+
+
+HISTORY = [
+    {"role": "user", "content": "plan my week"},
+    {"role": "assistant", "content": "Done."},
+    {"role": "user", "content": "Bob: is lunch still on?"},
+]
+
+
+def test_fresh_session_gets_a_transcript(tmp_path: Path) -> None:
+    _, runner = run_turn(make_turn(tmp_path, history=HISTORY), STREAM)
+    stdin = runner.calls[0]["stdin"]
+    assert stdin.startswith("Earlier messages in this chat, oldest first:\n```\n")
+    assert "user: plan my week\n\nassistant: Done.\n\nuser: Bob: is lunch still on?\n```" in stdin
+    assert stdin.endswith("\n\nNew message:\nReply with: ok")
+
+
+def test_resumed_session_gets_only_messages_since_its_last_reply(tmp_path: Path) -> None:
+    turn = make_turn(tmp_path, session={"session_id": "s1"}, history=HISTORY)
+    _, runner = run_turn(turn, STREAM)
+    stdin = runner.calls[0]["stdin"]
+    assert stdin.startswith("Messages in this chat since your last reply, oldest first:")
+    assert "Bob: is lunch still on?" in stdin
+    assert "plan my week" not in stdin
+    caught_up = make_turn(tmp_path, session={"session_id": "s1"}, history=HISTORY[:2])
+    _, runner = run_turn(caught_up, STREAM)
+    assert runner.calls[0]["stdin"] == "Reply with: ok"
+
+
+def test_transcript_is_capped_and_fenced_safely(tmp_path: Path) -> None:
+    def stdin(*contents: str) -> str:
+        history = [{"role": "user", "content": c} for c in contents]
+        return prompt(make_turn(tmp_path, history=history))
+
+    capped = stdin(*(f"message {i}" for i in range(40)))
+    assert "message 10" in capped
+    assert "message 9\n" not in capped
+    assert 20_000 <= len(stdin("x" * 50_000)) < 20_200
+    assert "\n`````\n" in stdin("see ```code``` and ````more````")
+    assert stdin() == "Reply with: ok"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [NOT_FOUND, error_result("Prompt is too long"), error_result("Context window exceeded")],
+)
+def test_stuck_session_retries_fresh_with_transcript(tmp_path: Path, error: str) -> None:
+    turn = make_turn(tmp_path, session={"session_id": "old"}, history=HISTORY)
+    reply, runner = run_turn(turn, [error], STREAM)
+    assert reply.session == {"session_id": SESSION}
+    first, second = runner.calls
+    assert first["argv"][-2:] == ["--resume", "old"]
+    assert "--resume" not in second["argv"]
+    assert second["stdin"].startswith("Earlier messages in this chat")
+
+
+def test_other_failures_do_not_retry_and_still_clean_up(tmp_path: Path) -> None:
     turn = make_turn(tmp_path, session={"session_id": "old"})
+    runner = Runner(
+        turn.ctx.services.gateway, ['{"type":"result","is_error":true,"result":"boom"}']
+    )
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
-    assert len(runner.calls) == 1  # not a missing session, so no retry
-    assert turn.ctx.services.gateway.closed == ["tok123"]
-    argv = runner.calls[0]["argv"]
-    assert not Path(argv[argv.index("--mcp-config") + 1]).parent.exists()
+    assert len(runner.calls) == 1
+    assert turn.ctx.services.gateway == {}
+    assert not runner.calls[0]["temp"].exists()
 
 
-async def _collect(argv: list[str], stdin_text: str, cwd: Path) -> list[str]:
-    return [line async for line in _subprocess(argv, stdin_text, cwd)]
+# the default runner, driven with a Python child instead of the real claude
 
 
-def test_default_runner_pipes_stdin_and_streams_lines(tmp_path: Path) -> None:
-    script = "import sys, os; print(sys.stdin.read().upper()); print(os.getcwd())"
+async def _collect(argv: list[str], stdin_text: str, cwd: Path, env: dict[str, str]) -> list[str]:
+    return [line async for line in _spawn(argv, stdin_text, cwd, env)]
+
+
+def test_default_runner_pipes_stdin_env_and_cwd(tmp_path: Path) -> None:
+    script = (
+        "import sys, os; print(sys.stdin.read().upper()); print(os.getcwd()); "
+        "print(os.environ['X'])"
+    )
     argv = [sys.executable, "-X", "utf8", "-c", script]  # claude reads stdin as UTF-8 too
-    lines = asyncio.run(_collect(argv, "héllo", tmp_path))
-    assert lines[0].strip() == "HÉLLO" and Path(lines[1].strip()) == tmp_path
+    env = {**os.environ, "X": "from-env"}
+    lines = asyncio.run(_collect(argv, "héllo", tmp_path, env))
+    assert lines[0].strip() == "HÉLLO"
+    assert Path(lines[1].strip()) == tmp_path
+    assert lines[2].strip() == "from-env"
 
 
 def test_default_runner_raises_with_stderr_when_no_result(tmp_path: Path) -> None:
     script = "import sys; sys.stderr.write('error: unknown option'); sys.exit(2)"
     with pytest.raises(RuntimeError, match="code 2: error: unknown option"):
-        asyncio.run(_collect([sys.executable, "-c", script], "", tmp_path))
+        asyncio.run(_collect([sys.executable, "-c", script], "", tmp_path, dict(os.environ)))
 
 
 def test_default_runner_leaves_error_results_to_the_parser(tmp_path: Path) -> None:
     script = f"import sys; print({NOT_FOUND!r}); sys.exit(1)"
-    lines = asyncio.run(_collect([sys.executable, "-c", script], "", tmp_path))
+    lines = asyncio.run(_collect([sys.executable, "-c", script], "", tmp_path, dict(os.environ)))
     with pytest.raises(RuntimeError, match="No conversation found"):
         parse_events(lines)

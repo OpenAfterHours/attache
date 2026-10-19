@@ -3,6 +3,8 @@ name: todos
 description: Keep to-do lists in the `todos` collection - add, find, tick off, move and share
   items, and show lists as a board. Use when someone mentions a task, a to-do, a list,
   something they must remember to do, or asks what is on their plate.
+metadata:
+  attache-roles: "member"
 ---
 
 # To-dos
@@ -56,7 +58,8 @@ first, then send every field back with your change.
   to-dos and upcoming reminders, live).
 - For a dedicated board (one list, a project, a shared family list), read the artifact-kit
   skill, copy `skills/artifact-kit/templates/board.html`, keep `COLLECTION = "todos"` and
-  `COLUMN = "status"`, and publish it with the `artifact` tool and `collections: ["todos"]`.
+  `COLUMN = "status"` and the `<meta name="attache-collections" content="todos">` tag, and
+  publish it with the `artifact` tool.
   To show one list only, filter in the page: `attache.db.list("todos", {list: "Shopping"})`.
 
 ## Sharing a list with a group

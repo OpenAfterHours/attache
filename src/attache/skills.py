@@ -1,4 +1,4 @@
-"""Find skills, build the prompt index, and keep <home> under git. Owner: foundation. ~80 lines.
+"""Find skills, build the prompt index, and keep <home> under git.
 
 A skill is <home>/skills/<name>/SKILL.md with YAML frontmatter (Agent Skills standard:
 `name`, `description`, optional `metadata`). Only names and descriptions reach the prompt;
@@ -19,9 +19,10 @@ import yaml
 
 logger = logging.getLogger(__name__)
 BUNDLED = Path(__file__).parent / "bundled" / "skills"
-TRACKED = ("skills", "memory", "artifacts", "attache.toml")
-AUTHOR = ("-c", "user.name=Attaché", "-c", "user.email=attache@localhost")
+TRACKED = ("skills", "memory", "artifacts", "attache.toml")  # what commit() stages
+AUTHOR = ("-c", "user.name=Attaché", "-c", "user.email=attache@localhost")  # no git config needed
 FRONTMATTER = re.compile(r"---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
 @dataclass
@@ -38,7 +39,9 @@ def parse(text: str) -> tuple[dict[str, Any], str]:
     if not match:
         return {}, text
     meta = yaml.safe_load(match.group(1))
-    return (meta if isinstance(meta, dict) else {}), text[match.end() :]
+    if not isinstance(meta, dict):
+        meta = {}
+    return meta, text[match.end() :]
 
 
 def discover(home: Path) -> list[Skill]:
@@ -46,46 +49,49 @@ def discover(home: Path) -> list[Skill]:
     found = []
     for md in (home / "skills").glob("*/SKILL.md"):
         try:
-            meta = parse(md.read_text(encoding="utf-8"))[0]
+            meta, _ = parse(md.read_text(encoding="utf-8"))
         except (OSError, ValueError, yaml.YAMLError):
             meta = {}
         if not meta.get("description") or meta.get("name") != md.parent.name:
             logger.warning("skipping %s: needs a description and a name matching its folder", md)
             continue
         found.append(Skill(md.parent.name, str(meta["description"]), md.parent, meta))
-    return sorted(found, key=lambda s: s.name)
+    return sorted(found, key=lambda skill: skill.name)
 
 
 def index(skills: list[Skill], home: Path) -> str:
     """Markdown list for the system prompt: name, description, SKILL.md path relative to home."""
-    return "\n".join(
-        f"- **{s.name}**: {' '.join(s.description.split())} "
-        f"(`{(s.path / 'SKILL.md').relative_to(home).as_posix()}`)"
-        for s in skills
-    )
+    lines = []
+    for skill in skills:
+        description = " ".join(skill.description.split())  # one line, even if YAML folded it
+        where = (skill.path / "SKILL.md").relative_to(home).as_posix()
+        lines.append(f"- **{skill.name}**: {description} (`{where}`)")
+    return "\n".join(lines)
 
 
 def install_bundled(home: Path) -> list[Path]:
     """Copy src/attache/bundled/skills/* into <home>/skills where missing. Returns created paths."""
     (home / "skills").mkdir(parents=True, exist_ok=True)
     created = []
-    for src in sorted(BUNDLED.glob("*/")):
-        dest = home / "skills" / src.name
-        if not dest.exists():
-            shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__"))
-            created.append(dest)
+    for source in sorted(BUNDLED.glob("*/")):
+        target = home / "skills" / source.name
+        if not target.exists():
+            shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__"))
+            created.append(target)
     return created
 
 
 def git(home: Path, *args: str) -> str | None:
     """Run git in <home>; stdout, or None when git is missing or the command fails."""
     try:
-        out = subprocess.run(
+        result = subprocess.run(
             ["git", *args], cwd=home, capture_output=True, text=True, encoding="utf-8"
         )
     except OSError:  # no git binary, or no such folder
         return None
-    return None if out.returncode else out.stdout
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def commit(home: Path, message: str) -> str | None:
@@ -100,21 +106,33 @@ def commit(home: Path, message: str) -> str | None:
         return None
     if git(home, *AUTHOR, "commit", "-q", "-m", message) is None:
         return None
-    return (git(home, "rev-parse", "--short", "HEAD") or "").strip() or None
+    sha = git(home, "rev-parse", "--short", "HEAD")
+    return sha.strip() if sha else None
 
 
 def log(home: Path, name: str | None = None, limit: int = 20) -> list[str]:
     """One line per commit ("<sha> <subject>"), newest first, optionally for one skill."""
-    only = ["--", f"skills/{name}"] if name else []
-    return (git(home, "log", f"-n{limit}", "--format=%h %s", *only) or "").splitlines()
+    args = ["log", f"-n{limit}", "--format=%h %s"]
+    if name:
+        args += ["--", f"skills/{name}"]
+    out = git(home, *args)
+    return out.splitlines() if out else []
 
 
 def undo(home: Path, name: str) -> str | None:
-    """Put skills/<name> back as it was before its latest commit, and commit "undo: <name>"."""
+    """Put skills/<name> back as it was before its latest commit, and commit "undo: <name>".
+
+    Uncommitted changes are committed first, so undo never loses work. Returns None, leaving
+    every file as it was, when the skill has no earlier version: undo never deletes a skill.
+    Raises ValueError for a name that is not a skill name.
+    """
+    if not SKILL_NAME.fullmatch(name):
+        raise ValueError(f"not a skill name: {name!r} (lowercase letters, digits and hyphens)")
     path = f"skills/{name}"
+    commit(home, f"before undo: {name}")
     sha = (git(home, "log", "-n1", "--format=%H", "--", path) or "").strip()
-    if not sha:
-        return None
-    git(home, "rm", "-r", "-q", "-f", "--", path)  # also drops files that commit added
-    git(home, "checkout", f"{sha}~1", "--", path)  # fails if the skill is new: it stays removed
+    if not sha or git(home, "cat-file", "-e", f"{sha}~1:{path}") is None:
+        return None  # never committed, or added by its latest commit (e.g. the first one)
+    git(home, "rm", "-r", "-q", "-f", "--", path)  # drops files the latest commit added
+    git(home, "checkout", f"{sha}~1", "--", path)
     return commit(home, f"undo: {name}")

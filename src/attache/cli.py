@@ -1,7 +1,15 @@
-"""Attaché, your personal assistant. With no command: set up a home if needed, then chat.
+"""Attaché, your personal assistant.
 
-Commands: init [--name N] [--endpoint E], chat, run (no terminal chat), doctor, skills list |
-log [NAME] | undo NAME. --home (or $ATTACHE_HOME) picks the home folder everywhere."""
+  attache                  set up a home if there is none (asks your name), then chat
+  attache init [--name N] [--endpoint E]
+  attache chat             run everything plus the terminal chat
+  attache run              run everything without the terminal chat (web, scheduler, channels)
+  attache skills list | log [NAME] | undo NAME
+  attache doctor           check the setup, one line per check: ✓ fine, ! needed only for
+                           group chats, i a note, ✗ a problem (then the exit code is 1)
+
+--home (or $ATTACHE_HOME) picks the home folder everywhere. main() returns an exit code.
+"""
 
 from __future__ import annotations
 
@@ -9,66 +17,111 @@ import argparse
 import asyncio
 import os
 import shutil
-import socket
 import sys
 from contextlib import suppress
 from pathlib import Path
 
-from attache import __version__, config, mcp, skills
+from attache import __version__, config, skills
+
+NEXT = """Next:
+  1. Tell Attaché about yourself in {home}/memory/USER.md.
+  2. Check the endpoints in {home}/attache.toml ("claude" uses your Claude Code login).
+  3. Run `attache` to chat here, or `attache run` for the web page alone."""
+
+
+def _ask_name(default: str) -> str:
+    try:
+        return input(f"Your name [{default}]: ").strip() or default
+    except EOFError:  # nobody to ask
+        return default
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run the `attache` command and return a process exit code."""
-    with suppress(AttributeError, ValueError, OSError):  # Windows consoles and pipes
+    with suppress(AttributeError, ValueError, OSError):  # Windows consoles and pipes: UTF-8
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    ap = argparse.ArgumentParser("attache", description=__doc__)
-    ap.add_argument("cmd", nargs="?", choices=["init", "chat", "run", "skills", "doctor", "mcp"])
-    ap.add_argument("args", nargs="*", help="for skills: list | log [NAME] | undo NAME")
-    for option in ("--home", "--name", "--endpoint", "--url", "--token"):  # mcp: --url, --token
-        ap.add_argument(option)
-    ap.add_argument("--version", action="version", version=f"attache {__version__}")
-    args = ap.parse_args(argv)
-    cmd, home = args.cmd, Path(args.home or config.home_dir()).expanduser()
-    toml, user = home / "attache.toml", os.environ.get("USERNAME") or os.environ.get("USER")
-    if cmd == "mcp":
-        return mcp.serve(args.url, args.token) or 0
-    if cmd == "init" or (cmd is None and not toml.exists()):
-        name = args.name or (cmd is None and input(f"Your name [{user or 'you'}]: ").strip())
-        made = config.init_home(home, name or user or "you", args.endpoint or "claude")
+    with suppress(AttributeError, ValueError, OSError):
+        if not sys.stdin.isatty():  # a console already reads Unicode; a pipe or file may not
+            sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    raw = argparse.RawDescriptionHelpFormatter
+    parser = argparse.ArgumentParser("attache", description=__doc__, formatter_class=raw)
+    parser.add_argument("command", nargs="?", choices=["init", "chat", "run", "skills", "doctor"])
+    parser.add_argument("args", nargs="*", help="for skills: list | log [NAME] | undo NAME")
+    parser.add_argument("--home", type=Path, help="the home folder (default ~/.attache)")
+    parser.add_argument("--name", help="init: your name (default: your user name)")
+    parser.add_argument("--endpoint", default="claude", help="init: endpoint for your own chats")
+    parser.add_argument("--version", action="version", version=f"attache {__version__}")
+    args = parser.parse_args(argv)
+    home = (args.home or config.home_dir()).expanduser()
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or "you"
+    if args.command == "init" or (args.command is None and not (home / "attache.toml").exists()):
+        name = args.name or (user if args.command else _ask_name(user))
+        made = config.init_home(home, name, args.endpoint)
         print(f"Home: {home}", *(f"  created {p.relative_to(home)}" for p in made), sep="\n")
-        print("Next: describe yourself in memory/USER.md, check attache.toml, run `attache`.")
-        if cmd == "init":
+        print(NEXT.format(home=home))
+        if args.command:
             return 0
-    if cmd == "skills":
-        action, name, *_ = [*(args.args or ["list"]), None]
-        if action not in ("list", "log"):  # undo, or a typo
-            sha = name and skills.undo(home, name)
-            print(f"Undid the last change to {name}: commit {sha}" if sha else "Nothing to undo.")
+    if args.command == "skills":
+        action, name = [*args.args, None, None][:2]
+        if action in (None, "list"):
+            print("\n".join(f"{s.name}: {s.description}" for s in skills.discover(home)) or "None.")
+        elif action == "log":
+            print("\n".join(skills.log(home, name)) or "No changes yet.")
+        elif action == "undo" and name:
+            sha = skills.undo(home, name)
+            print(f"Undid the last change to {name} ({sha})." if sha else "Nothing to undo.")
             return 0 if sha else 1
-        found = [f"{s.name}: {s.description}" for s in skills.discover(home)]
-        print("\n".join(found if action == "list" else skills.log(home, name)) or "Nothing yet.")
+        else:
+            parser.error("use: attache skills list | log [NAME] | undo NAME")
         return 0
-    if cmd == "doctor":
-        cfg = None
-        with suppress(Exception):
-            cfg = config.load(home) if toml.is_file() else None
-        checks = [(f"home folder {home}", home.is_dir()), ("attache.toml parses", cfg is not None)]
-        for e in cfg.endpoints.values() if cfg else []:
-            need = e.options.get("bin", "claude") if e.api == "claude-cli" else e.key_env
-            ok = shutil.which(need) if e.api == "claude-cli" else not need or os.environ.get(need)
-            checks.append((f"endpoint {e.name}: needs {need or 'nothing'}", bool(ok)))
-        checks += [(f"{tool} installed", bool(shutil.which(tool))) for tool in ("git", "uv")]
-        free = False  # the same bind check as `attache run`
-        with suppress(OSError, AttributeError), socket.create_server((cfg.host, cfg.port)):
-            free = True
-        checks.append(("web port free", free))
-        print(*(f"{'✓' if ok else '✗'} {label}" for label, ok in checks), sep="\n")
-        return 0 if all(ok for _, ok in checks) else 1
-    if not toml.exists():
+    if args.command == "doctor":
+        return _doctor(home)
+    return _run(home, terminal=args.command != "run")
+
+
+def _doctor(home: Path) -> int:
+    checks, cfg = [("✓" if home.is_dir() else "✗", f"home folder {home}")], None
+    try:
+        cfg = config.load(home) if (home / "attache.toml").is_file() else None
+        checks.append(("✓", "attache.toml parses") if cfg else ("✗", "no attache.toml"))
+    except Exception as e:
+        checks.append(("✗", f"attache.toml: {e}"))
+    routed = {cfg.own_chats, cfg.group_chats} if cfg else set()  # the endpoints chats reach
+    routed |= {c.endpoint for c in cfg.chats.values() if c.endpoint} if cfg else set()
+    for name in sorted(routed):
+        ep = cfg.endpoints.get(name)
+        cli = ep is not None and ep.api == "claude-cli"
+        need = ep.options.get("bin", "claude") if cli else getattr(ep, "key_env", None)  # or None
+        ok = ep is not None and (shutil.which(need) if cli else not need or os.environ.get(need))
+        mark = "✓" if ok else "✗" if name == cfg.own_chats else "!"  # "!": only groups need it
+        missing = f" needs {need or 'an [endpoints] block'}"
+        checks.append((mark, f"endpoint {name}" + ("" if ok else missing)))
+    checks += [("✓" if shutil.which(tool) else "✗", f"{tool} installed") for tool in ("git", "uv")]
+    if cfg:
+        from attache import app  # the web stack, for the same bind check as `attache run`
+
+        try:
+            app.listen(cfg).close()
+            checks.append(("✓", f"web port {cfg.port} free"))
+        except OSError:
+            checks.append(("i", f"web port {cfg.port} in use: Attaché may already be running"))
+        except SystemExit as e:
+            checks.append(("✗", str(e)))
+    print("\n".join(f"{mark} {text}" for mark, text in checks))
+    return 1 if any(mark == "✗" for mark, _ in checks) else 0
+
+
+def _run(home: Path, *, terminal: bool) -> int:
+    if not (home / "attache.toml").exists():
         print(f"No Attaché home at {home}: run `attache init` first.", file=sys.stderr)
         return 1
-    from attache import app  # the web stack; `attache mcp` starts faster without it
+    try:
+        config.load(home)
+    except (ValueError, TypeError) as e:  # a bad attache.toml: one line, not a traceback
+        print(f"attache.toml: {e}", file=sys.stderr)
+        return 1
+    from attache import app  # the web stack; `attache skills` and `init` start faster without
 
     with suppress(KeyboardInterrupt):
-        asyncio.run(app.run(home, terminal=cmd != "run"))
+        asyncio.run(app.run(home, terminal=terminal))
     return 0

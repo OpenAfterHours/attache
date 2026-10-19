@@ -1,4 +1,4 @@
-"""Pick a backend for an endpoint. Owner: models. Budget ~20 lines."""
+"""Pick a backend for an endpoint."""
 
 from __future__ import annotations
 

@@ -1,11 +1,8 @@
-"""OpenAI adapters. Owner: models. Budget ~130 lines.
+"""OpenAI adapters, both on openai.AsyncOpenAI with endpoint.base_url.
 
 ChatAdapter speaks Chat Completions, the format most custom endpoints share (Ollama, vLLM,
-LM Studio, llama.cpp, OpenRouter, Groq, Azure v1). Parse tool-call arguments tolerantly: bad
-JSON becomes an "error: ..." result rather than a crash.
-
-ResponsesAdapter speaks the Responses API, which OpenAI's reasoning models need for tool calls.
-Both use openai.AsyncOpenAI with endpoint.base_url.
+LM Studio, llama.cpp, OpenRouter, Groq, Azure v1). ResponsesAdapter speaks the Responses API,
+which OpenAI's reasoning models need for tool calls.
 """
 
 from __future__ import annotations
@@ -39,7 +36,8 @@ def _args(raw: Any) -> dict[str, Any]:
 
 class ChatAdapter:
     def __init__(self, endpoint: Endpoint, client: Any = None) -> None:
-        self.endpoint, self.client = endpoint, client
+        self.endpoint = endpoint
+        self.client = client
 
     def start(self, turn: Turn) -> list[dict[str, Any]]:
         return [
@@ -53,30 +51,28 @@ class ChatAdapter:
         if turn.tools:
             kwargs["tools"] = [{"type": "function", "function": tool_spec(t)} for t in turn.tools]
         resp = await _client(self).chat.completions.create(**kwargs)
-        msg, u = resp.choices[0].message, resp.usage
-        tcs = msg.tool_calls or []
+        msg = resp.choices[0].message
+        tool_calls = msg.tool_calls or []
         message: dict[str, Any] = {"role": "assistant", "content": msg.content}
-        if tcs:
-            message["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in tcs
-            ]
+        if tool_calls:
+            message["tool_calls"] = [tc.model_dump(exclude_none=True) for tc in tool_calls]
         state.append(message)
+        calls = [
+            ToolCall(tc.id, tc.function.name, _args(tc.function.arguments)) for tc in tool_calls
+        ]
+        u = resp.usage  # some local servers omit it
         usage = {"input_tokens": u.prompt_tokens, "output_tokens": u.completion_tokens} if u else {}
-        calls = [ToolCall(tc.id, tc.function.name, _args(tc.function.arguments)) for tc in tcs]
         return Step(msg.content or "", calls, usage)
 
     def add_results(self, state: list[dict[str, Any]], results: list[tuple[ToolCall, str]]) -> None:
-        state.extend({"role": "tool", "tool_call_id": c.id, "content": out} for c, out in results)
+        for call, output in results:
+            state.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
 
 class ResponsesAdapter:
     def __init__(self, endpoint: Endpoint, client: Any = None) -> None:
-        self.endpoint, self.client = endpoint, client
+        self.endpoint = endpoint
+        self.client = client
 
     def start(self, turn: Turn) -> list[dict[str, Any]]:
         return [*map(dict, turn.history), {"role": "user", "content": turn.text}]
@@ -91,16 +87,15 @@ class ResponsesAdapter:
             store=False,  # stateless: reasoning comes back encrypted and is replayed from state
             include=["reasoning.encrypted_content"],
         )
-        calls, u = [], resp.usage
+        calls = []
         for item in resp.output:
-            data = item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else dict(item)
-            state.append(data)
-            if data.get("type") == "function_call":
-                calls.append(ToolCall(data["call_id"], data["name"], _args(data.get("arguments"))))
+            state.append(item.model_dump(exclude_none=True))
+            if item.type == "function_call":
+                calls.append(ToolCall(item.call_id, item.name, _args(item.arguments)))
+        u = resp.usage
         usage = {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens} if u else {}
         return Step(resp.output_text or "", calls, usage)
 
     def add_results(self, state: list[dict[str, Any]], results: list[tuple[ToolCall, str]]) -> None:
-        state.extend(
-            {"type": "function_call_output", "call_id": c.id, "output": o} for c, o in results
-        )
+        for call, output in results:
+            state.append({"type": "function_call_output", "call_id": call.id, "output": output})

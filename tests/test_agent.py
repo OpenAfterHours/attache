@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,7 +9,7 @@ from attache.types import Endpoint, Person, Tool, ToolCall, Turn, TurnContext
 
 
 def make_turn(tools: list[Tool]) -> Turn:
-    ctx = TurnContext("web:local", Person("owner", "Phil", "owner"), False, SimpleNamespace())
+    ctx = TurnContext("local:me", Person("owner", "Phil", "owner"), False, SimpleNamespace())
     return Turn(ctx, Endpoint("test", "anthropic", "m"), "system", [], "hi", tools)
 
 
@@ -44,6 +43,7 @@ def test_tool_spec_is_neutral() -> None:
         "description": "add tool",
         "parameters": {"type": "object"},
     }
+    assert tool_spec(tool, key="input_schema")["input_schema"] == {"type": "object"}
 
 
 def test_run_tool_passes_args_and_context() -> None:
@@ -59,12 +59,6 @@ def test_run_tool_errors_become_text() -> None:
     assert asyncio.run(run_tool(ToolCall("1", "boom", {}), turn)) == "error: ValueError: bad input"
     out = asyncio.run(run_tool(ToolCall("2", "missing", {}), turn))
     assert out.startswith("error: unknown tool") and "missing" in out
-
-
-def test_run_tool_serialises_non_strings() -> None:
-    turn = make_turn([make_tool("data", lambda a, c: {"n": 1, "path": SimpleNamespace})])
-    out = asyncio.run(run_tool(ToolCall("1", "data", {}), turn))
-    assert json.loads(out)["n"] == 1
 
 
 def test_run_tool_caps_output() -> None:
