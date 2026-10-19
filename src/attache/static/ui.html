@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attaché</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f5f2; --surface: #ffffff; --surface-2: #eeece7; --text: #1f1e1c;
+    --muted: #6d6a64; --border: #e0ddd6; --accent: #2b5fd9; --accent-text: #ffffff;
+    --mine: #e3ebfb; --danger: #b3261e; --ok: #2e7d32;
+    --radius: 10px; --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --surface: #1f1f1d; --surface-2: #2a2a27; --text: #ecebe7;
+      --muted: #a3a09a; --border: #363531; --accent: #7aa2ff; --accent-text: #0d1630;
+      --mine: #26324f; --danger: #ff8a80; --ok: #81c784;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+  body, button, textarea { font: 15px/1.5 var(--font); }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); }
+  header, #bar { border-bottom: 1px solid var(--border); }
+  h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--ok); }
+  .views { margin-left: auto; display: none; gap: 4px; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(300px, 420px) 1fr; }
+  #chat { display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+  #chat { border-right: 1px solid var(--border); }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 85%; padding: 8px 12px; border-radius: var(--radius); background: var(--surface-2); }
+  .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.you { align-self: flex-end; background: var(--mine); }
+  .msg.error { color: var(--danger); }
+  .msg.typing { color: var(--muted); font-style: italic; background: none; }
+  .msg a { color: var(--accent); }
+  .files { margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
+  form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
+  textarea, button { color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
+  textarea { flex: 1; min-height: 42px; max-height: 160px; resize: vertical; padding: 8px 10px; background: var(--bg); }
+  button { padding: 6px 12px; cursor: pointer; background: var(--surface-2); }
+  button.primary, button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #pages { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; }
+  #bar .muted { color: var(--muted); }
+  iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; }
+    .views { display: flex; }
+    #chat { border-right: 0; }
+    body[data-view="chat"] #pages, body[data-view="pages"] #chat { display: none; }
+  }
+</style>
+</head>
+<body data-view="chat">
+<header>
+  <span class="dot" id="status" title="Connecting"></span>
+  <h1>Attaché</h1>
+  <nav class="views" aria-label="View">
+    <button type="button" data-view="chat" aria-pressed="true">Chat</button>
+    <button type="button" data-view="pages" aria-pressed="false">Pages</button>
+  </nav>
+</header>
+<main>
+  <section id="chat" aria-label="Chat">
+    <div id="log" aria-live="polite">
+      <p class="empty" id="hello">Ask Attaché anything. Replies appear here.</p>
+    </div>
+    <form id="send">
+      <textarea id="text" rows="1" placeholder="Message Attaché" aria-label="Message (Enter sends, Shift+Enter for a new line)"></textarea>
+      <button class="primary">Send</button>
+    </form>
+  </section>
+  <section id="pages" aria-label="Pages">
+    <div id="bar"></div>
+    <iframe id="frame" title="Page" sandbox="allow-scripts allow-forms" hidden></iframe>
+  </section>
+</main>
+<script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const log = $("log"), input = $("text"), frame = $("frame"), bar = $("bar"), hello = $("hello");
+  const URLS = /(https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
+  const KEY = "attache-token";
+  let TOKEN = null, current = null, wanted = null, pages = [];
+  let thinking = null, loading = false, early = [];
+
+  // Links look like http://127.0.0.1:<port>/#t=<token>&page=<name>; either part may be missing.
+  // The token is random per run of Attaché: keep it for other tabs, and out of the address bar.
+  function fromHash() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    return { token: params.get("t"), page: params.get("page") };
+  }
+  // localStorage may be blocked; then the token lives in this page only.
+  const storage = (action) => { try { return action(localStorage); } catch { return null; } };
+  const link = fromHash();
+
+  // A #t= token is kept only once the server accepts it, so a junk link from another site can
+  // never replace a token that works.
+  async function begin() {
+    const stored = storage((s) => s.getItem(KEY));
+    for (const token of [link.token, stored]) {
+      const check = { headers: { "X-Attache-Token": token } };
+      const res = token && (await fetch("/api/messages", check).catch(() => null));
+      if (!res || !res.ok) continue;
+      TOKEN = token;
+      if (token !== stored) storage((s) => s.setItem(KEY, token));
+      wanted = link.page;
+      connect();
+      return loadPages();
+    }
+    locked();
+  }
+
+  function locked() {
+    storage((s) => TOKEN && s.getItem(KEY) === TOKEN && s.removeItem(KEY)); // only one that failed
+    const note = el("p", "empty", "Open Attaché from the link printed in your terminal.");
+    document.querySelector("main").replaceChildren(note);
+  }
+
+  async function api(method, path, body) {
+    const headers = { "X-Attache-Token": TOKEN, "Content-Type": "application/json" };
+    const res = await fetch(path, { method, headers, body: body && JSON.stringify(body) });
+    if (res.status === 401) locked(); // a token from an earlier run of Attaché
+    const text = await res.text();
+    if (!res.ok) throw new Error(text.startsWith("{") ? JSON.parse(text).error : text || res.statusText);
+    return JSON.parse(text);
+  }
+
+  const el = (tag, className = "", textContent = "") =>
+    Object.assign(document.createElement(tag), { className, textContent });
+
+  // Message text is untrusted: text nodes and links only, never HTML. Links to a page of this
+  // Attaché (/#page=<name>) open it in the Pages panel.
+  function writeText(node, text) {
+    text.split(URLS).forEach((part, i) => {
+      if (i % 2 === 0) return void (part && node.append(part));
+      const a = el("a", "", part);
+      Object.assign(a, { href: part, target: "_blank", rel: "noopener noreferrer" });
+      const url = URL.canParse(part) ? new URL(part) : null;
+      const name = url?.origin === location.origin && new URLSearchParams(url.hash.slice(1)).get("page");
+      if (name) a.addEventListener("click", (e) => { e.preventDefault(); show(name, true); });
+      node.append(a);
+    });
+  }
+
+  function add(who, text, files) {
+    hello.remove();
+    const msg = el("div", `msg ${who}`);
+    writeText(msg, text);
+    if (files && files.length) {
+      msg.append(el("div", "files", "Files: " + files.map((f) => f.split(/[\\/]/).pop()).join(", ")));
+    }
+    log.append(msg);
+    log.scrollTop = log.scrollHeight;
+    return msg;
+  }
+
+  function setThinking(on) {
+    if (on && !thinking) thinking = add("typing", "Thinking…");
+    if (!on && thinking) { thinking.remove(); thinking = null; }
+  }
+
+  // Each time the event stream opens, load the chat, so a reload or reconnect misses nothing.
+  // Replies that arrive meanwhile wait, and are dropped if the loaded chat already has them.
+  async function loadHistory() {
+    loading = true;
+    const since = Date.now() / 1000 - 2;
+    const past = await api("GET", "/api/messages").catch(() => null);
+    if (past) {
+      const wasThinking = Boolean(thinking);
+      thinking = null;
+      log.replaceChildren(...(past.length ? [] : [hello]));
+      const mine = (m) => m.role === "user" && m.sender_name !== "Reminder"; // reminders are ours
+      for (const m of past) add(mine(m) ? "you" : "bot", m.text);
+      if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
+      const fresh = past.filter((m) => !mine(m) && m.ts >= since).map((m) => m.text);
+      early = early.filter((msg) => !fresh.includes(msg.text));
+    }
+    loading = false;
+    early.splice(0).forEach(receive);
+  }
+
+  function receive(msg) {
+    if (loading) return void early.push(msg);
+    setThinking(false);
+    add("bot", msg.text || "", msg.files);
+    loadPages(); // the reply may come with a new page
+  }
+
+  $("send").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    add("you", text);
+    setThinking(true);
+    await api("POST", "/api/chat", { text }).catch((err) => {
+      setThinking(false);
+      add("error", `Not sent: ${err.message}`);
+    });
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    $("send").requestSubmit();
+  });
+
+  const press = (all, on) => all.forEach((b) => b.setAttribute("aria-pressed", String(on(b))));
+  const views = document.querySelectorAll(".views button");
+  function setView(name) {
+    document.body.dataset.view = name;
+    press(views, (b) => b.dataset.view === name);
+  }
+  views.forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+  const highlight = () => press(bar.querySelectorAll("button"), (b) => b.dataset.name === current);
+
+  // Showing a page always (re)loads it, so a page the agent rewrote is fresh when picked. Its
+  // address, with the page's own token, comes from the list; until the list has it, it waits.
+  function show(name, focus = false) {
+    const page = pages.find((p) => p.name === name);
+    if (!page) return void (wanted = name);
+    frame.src = page.src;
+    frame.hidden = false;
+    current = name;
+    highlight();
+    if (focus) setView("pages");
+  }
+
+  const label = (name) => name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
+
+  async function loadPages() {
+    const list = await api("GET", "/api/artifacts").catch(() => null);
+    if (!list) return;
+    pages = list;
+    if (!list.length) {
+      bar.replaceChildren(el("span", "muted", "No pages yet. Ask Attaché for a to-do board."));
+      return;
+    }
+    bar.replaceChildren(...list.map(({ name }) => {
+      const button = el("button", "", label(name));
+      Object.assign(button, { type: "button", onclick: () => show(name) });
+      button.dataset.name = name;
+      return button;
+    }));
+    const has = (name) => list.some((p) => p.name === name);
+    if (wanted && has(wanted)) show(wanted, true);
+    else if (current && has(current)) highlight();
+    else show(has("home") ? "home" : list[0].name);
+    wanted = null;
+  }
+
+  function connect() {
+    const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+    const status = $("status");
+    events.onopen = () => { status.className = "dot live"; status.title = "Connected"; loadHistory(); };
+    events.onerror = () => {
+      status.className = "dot";
+      status.title = "Reconnecting…";
+      if (events.readyState === EventSource.CLOSED) locked(); // refused: a token from an old run
+    };
+    events.addEventListener("message", (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.chat_key === "local:me") receive(msg);
+    });
+  }
+
+  addEventListener("hashchange", () => {
+    const { page } = fromHash(); // a #page= link followed in this tab
+    if (page && TOKEN) show(page, true);
+  });
+  begin();
+</script>
+</body>
+</html>

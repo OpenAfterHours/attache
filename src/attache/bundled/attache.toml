@@ -1,0 +1,56 @@
+# Attaché settings. Restart `attache run` after editing.
+# People and chats are keyed by platform ids, never by display names.
+
+[assistant]
+name = "Attaché"  # how the assistant names itself; also its trigger word in group chats
+
+[owner]
+name = "{owner}"
+
+# Your own sender id on each chat app, so your direct messages there reach you as the owner.
+# Ids can also go straight in [owner] (or [people.<id>]), like slack = "U0123".
+[owner.ids]
+slack = ""
+
+[routing]
+own_chats = "{endpoint}"    # your own chat (terminal and web) and your direct messages
+group_chats = "claude-api"  # group chats, and anyone but you
+
+[web]
+host = "127.0.0.1"  # only this machine can reach the web page
+port = 8765
+
+# Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
+# max_tokens, are passed to the backend as options.
+[endpoints.claude]
+api = "claude-cli"  # your Claude Code login
+model = "claude-sonnet-5-5"
+
+[endpoints.claude-api]
+api = "anthropic"
+model = "claude-sonnet-5-5"
+key_env = "ANTHROPIC_API_KEY"
+
+# [endpoints.openai]
+# api = "openai-responses"
+# model = "gpt-5.4"
+# key_env = "OPENAI_API_KEY"
+
+# [endpoints.local]
+# api = "openai-chat"
+# base_url = "http://localhost:11434/v1"
+# model = "qwen3:32b"
+
+# People you share chats with. Keys other than name, role and ids are their ids per chat app.
+# [people.sam]
+# name = "Sam"
+# role = "member"  # member | guest
+# slack = "U0123"
+
+# Group chats Attaché answers in, keyed "<channel>:<chat id>". Unlisted groups are ignored.
+# [chats."slack:C0123"]
+# name = "Family"
+# engage = "mention"  # mention | always | a regular expression matched against the text
+# members = ["sam"]   # person ids from [people]
+# guests = "ignore"   # ignore | public
+# endpoint = "claude-api"

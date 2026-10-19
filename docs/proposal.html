@@ -1,0 +1,1260 @@
+<title>Attaché Proposal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus&family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a diplomatic dispatch. Letterhead, then one reading column with a docket index on wide screens; decisions are filed as records D1 to D9 and referenced later. */
+:root{
+  --paper:#F3F5F9; --sheet:#FFFFFF; --ink:#16203A; --muted:#556079; --rule:#D5DBE5;
+  --brass:#8A5E17; --brass-tint:#F4EBDA; --seal:#A3263A; --ok:#2C7650; --code:#ECEFF5;
+  --bubble-in:#FFFFFF; --bubble-out:#E1EAF7; --chat-bg:#E8ECF2;
+  --f-display:"Marcellus","Optima",Georgia,serif;
+  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --measure:70ch;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0E1422; --sheet:#151D30; --ink:#E3E7EF; --muted:#9AA3B8; --rule:#283250;
+    --brass:#D8A852; --brass-tint:#2A2416; --seal:#EC7183; --ok:#62C08F; --code:#111A2C;
+    --bubble-in:#1A2338; --bubble-out:#1E3050; --chat-bg:#0B111D; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0E1422; --sheet:#151D30; --ink:#E3E7EF; --muted:#9AA3B8; --rule:#283250;
+  --brass:#D8A852; --brass-tint:#2A2416; --seal:#EC7183; --ok:#62C08F; --code:#111A2C;
+  --bubble-in:#1A2338; --bubble-out:#1E3050; --chat-bg:#0B111D; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.62;-webkit-font-smoothing:antialiased}
+a{color:var(--ink);text-decoration-color:var(--brass);text-underline-offset:3px}
+a:hover{color:var(--brass)}
+:focus-visible{outline:2px solid var(--brass);outline-offset:2px;border-radius:2px}
+code,kbd{font-family:var(--f-mono);font-size:.88em;background:var(--code);padding:.1em .35em;border-radius:3px}
+p,li{text-wrap:pretty}
+.page{max-width:1200px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 96px}
+
+/* Letterhead */
+.letterhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px 24px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
+.wordmark{font-family:var(--f-display);font-size:22px;letter-spacing:.32em;text-transform:uppercase}
+.filed{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.hero{display:grid;gap:22px;padding-block:44px 36px;max-width:880px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--brass)}
+h1{font-family:var(--f-display);font-weight:400;font-size:clamp(34px,5.2vw,56px);line-height:1.08;margin:0;text-wrap:balance;letter-spacing:-.005em}
+.lead{font-size:clamp(17px,1.6vw,19px);line-height:1.6;max-width:62ch;margin:0;color:var(--ink)}
+.install{display:grid;gap:10px;max-width:640px}
+.specline{font-family:var(--f-mono);font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;padding:0;list-style:none}
+.specline li::before{content:"· ";color:var(--brass)}
+.specline li:first-child::before{content:""}
+.namenote{font-size:14px;color:var(--muted);margin:0;max-width:70ch}
+
+/* Layout */
+.layout{display:grid;gap:8px}
+@media (min-width:1080px){.layout{grid-template-columns:200px minmax(0,1fr);gap:56px}}
+.docket{font-size:14px}
+.docket h2{font-family:var(--f-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:0 0 10px}
+.docket ol{list-style:none;margin:0;padding:0;display:grid;gap:2px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+@media (min-width:1080px){.docket ol{grid-template-columns:1fr}.docket nav{position:sticky;top:calc(env(safe-area-inset-top,0px) + 24px)}}
+.docket a{display:flex;gap:10px;padding:5px 0;text-decoration:none;color:var(--muted)}
+.docket a:hover{color:var(--ink)}
+.docket a span{font-family:var(--f-mono);font-size:12px;color:var(--brass);min-width:2.4em}
+main{min-width:0}
+
+/* Sections */
+section{display:flex;flex-direction:column;gap:18px;padding-block:52px 4px;border-top:1px solid var(--rule)}
+section:first-child{border-top:0;padding-top:12px}
+.sec-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.sec-no{font-family:var(--f-mono);font-size:13px;color:var(--brass);letter-spacing:.06em}
+h2{font-family:var(--f-display);font-weight:400;font-size:clamp(26px,3vw,32px);line-height:1.15;margin:0;text-wrap:balance}
+h3{font-size:17px;font-weight:700;margin:0;line-height:1.35;text-wrap:balance}
+h4{font-size:13px;font-family:var(--f-mono);font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0}
+section p,section ul,section ol{margin:0;max-width:var(--measure)}
+section ul,section ol{padding-left:1.25em;display:grid;gap:8px}
+.wide{max-width:none !important}
+.muted{color:var(--muted)}
+.small{font-size:14px}
+
+/* Decisions */
+.decisions{list-style:none;padding:0 !important;gap:0 !important;max-width:none !important;border-top:1px solid var(--rule)}
+.decisions li{display:grid;grid-template-columns:56px minmax(0,1fr);gap:4px 12px;padding-block:16px;border-bottom:1px solid var(--rule)}
+.d-id{font-family:var(--f-mono);font-size:14px;color:var(--brass);font-weight:500;padding-top:1px}
+.decisions p{margin-top:4px;color:var(--muted);max-width:68ch}
+.ref{font-family:var(--f-mono);font-size:.82em;color:var(--brass);white-space:nowrap}
+
+/* Tables */
+.table-wrap{overflow-x:auto;max-width:100%;border:1px solid var(--rule);border-radius:6px;background:var(--sheet)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.45}
+th,td{text-align:left;vertical-align:top;padding:10px 14px;border-bottom:1px solid var(--rule)}
+tr:last-child td{border-bottom:0}
+thead th{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--code);white-space:nowrap}
+tbody th{font-weight:600;white-space:nowrap}
+td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;font-family:var(--f-mono);font-size:13px}
+.compare td:last-child,.compare th:last-child{background:var(--brass-tint)}
+.yes{color:var(--ok);font-weight:600}
+.no{color:var(--muted)}
+.bar{width:34%;min-width:120px}
+.bar span{display:block;height:8px;width:var(--w);background:var(--brass);border-radius:1px;margin-top:6px}
+
+/* Code */
+pre{margin:0;background:var(--code);border:1px solid var(--rule);border-radius:6px;padding:14px 16px;overflow-x:auto;font:13px/1.6 var(--f-mono);color:var(--ink);max-width:100%;tab-size:2}
+pre code{background:none;padding:0;font-size:inherit}
+.c{color:var(--muted)}
+.k{color:var(--brass)}
+.add{color:var(--ok)}
+.del{color:var(--seal)}
+.prompt{color:var(--brass)}
+.code-label{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);letter-spacing:.06em;margin-bottom:-10px}
+
+/* Splits and notes */
+.split{display:grid;gap:20px;max-width:none}
+@media (min-width:760px){.split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.split > div{display:flex;flex-direction:column;gap:10px;min-width:0}
+.memo{background:var(--brass-tint);padding:16px 18px;border-radius:2px;display:grid;gap:6px;max-width:var(--measure)}
+.memo .tag{font-family:var(--f-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--brass)}
+.memo p{margin:0}
+.memo ul{margin:0;padding-left:1.2em;display:grid;gap:4px}
+.fakebtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.fakebtns span{font-size:12px;font-weight:600;padding:3px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--sheet);color:var(--ink)}
+.fakebtns span.primary{background:var(--ok);border-color:var(--ok);color:var(--sheet)}
+.hero .memo{max-width:640px}
+blockquote{margin:0;padding:0 0 0 18px;border-left:2px solid var(--rule);color:var(--muted);font-style:italic;max-width:64ch}
+
+/* Diagram */
+figure{margin:0;display:grid;gap:10px}
+.diagram{overflow-x:auto;background:var(--sheet);border:1px solid var(--rule);border-radius:6px;padding:14px}
+.arch{display:block;width:100%;min-width:780px;height:auto;color:var(--muted)}
+figcaption{font-size:14px;color:var(--muted);max-width:var(--measure)}
+.d-box{fill:var(--sheet);stroke:var(--rule);stroke-width:1.3}
+.d-core{fill:var(--paper);stroke:var(--muted);stroke-width:1.2}
+.d-skill{fill:var(--sheet);stroke:var(--muted);stroke-width:1.2;stroke-dasharray:5 4}
+.d-acc{fill:var(--brass-tint);stroke:var(--brass);stroke-width:1.6}
+.d-chip{fill:var(--code)}
+.d-title{fill:var(--ink);font-family:var(--f-body);font-weight:700;font-size:13.5px}
+.d-row{fill:var(--muted);font-family:var(--f-mono);font-size:12px;white-space:pre}
+.d-name{fill:var(--ink);font-family:var(--f-body);font-size:12.5px}
+.d-tag{fill:var(--muted);font-family:var(--f-mono);font-size:10px;letter-spacing:.06em}
+.d-head{fill:var(--muted);font-family:var(--f-mono);font-size:11px;letter-spacing:.12em}
+.d-line{stroke:var(--muted);stroke-width:1.4;fill:none}
+.d-line-acc{stroke:var(--brass);stroke-width:2;fill:none}
+.d-label{fill:var(--muted);font-family:var(--f-body);font-size:11.5px}
+.d-label-acc{fill:var(--brass);font-family:var(--f-body);font-size:11.5px;font-weight:700}
+.m-ink{fill:var(--muted)}
+.m-acc{fill:var(--brass)}
+
+/* Demo artifact */
+.demo-wrap{display:grid;gap:16px;max-width:none}
+@media (min-width:920px){.demo-wrap{grid-template-columns:minmax(0,1.65fr) minmax(0,1fr)}}
+.window{background:var(--sheet);border:1px solid var(--rule);border-radius:8px;overflow:hidden;min-width:0}
+.window-bar{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--rule);background:var(--code);font-family:var(--f-mono);font-size:12px;color:var(--muted);flex-wrap:wrap}
+.window-bar .url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:99px;border:1px solid var(--brass);color:var(--brass);white-space:nowrap}
+.board{display:grid;gap:12px;padding:14px}
+@media (min-width:640px){.board{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.col{background:var(--paper);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.col-head{display:flex;justify-content:space-between;align-items:baseline}
+.col-head span{font-family:var(--f-mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.col ul{list-style:none;padding:0;margin:0;display:grid;gap:6px;max-width:none}
+.item{background:var(--sheet);border:1px solid var(--rule);border-radius:5px;padding:8px 10px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 10px;align-items:start}
+.item input{margin:3px 0 0;accent-color:var(--brass);width:16px;height:16px}
+.item label{font-size:14px;line-height:1.35;cursor:pointer}
+.item.done label{text-decoration:line-through;color:var(--muted)}
+.item .meta{grid-column:2;font-size:12px;color:var(--muted)}
+.item .chase{grid-column:2;justify-self:start;margin-top:4px}
+.item.fresh{border-color:var(--brass);animation:fresh 1.6s ease-out}
+@keyframes fresh{from{background:var(--brass-tint)}to{background:var(--sheet)}}
+@media (prefers-reduced-motion:reduce){.item.fresh{animation:none}}
+.add-row{display:flex;gap:8px;padding:0 14px 14px}
+.add-row input{flex:1;min-width:0;font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--rule);border-radius:5px;background:var(--sheet);color:var(--ink)}
+button{font:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:5px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--rule);font-weight:500;font-size:12px;padding:3px 9px}
+button:disabled{opacity:.45;cursor:default}
+.log-panel{display:flex;flex-direction:column;min-width:0}
+.log-panel .window-bar{justify-content:space-between}
+.log{list-style:none;margin:0;padding:10px 12px !important;display:flex !important;flex-direction:column;gap:6px !important;font-family:var(--f-mono);font-size:12px;line-height:1.5;max-height:330px;overflow-y:auto;max-width:none !important}
+.log li{word-break:break-word}
+.log .out{color:var(--ink)}
+.log .out::before{content:"→ ";color:var(--brass)}
+.log .in{color:var(--ok)}
+.log .in::before{content:"← "}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* Chat mock */
+.chat{background:var(--chat-bg);border:1px solid var(--rule);border-radius:10px;padding:0 0 12px;display:flex;flex-direction:column;gap:8px;max-width:420px;width:100%}
+.chat-head{display:flex;flex-direction:column;padding:10px 14px;border-bottom:1px solid var(--rule);background:var(--sheet);border-radius:10px 10px 0 0}
+.chat-head span{font-size:12px;color:var(--muted)}
+.msg{max-width:82%;padding:7px 10px 5px;border-radius:8px;font-size:14px;line-height:1.4;background:var(--bubble-in);margin:0 12px;display:grid;gap:2px;border:1px solid var(--rule)}
+.msg b{font-size:12px;color:var(--brass)}
+.msg time{font-size:10.5px;color:var(--muted);justify-self:end;font-variant-numeric:tabular-nums}
+.msg.me{align-self:flex-end;background:var(--bubble-out)}
+.msg.me b{color:var(--muted)}
+.msg.bot b{color:var(--ink)}
+.filecard{display:flex;gap:10px;align-items:center;background:var(--paper);border-radius:5px;padding:7px 9px;font-size:13px}
+.filecard i{font-style:normal;font-family:var(--f-mono);font-size:10px;font-weight:500;background:var(--seal);color:var(--sheet);padding:3px 5px;border-radius:3px}
+.snap{background:var(--paper);border-radius:5px;padding:8px;display:grid;gap:5px}
+.snap .lines{display:grid;gap:4px;padding:8px;background:var(--sheet);border-radius:4px;border:1px solid var(--rule)}
+.snap .lines span{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--muted)}
+.snap .lines span::before{content:"";width:9px;height:9px;border:1.5px solid var(--muted);border-radius:2px;flex:none}
+.snap .lines span.t::before{background:var(--brass);border-color:var(--brass)}
+.snap small{font-size:12px;color:var(--ink)}
+.snap small em{display:block;font-style:normal;color:var(--muted);font-size:11px}
+
+/* Pipeline */
+.pipeline{list-style:none;padding:0 !important;display:grid !important;gap:10px !important;max-width:none !important}
+@media (min-width:760px){.pipeline{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.pipeline li{border-top:2px solid var(--ink);padding-top:10px;display:grid;gap:4px}
+.pipeline li b{font-family:var(--f-mono);font-size:12px;color:var(--brass);font-weight:500;letter-spacing:.06em}
+.pipeline li p{color:var(--muted);font-size:14.5px}
+
+/* Phases */
+.phases{list-style:none;padding:0 !important;display:grid !important;gap:0 !important;max-width:none !important;border-top:1px solid var(--rule)}
+.phases li{display:grid;gap:6px 24px;padding-block:18px;border-bottom:1px solid var(--rule)}
+@media (min-width:760px){.phases li{grid-template-columns:150px minmax(0,1fr)}}
+.phases .ph{font-family:var(--f-mono);font-size:12px;color:var(--brass);letter-spacing:.06em}
+.phases .ph strong{display:block;font-family:var(--f-body);font-size:16px;color:var(--ink);letter-spacing:0;margin-top:2px}
+.phases p{color:var(--muted)}
+.phases .done{color:var(--ink)}
+.phases .done b{font-family:var(--f-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ok);font-weight:500;margin-right:6px}
+
+.sources{columns:2 300px;column-gap:32px;font-size:13.5px;max-width:none !important;padding-left:0 !important;list-style:none;display:block !important}
+.sources li{break-inside:avoid;margin-bottom:6px;color:var(--muted)}
+.sources a{color:var(--muted)}
+.sources a:hover{color:var(--brass)}
+footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
+</style>
+
+<div class="page">
+  <header class="letterhead">
+    <div class="wordmark">Attaché</div>
+    <div class="filed">Design proposal · v0.5 · 20 October 2026</div>
+  </header>
+
+  <div class="hero">
+    <div class="eyebrow">A Python take on nanoclaw</div>
+    <h1>A personal assistant you install with one command</h1>
+    <p class="lead">Attaché runs on your own machine. You talk to it in a terminal, on a local web page and in your chat apps, including group chats. It keeps its know-how in a folder of skills, and it rewrites those skills as your habits change. The core stays small enough to read in an afternoon. Everything else is a skill.</p>
+    <div class="install">
+<pre><code><span class="prompt">$</span> uvx attache                 <span class="c"># try it without installing</span>
+<span class="prompt">$</span> uv tool install attache     <span class="c"># keep it</span>
+<span class="prompt">$</span> attache init &amp;&amp; attache run</code></pre>
+      <ul class="specline">
+        <li>Python 3.11+</li><li>about 1,500 lines of code</li><li>6 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
+      </ul>
+    </div>
+    <p class="namenote">The name is <code>attache</code>, after the assistant on an ambassador's staff and the case an executive carries. It was unclaimed on PyPI on 19 October 2026, so register it before the first release.</p>
+    <div class="memo changes">
+      <span class="tag">Changes in v0.5</span>
+      <ul>
+        <li>Phase 1 is built: 1,576 lines of code and 242 tests, reviewed for correctness, security and simplicity, in a pull request on <code>OpenAfterHours/attache</code>.</li>
+        <li>The size budget now counts lines of code only, with a cap of 1,600 (D9, §10).</li>
+        <li>Claude Code reaches Attaché's tools through an MCP endpoint on the local web server (§6).</li>
+        <li>The terminal and the web page are one conversation, and the web link is printed at start with a token that changes every run (§9).</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="layout">
+    <aside class="docket">
+      <nav aria-label="Sections">
+        <h2>Contents</h2>
+        <ol>
+          <li><a href="#summary"><span>§1</span>Ten decisions</a></li>
+          <li><a href="#research"><span>§2</span>What the research found</a></li>
+          <li><a href="#architecture"><span>§3</span>Architecture</a></li>
+          <li><a href="#skills"><span>§4</span>Skills</a></li>
+          <li><a href="#email"><span>§5</span>Email</a></li>
+          <li><a href="#backends"><span>§6</span>Model backends</a></li>
+          <li><a href="#artifacts"><span>§7</span>Artifacts and files</a></li>
+          <li><a href="#groups"><span>§8</span>Group chats</a></li>
+          <li><a href="#interface"><span>§9</span>CLI or web?</a></li>
+          <li><a href="#budget"><span>§10</span>Code budget</a></li>
+          <li><a href="#roadmap"><span>§11</span>Roadmap</a></li>
+          <li><a href="#risks"><span>§12</span>Risks and decisions</a></li>
+          <li><a href="#sources"><span>§13</span>Sources</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <main>
+      <!-- §1 -->
+      <section id="summary">
+        <div class="sec-head"><span class="sec-no">§1</span><h2>The proposal in ten decisions</h2></div>
+        <ol class="decisions">
+          <li><span class="d-id">D1</span><div><h3>One small package</h3><p>Python 3.11+, installed with uv, running as one asyncio process. All state lives in <code>~/.attache</code>, or wherever <code>ATTACHE_HOME</code> points. The same package runs in Docker later.</p></div></li>
+          <li><span class="d-id">D2</span><div><h3>Every optional capability is a skill</h3><p>One folder of Agent Skills directories holds four kinds of skill: knowledge, scripts, channels and artifact templates. The core never learns about Gmail or Slack.</p></div></li>
+          <li><span class="d-id">D3</span><div><h3>Skills are living documents</h3><p>The agent edits a skill when you change how you work. <code>~/.attache</code> is a git repo, so every edit is a commit you can read and undo. Only your own messages can change a skill.</p></div></li>
+          <li><span class="d-id">D4</span><div><h3>Model backends are config rows</h3><p>Four small adapters: <code>anthropic</code>, <code>openai-chat</code>, <code>openai-responses</code> and <code>claude-cli</code>. Any endpoint that speaks one of those protocols is one block of TOML. Your own chats use your Claude login, and group chats use an API key. No LiteLLM and no agent framework.</p></div></li>
+          <li><span class="d-id">D5</span><div><h3>Channels run as sidecar processes</h3><p>Each channel skill ships a <code>channel.py</code> that uv runs with its own dependencies. It talks to the core in JSON lines over stdin and stdout. Slack and Signal come first. Each sidecar shows approval requests its own way: buttons in Slack, a reaction prompt in Signal.</p></div></li>
+          <li><span class="d-id">D6</span><div><h3>Artifacts are local pages over real data</h3><p>The agent writes HTML. The built-in server adds a small <code>attache</code> bridge to the SQLite store, with live updates. People in chat apps get a PNG snapshot and a signed link.</p></div></li>
+          <li><span class="d-id">D7</span><div><h3>Group chats follow a fixed policy</h3><p>Access, then trigger, then role. Each role has its own toolset, and a guest's turn never has private data and outbound sending at the same time.</p></div></li>
+          <li><span class="d-id">D8</span><div><h3>Three surfaces, each with one job</h3><p>The CLI sets up and operates. One local web page holds chat and artifacts. Chat apps cover the phone and the group.</p></div></li>
+          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 1,600 lines of code. Blank lines, comments and docstrings don't count, so the budget never rewards dense code. New features arrive as skills, and the contribution guide says so.</p></div></li>
+          <li><span class="d-id">D10</span><div><h3>One mail skill for every account</h3><p>Outlook through Outlook classic's COM interface or Microsoft Graph with OAuth, your choice per account. Gmail and Titan over IMAP. All behind the same commands. It reads and files on its own, saves replies as drafts, and sends only after your yes.</p></div></li>
+        </ol>
+      </section>
+
+      <!-- §2 -->
+      <section id="research">
+        <div class="sec-head"><span class="sec-no">§2</span><h2>What the research found</h2></div>
+        <p>I read nanoclaw at three points in its history: the first week, the v1.2.0 tag and today's v2. I also looked at OpenClaw, the project nanoclaw was written in reaction to, and at nanobot, the best-known Python project in this space.</p>
+        <div class="table-wrap">
+          <table class="compare">
+            <thead><tr><th></th><th>nanoclaw v1</th><th>nanoclaw v2</th><th>OpenClaw</th><th>nanobot</th><th>Attaché</th></tr></thead>
+            <tbody>
+              <tr><th>Language</th><td>TypeScript</td><td>TypeScript</td><td>TypeScript</td><td>Python</td><td>Python</td></tr>
+              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>1,576 lines of code in phase 1, 1,600 cap</td></tr>
+              <tr><th>Install</th><td>Fork, then <code>/setup</code> in Claude Code</td><td>Same, Docker required</td><td>npm, gateway daemon</td><td><code>uv tool install nanobot-ai</code></td><td><code>uvx attache</code></td></tr>
+              <tr><th>Models</th><td>Claude via the Agent SDK</td><td>Claude; Codex, OpenCode, Ollama as skills</td><td>Many, via config</td><td>Native OpenAI and Anthropic SDKs</td><td>Four adapters, any endpoint</td></tr>
+              <tr><th>Extending it</th><td>Skills that rewrite your fork</td><td>Skills copy code from registry branches</td><td>Plugins, ClawHub skills</td><td>Built-in channels, skills</td><td>Runtime skills folder, no code changes</td></tr>
+              <tr><th>Interface</th><td>Chat apps only</td><td>Chat apps only</td><td>Control UI, CLI, TUI, apps</td><td>TUI and web UI</td><td>CLI, one web page, artifacts</td></tr>
+              <tr><th>Isolation</th><td>Container per group</td><td>Container and credential vault</td><td>Host by default, sandbox optional</td><td>Host</td><td>Toolsets by role; container later</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <blockquote>“Accepted: Bug fixes, security fixes, simplifications, reducing code. Not accepted: Features, capabilities, compatibility, enhancements. These should be skills.” <span class="small">(nanoclaw, CONTRIBUTING.md)</span></blockquote>
+        <div class="split">
+          <div>
+            <h3>Keep from nanoclaw</h3>
+            <ul>
+              <li>“Skills over features” as a written rule.</li>
+              <li>One memory file per chat, plus a global one.</li>
+              <li>Engage modes: <code>mention</code>, <code>mention-sticky</code> and <code>pattern</code>.</li>
+              <li>One owner chat with admin rights. Other chats are restricted.</li>
+              <li>Scheduled tasks run as ordinary turns in a chat.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Change for a pip package</h3>
+            <ul>
+              <li>A uv-installed tool has no fork to rewrite. nanoclaw's <code>/add-slack</code> edits source code. Here the <code>slack</code> skill adds Slack at runtime by shipping its own sidecar.</li>
+              <li>Not tied to one vendor. Four adapters from day one.</li>
+              <li>A web page for chat and artifacts. nanoclaw ruled one out (“we're not adding a web UI at this stage”, PR #212). Interactive artifacts need a page to live in.</li>
+              <li>No container requirement, so <code>uvx attache</code> works on a laptop with nothing else installed.</li>
+              <li>A size budget enforced by a test. nanoclaw grew about 17 times past its launch size, and nanobot about 50 times.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- §3 -->
+      <section id="architecture">
+        <div class="sec-head"><span class="sec-no">§3</span><h2>Architecture</h2></div>
+        <p>One process. Channels feed a router, the router builds a turn, a backend runs it, and tools act on the world. All state lives in one folder and one SQLite file.</p>
+        <figure class="wide">
+          <div class="diagram">
+            <svg class="arch" viewBox="0 0 1000 530" xml:space="preserve" role="img" aria-label="Messages flow from channels through the router to the agent loop, which calls tools. Tools write to the skills folder, the SQLite store and back out through channels. The web server serves artifacts from the store. The scheduler fires due tasks into the router.">
+              <defs>
+                <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-ink"/></marker>
+                <marker id="ah-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-acc"/></marker>
+              </defs>
+
+              <!-- outbound send path -->
+              <polyline points="870,110 870,40 196,40 196,82" class="d-line" marker-end="url(#ah)"/>
+              <text x="533" y="32" class="d-label" text-anchor="middle">send: replies, files and links go back out through the same channel</text>
+
+              <!-- channels -->
+              <text x="16" y="74" class="d-head">CHANNELS</text>
+              <rect x="16" y="88" width="160" height="34" rx="4" class="d-core"/>
+              <text x="28" y="110" class="d-name">Terminal</text><text x="166" y="109" class="d-tag" text-anchor="end">CORE</text>
+              <rect x="16" y="130" width="160" height="34" rx="4" class="d-core"/>
+              <text x="28" y="152" class="d-name">Web chat</text><text x="166" y="151" class="d-tag" text-anchor="end">CORE</text>
+              <rect x="16" y="172" width="160" height="34" rx="4" class="d-skill"/>
+              <text x="28" y="194" class="d-name">Slack</text><text x="166" y="193" class="d-tag" text-anchor="end">SKILL</text>
+              <rect x="16" y="214" width="160" height="34" rx="4" class="d-skill"/>
+              <text x="28" y="236" class="d-name">Signal</text><text x="166" y="235" class="d-tag" text-anchor="end">SKILL</text>
+              <rect x="16" y="256" width="160" height="34" rx="4" class="d-skill"/>
+              <text x="28" y="278" class="d-name">Discord, Matrix, …</text><text x="166" y="277" class="d-tag" text-anchor="end">SKILLS</text>
+
+              <!-- bus -->
+              <line x1="196" y1="84" x2="196" y2="273" class="d-line"/>
+              <line x1="176" y1="105" x2="196" y2="105" class="d-line"/>
+              <line x1="176" y1="147" x2="196" y2="147" class="d-line"/>
+              <line x1="176" y1="189" x2="196" y2="189" class="d-line"/>
+              <line x1="176" y1="231" x2="196" y2="231" class="d-line"/>
+              <line x1="176" y1="273" x2="196" y2="273" class="d-line"/>
+              <line x1="196" y1="189" x2="254" y2="189" class="d-line" marker-end="url(#ah)"/>
+              <text x="225" y="181" class="d-label" text-anchor="middle">inbound</text>
+
+              <!-- router -->
+              <rect x="256" y="110" width="170" height="150" rx="5" class="d-box"/>
+              <text x="272" y="134" class="d-title">Router</text>
+              <text x="272" y="160" class="d-row">access · allowlist</text>
+              <text x="272" y="182" class="d-row">trigger · @mention</text>
+              <text x="272" y="204" class="d-row">role → toolset</text>
+              <text x="272" y="226" class="d-row">context · memory</text>
+              <text x="272" y="248" class="d-row">queue · one per chat</text>
+
+              <line x1="426" y1="189" x2="494" y2="189" class="d-line" marker-end="url(#ah)"/>
+              <text x="460" y="181" class="d-label" text-anchor="middle">turn</text>
+
+              <!-- agent -->
+              <rect x="496" y="110" width="190" height="150" rx="5" class="d-box"/>
+              <text x="512" y="134" class="d-title">Agent loop</text>
+              <rect x="512" y="146" width="158" height="22" rx="3" class="d-chip"/><text x="522" y="161" class="d-row">anthropic</text>
+              <rect x="512" y="172" width="158" height="22" rx="3" class="d-chip"/><text x="522" y="187" class="d-row">openai-chat</text>
+              <rect x="512" y="198" width="158" height="22" rx="3" class="d-chip"/><text x="522" y="213" class="d-row">openai-responses</text>
+              <rect x="512" y="224" width="158" height="22" rx="3" class="d-chip"/><text x="522" y="239" class="d-row">claude-cli</text>
+
+              <line x1="686" y1="172" x2="754" y2="172" class="d-line" marker-end="url(#ah)"/>
+              <text x="720" y="164" class="d-label" text-anchor="middle">calls</text>
+              <line x1="756" y1="208" x2="688" y2="208" class="d-line" marker-end="url(#ah)"/>
+              <text x="720" y="226" class="d-label" text-anchor="middle">results</text>
+
+              <!-- tools -->
+              <rect x="756" y="110" width="228" height="150" rx="5" class="d-box"/>
+              <text x="772" y="134" class="d-title">Tools</text>
+              <text x="772" y="160" class="d-row">read · write · edit · run</text>
+              <text x="772" y="182" class="d-row">send    text, files</text>
+              <text x="772" y="204" class="d-row">db      collections</text>
+              <text x="772" y="226" class="d-row">artifact · schedule</text>
+              <text x="772" y="248" class="d-row">filtered by role</text>
+
+              <!-- self-editing path -->
+              <polyline points="790,260 790,300 456,300 456,348" class="d-line-acc" marker-end="url(#ah-acc)"/>
+              <text x="623" y="292" class="d-label-acc" text-anchor="middle">edits skills, then a git commit</text>
+
+              <!-- tools to store -->
+              <polyline points="900,260 900,326 616,326 616,348" class="d-line" marker-end="url(#ah)"/>
+              <text x="845" y="320" class="d-label" text-anchor="middle">reads, writes</text>
+
+              <!-- scheduler -->
+              <rect x="16" y="350" width="150" height="120" rx="5" class="d-box"/>
+              <text x="32" y="374" class="d-title">Scheduler</text>
+              <text x="32" y="400" class="d-row">due tasks</text>
+              <text x="32" y="422" class="d-row">checked ≤ 60 s</text>
+              <text x="32" y="444" class="d-row">fired as turns</text>
+              <polyline points="166,380 232,380 232,240 254,240" class="d-line" marker-end="url(#ah)"/>
+              <text x="199" y="372" class="d-label" text-anchor="middle">due task</text>
+
+              <!-- files -->
+              <rect x="256" y="350" width="230" height="120" rx="5" class="d-acc"/>
+              <text x="272" y="374" class="d-title">~/.attache · git repo</text>
+              <text x="272" y="400" class="d-row">skills/    SKILL.md, scripts</text>
+              <text x="272" y="422" class="d-row">memory/    USER.md, chats/</text>
+              <text x="272" y="444" class="d-row">artifacts/ *.html</text>
+              <line x1="300" y1="350" x2="300" y2="262" class="d-line" marker-end="url(#ah)"/>
+              <text x="308" y="318" class="d-label">memory, skills index</text>
+
+              <!-- sqlite -->
+              <rect x="526" y="350" width="180" height="120" rx="5" class="d-box"/>
+              <text x="542" y="374" class="d-title">attache.db (SQLite)</text>
+              <text x="542" y="400" class="d-row">messages · docs</text>
+              <text x="542" y="422" class="d-row">tasks · people</text>
+              <text x="542" y="444" class="d-row">sessions</text>
+
+              <line x1="708" y1="410" x2="754" y2="410" class="d-line" marker-start="url(#ah)" marker-end="url(#ah)"/>
+              <text x="731" y="402" class="d-label" text-anchor="middle">bridge</text>
+
+              <!-- web -->
+              <rect x="756" y="350" width="228" height="120" rx="5" class="d-box"/>
+              <text x="772" y="374" class="d-title">Web server :8765</text>
+              <text x="772" y="400" class="d-row">/         chat, Home</text>
+              <text x="772" y="422" class="d-row">/a/&lt;id&gt;   artifacts</text>
+              <text x="772" y="444" class="d-row">/api      db, live events</text>
+              <line x1="870" y1="470" x2="870" y2="498" class="d-line" marker-end="url(#ah)"/>
+              <text x="870" y="520" class="d-label" text-anchor="middle">signed link → browser, phone</text>
+
+              <!-- legend -->
+              <rect x="16" y="497" width="26" height="14" rx="2" class="d-skill"/>
+              <text x="50" y="508" class="d-label">skill, runs as its own process</text>
+              <line x1="236" y1="504" x2="266" y2="504" class="d-line-acc"/>
+              <text x="274" y="508" class="d-label">how the assistant edits its own skills</text>
+            </svg>
+          </div>
+          <figcaption>A message's path through Attaché. Dashed boxes are skills that run as separate processes. The brass path is how the assistant edits its own skills. With the <code>claude-cli</code> backend, Claude Code runs the loop itself and reaches the same tools through an MCP endpoint on the local web server.</figcaption>
+        </figure>
+
+        <h3>One message, start to finish</h3>
+        <ol>
+          <li>Jo writes “@Attaché can you send the packing list as a PDF?” in the family Signal group. The Signal sidecar, a thin wrapper around signal-cli's JSON-RPC mode, turns it into one JSON line on its stdout.</li>
+          <li>The router checks that the chat is allowed, sees the mention and looks Jo up as a member. Members can use this chat's files, send to this chat only, use shared collections and make artifacts.</li>
+          <li>It builds the turn: the persona, this chat's memory file, the full text of the skills members may use, the last 30 messages with other people's words fenced and labelled as data, and Jo's identity taken from the config. Your own <code>USER.md</code> stays out of anyone else's turn.</li>
+          <li>The backend runs the loop. The model follows the pdf skill, runs its script through the <code>script</code> tool (which uses <code>uv run</code>), and calls <code>send</code> with the file.</li>
+          <li>The core writes a <code>send</code> line to the sidecar's stdin, and the bot posts the PDF to the group with a caption.</li>
+        </ol>
+      </section>
+
+      <!-- §4 -->
+      <section id="skills">
+        <div class="sec-head"><span class="sec-no">§4</span><h2>Skills, the part that grows</h2></div>
+        <p>A skill is a folder with a <code>SKILL.md</code>, following the <a href="https://agentskills.io/specification">Agent Skills standard</a> that Claude Code, Codex and others read. Only each skill's name and description go into the prompt, about a hundred tokens each. The agent opens the full file when a task needs it, so forty skills cost less than one long system prompt.</p>
+        <div class="split">
+          <div>
+            <div class="code-label">~/.attache</div>
+<pre><code>attache.toml          <span class="c">endpoints, people, chats</span>
+attache.db            <span class="c">messages, docs, tasks</span>
+memory/
+  USER.md             <span class="c">who you are, VIPs, tone</span>
+  chats/family.md     <span class="c">one file per chat</span>
+skills/
+  mailbox/            <span class="c">knowledge: yours</span>
+    SKILL.md
+  mail/               <span class="c">script: Outlook, IMAP</span>
+    SKILL.md
+    accounts.toml
+    mail.py           <span class="c">PEP 723: pywin32, imapclient</span>
+  todos/              <span class="c">lists, fields, habits</span>
+  docx/               <span class="c">script</span>
+    SKILL.md
+    scripts/make.py   <span class="c">PEP 723: python-docx</span>
+  slack/              <span class="c">channel</span>
+    SKILL.md
+    channel.py
+  signal/             <span class="c">channel, wraps signal-cli</span>
+  artifact-kit/       <span class="c">templates</span>
+    SKILL.md
+    tokens.css
+    templates/board.html
+artifacts/
+  todo-board.html</code></pre>
+          </div>
+          <div>
+            <div class="code-label">skills/mailbox/SKILL.md</div>
+<pre><code><span class="k">---</span>
+name: mailbox
+description: How I file and triage my email.
+  Use when sorting, archiving, drafting replies
+  or summarising the inbox.
+metadata:
+  attache-owner-only: "true"
+<span class="k">---</span>
+# Mailbox
+
+## Accounts
+- outlook: personal
+- gmail: shopping, newsletters
+- titan: business
+
+## Folders
+- Finance/Receipts: receipts, invoices
+- Family: Sam, Jo, school
+- Reading: newsletters worth keeping
+
+## Each morning at 07:30
+1. List unread mail in every account.
+2. File anything matching a rule below.
+3. Flag mail from VIPs in USER.md.
+4. Draft replies I'll need. Never send.
+5. Post a five-line summary to my Slack DM.
+
+## Learned rules
+&lt;!-- appended when you correct me --&gt;
+- Substack goes to Reading. (12 Oct)</code></pre>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Kind</th><th>What the folder holds</th><th>Examples</th><th>Who edits it</th></tr></thead>
+            <tbody>
+              <tr><th>Knowledge</th><td>Only <code>SKILL.md</code>: rules, preferences, procedures</td><td>mailbox, todos, travel, tone of voice</td><td>You and the agent</td></tr>
+              <tr><th>Script</th><td><code>scripts/*.py</code> with PEP 723 headers. <code>uv run</code> installs each script's dependencies on first use, outside the core</td><td>mail (Outlook through COM, Gmail and Titan over IMAP), docx, xlsx, pptx, pdf</td><td>Bundled; the agent can write new ones</td></tr>
+              <tr><th>Channel</th><td><code>channel.py</code>, started as a sidecar when <code>attache run</code> starts</td><td>slack, signal, discord, matrix</td><td>Bundled; the agent can draft one</td></tr>
+              <tr><th>Template</th><td><code>templates/*.html</code> and shared design tokens for artifacts</td><td>artifact-kit: board, checklist, table, itinerary</td><td>You and the agent</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>How a skill changes itself</h3>
+        <div class="split">
+          <div class="chat" aria-label="Example direct chat">
+            <div class="chat-head"><strong>Attaché</strong><span>Slack, direct message</span></div>
+            <div class="msg me"><b>You</b>Amazon receipts should go to Finance/Amazon from now on, not Receipts.<time>09:14</time></div>
+            <div class="msg bot"><b>Attaché</b>Done. I moved 14 existing receipts and added the rule to your mailbox skill. Say “undo that” to put it back.<time>09:14</time></div>
+          </div>
+          <div>
+<pre><code><span class="c">$ attache skills log mailbox</span>
+<span class="k">a41c9e2</span> mailbox: Amazon receipts → Finance/Amazon
+        you, Slack DM, 19 Oct 09:14
+
+ ## Folders
+<span class="del">-- Finance/Receipts: receipts, invoices</span>
+<span class="add">+- Finance/Receipts: receipts, invoices (not Amazon)</span>
+<span class="add">+- Finance/Amazon: Amazon receipts and orders</span></code></pre>
+          </div>
+        </div>
+        <ul>
+          <li>Only turns from the owner can write under <code>skills/</code>. When a member asks for a change, such as “always send the shopping list as a checklist”, the assistant drafts the edit and sends it to your DM for a yes or no.</li>
+          <li>After any turn that touched <code>skills/</code> or <code>memory/</code>, the core commits with the request as the message. <code>attache skills undo mailbox</code> reverts the last change.</li>
+          <li><code>attache init</code> copies the bundled skills into your folder. Upgrades to them arrive as a git merge, so your edits stay.</li>
+          <li>A bundled <code>skill-writer</code> skill lets the agent create new skills from a conversation, as nanobot's <code>skill-creator</code> does.</li>
+          <li>New abilities arrive the same way. Asked to “add Signal”, the agent drafts <code>skills/signal/</code> with a <code>channel.py</code> that talks to signal-cli. You review the commit, and it starts on the next restart.</li>
+        </ul>
+      </section>
+
+      <!-- §5 -->
+      <section id="email">
+        <div class="sec-head"><span class="sec-no">§5</span><h2>Email: Outlook, Gmail and Titan</h2></div>
+        <p>One <code>mail</code> skill gives the agent the same commands for all three accounts. Behind them sit three backends. Outlook uses either Outlook classic on this PC through its COM interface, or Microsoft Graph with an OAuth sign-in; you pick per account. Gmail and Titan use IMAP with SMTP. Your filing rules live in the <code>mailbox</code> knowledge skill, so they don't change with the backend.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Account</th><th>Backend</th><th>Sign-in</th><th>Calendar</th><th>Off this PC</th></tr></thead>
+            <tbody>
+              <tr><th>Outlook</th><td>Outlook classic through COM, or Microsoft Graph</td><td>COM: Outlook's own. Graph: a one-time browser sign-in</td><td>Yes</td><td>Graph: works as is. COM: this PC only</td></tr>
+              <tr><th>Gmail</th><td>IMAP and SMTP</td><td>An app password, which needs 2-Step Verification</td><td>Not in v1</td><td>Works as is</td></tr>
+              <tr><th>Titan</th><td>IMAP and SMTP</td><td>Your Titan password, or an Application Password if 2FA is on. “Enable Titan on Other Apps” must be switched on in webmail</td><td>Not in v1</td><td>Works as is</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="small muted">Outlook.com and Microsoft 365 refuse password sign-in over IMAP, so the Outlook account goes through Outlook classic or through Graph. The Gmail and Titan passwords are kept in Windows Credential Manager through keyring, never in a config file or in git.</p>
+        <div class="memo">
+          <span class="tag">Checked on this PC, 19 October</span>
+          <p>Outlook classic is installed (Microsoft 365 Family or Personal, 64-bit, version 16.0.20430) with one mail profile. The new Outlook app is installed too, but the setting that switches you to it isn't set. A test script that declared pywin32 ran under <code>uv run</code> and loaded Outlook's COM support with no extra setup: 3.6 s the first time, 0.7 s after that. Outlook was closed, and nothing opened it or read any mail. The Gmail, Titan and Outlook.com servers were asked, without signing in, which sign-in methods they accept.</p>
+        </div>
+        <h3>Outlook: COM or Graph</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Outlook classic (COM)</th><th>Microsoft Graph (OAuth)</th></tr></thead>
+            <tbody>
+              <tr><th>Setup</th><td>None. Uses the Outlook already signed in on this PC</td><td>Once: an app registration in Microsoft Entra, then a browser sign-in. A personal Microsoft account needs a free Azure account to get a tenant (phone number and card, with a temporary $1 hold)</td></tr>
+              <tr><th>Outlook running</th><td>Started if needed</td><td>Not needed</td></tr>
+              <tr><th>New Outlook, other machines, cloud</th><td>No</td><td>Yes</td></tr>
+              <tr><th>Calendar and tasks</th><td>Outlook calendar and tasks</td><td>Calendar and Microsoft To Do</td></tr>
+              <tr><th>Item IDs</th><td>Change when an item moves</td><td>Immutable IDs survive moves</td></tr>
+              <tr><th>Staying signed in</th><td>Outlook's own</td><td>90 days from the last use, renewed each time. Ends when you change your Microsoft password</td></tr>
+              <tr><th>Consent screen</th><td></td><td>Says “unverified”: apps registered with a personal account can't be publisher-verified</td></tr>
+              <tr><th>Work accounts</th><td>Whatever Outlook can open</td><td>An admin may need to approve the app</td></tr>
+              <tr><th>Where secrets live</th><td>Nowhere new</td><td>A token cache encrypted for your Windows user (DPAPI)</td></tr>
+              <tr><th>Skill dependencies</th><td>pywin32</td><td>msal, msal-extensions</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Start with COM, since there is nothing to register. Switch the Outlook account to Graph when you want it to work with Outlook closed, on another machine or in the cloud. The switch is one line in <code>accounts.toml</code>, and the <code>mailbox</code> skill doesn't change. The app ID is a public value, not a secret, so the project could register one app and ship its ID. Until it does, you register your own.</p>
+        <div class="split">
+          <div>
+            <div class="code-label">skills/mail/accounts.toml</div>
+<pre><code>[outlook]
+backend = "com"     <span class="c"># or "graph", which also needs:</span>
+<span class="c"># client_id = "&lt;your app ID&gt;"</span>
+
+[gmail]
+backend = "imap"
+imap    = "imap.gmail.com:993"
+smtp    = "smtp.gmail.com:465"
+user    = "you@gmail.com"
+
+[titan]
+backend = "imap"
+imap    = "imap.titan.email:993"
+smtp    = "smtp.titan.email:465"
+user    = "you@yourdomain.com"</code></pre>
+          </div>
+          <div>
+            <div class="code-label">One call, as the agent sees it</div>
+<pre><code><span class="prompt">$</span> uv run mail.py inbox --account all --unread
+{"ok": true, "items": [
+ {"id": "ol:AAAAAJ3pQ…", "account": "outlook",
+  "subject": "Boiler service quote",
+  "from": {"name": "Dan Price",
+           "smtp": "dan@example.com"},
+  "received_utc": "2026-10-18T16:42:00Z",
+  "preview": "Hi, attached is the quote…",
+  "untrusted": true},
+ {"id": "gm:1801234567890123456",
+  "account": "gmail",
+  "subject": "Your order has shipped", …}]}</code></pre>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Commands</th><th>What they do</th><th>Runs</th></tr></thead>
+            <tbody>
+              <tr><th><code>doctor</code> <code>folders</code> <code>login</code></th><td>Check each account is reachable and say why not, list folders. <code>login</code> is the one-time Graph sign-in</td><td>Any time</td></tr>
+              <tr><th><code>inbox</code> <code>search</code> <code>read</code></th><td>List, find and open mail. Bodies come back as capped plain text, marked untrusted</td><td>On its own</td></tr>
+              <tr><th><code>agenda</code> <code>tasks</code></th><td>The Outlook calendar for the coming days with recurring meetings expanded, plus Outlook tasks (COM) or Microsoft To Do (Graph)</td><td>On its own</td></tr>
+              <tr><th><code>move</code> <code>flag</code> <code>mark-read</code></th><td>File and organise. On Gmail a folder is a label, so <code>move</code> adds the label and takes the message out of the inbox. Moving more than 20 items at once needs your yes</td><td>On its own, logged</td></tr>
+              <tr><th><code>draft-reply</code> <code>draft-new</code></th><td>Save a reply or a new message in that account's Drafts</td><td>On its own, logged</td></tr>
+              <tr><th><code>send-draft</code> <code>respond</code> <code>create-event</code></th><td>Send a draft, answer a meeting invite, create an event with attendees</td><td>After your yes</td></tr>
+              <tr><th>Not built</th><td>Rules, automatic forwarding, settings changes, permanent deletes</td><td>Never</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="split">
+          <div class="chat" aria-label="Example: approving an email reply in a Slack direct message">
+            <div class="chat-head"><strong>Attaché</strong><span>Slack, direct message</span></div>
+            <div class="msg bot"><b>Attaché</b>Morning. 31 new emails across Outlook, Gmail and Titan: 24 filed, 3 flagged, 1 needs a reply. Draft to Dan Price from your Outlook: “Thanks Dan, Thursday at 9am works. Please go ahead.”<span class="fakebtns" aria-hidden="true"><span class="primary">Send</span><span>Edit</span><span>Not now</span></span><time>07:31</time></div>
+            <div class="msg bot"><b>Attaché</b>Sent from Outlook at 07:40. It's in Sent Items.<time>07:40</time></div>
+          </div>
+          <div>
+            <h3>How sending works</h3>
+            <ol>
+              <li>The agent saves the reply in that account's Drafts and shows it to you in your Slack DM.</li>
+              <li>Your yes runs <code>send-draft</code> with a confirmation token, a hash of the recipients, subject and body you saw. If the draft changed in between, the send is refused.</li>
+              <li>Outlook sends it itself, through COM or Graph. Gmail and Titan send through SMTP, with a fixed Message-ID so a retry can't send twice. Titan doesn't file sent mail on its own, so the skill copies it to Sent.</li>
+              <li>Every action, read or write, is appended to <code>~/.attache/logs/mail.jsonl</code>.</li>
+            </ol>
+            <p>An inbox holds private data, untrusted content and a way to send, all in one place. So the assistant never follows instructions found inside an email, never adds recipients taken from email text, and runs this skill only on your own turns.</p>
+          </div>
+        </div>
+        <h3>Limits to plan for</h3>
+        <ul>
+          <li>Only classic Outlook has COM; the new Outlook app has none. If you switch, <code>mail doctor</code> says so; set the account to Graph and it carries on. Microsoft supports existing classic installs until at least 2029.</li>
+          <li>Attaché has to run in your own logged-in session without elevated rights. Windows refuses the connection when one side is elevated and the other isn't, and Microsoft doesn't support Office automation from background services. <code>attache service install</code> sets up the scheduled task this way.</li>
+          <li>Outlook shows security prompts when antivirus isn't reported healthy or a policy forces them. On a home PC with Defender up to date it is normally silent.</li>
+          <li>Outlook updates occasionally break COM. An April 2026 Current Channel build did until Microsoft fixed it in May, which is one reason <code>doctor</code> exists.</li>
+          <li>A Graph sign-in lapses after 90 days without use or when you change your Microsoft password, and some work tenants block sign-in to unverified apps. <code>doctor</code> names the cause and asks you to run <code>login</code> again.</li>
+          <li>Gmail revokes app passwords whenever you change your Google password. <code>doctor</code> spots the failed sign-in and asks you for a new one.</li>
+          <li>Titan caps mail to outside addresses by plan, from 50 an hour on Starter. Approved sends are few, but the skill still counts recipients and limits each run.</li>
+        </ul>
+        <div class="memo">
+          <span class="tag">Off this PC</span>
+          <p>Gmail, Titan and Outlook through Graph work wherever Attaché runs. Only the COM route ties the Outlook account to this PC. EWS isn't an option: Microsoft starts blocking it in Exchange Online on 1 October 2026 and removes it on 1 April 2027.</p>
+        </div>
+        <p class="small muted">Budget, estimated: about 1,100 lines in four files. Shared commands about 150, COM about 300, IMAP about 250 with IMAPClient, Graph about 400 with msal. Capped at 1,200. It is the biggest skill, and it is still outside the core. Early open-source Outlook MCP servers such as outlook-classic-mcp and Robvred/outlook-mcp are useful for patterns: one Outlook thread, draft-only defaults and an audit log.</p>
+      </section>
+
+      <!-- §6 -->
+      <section id="backends">
+        <div class="sec-head"><span class="sec-no">§6</span><h2>Model backends</h2></div>
+        <p>Two kinds of backend sit behind one interface. API backends return a model response, and Attaché runs the tool loop. CLI backends run their own loop and call Attaché's tools through MCP.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Adapter</th><th>Speaks</th><th>Covers</th><th>Tool loop</th><th>Lines</th></tr></thead>
+            <tbody>
+              <tr><th><code>anthropic</code></th><td>Messages API</td><td>Claude API, and any Anthropic-compatible <code>base_url</code>: OpenRouter, Ollama, LM Studio, llama.cpp, vLLM, a LiteLLM proxy</td><td>Attaché</td><td class="num">~70</td></tr>
+              <tr><th><code>openai-chat</code></th><td>Chat Completions</td><td>Ollama, vLLM, LM Studio, llama.cpp, OpenRouter, Groq, Azure v1</td><td>Attaché</td><td class="num">~90</td></tr>
+              <tr><th><code>openai-responses</code></th><td>Responses API</td><td>OpenAI reasoning models with tools</td><td>Attaché</td><td class="num">~60</td></tr>
+              <tr><th><code>claude-cli</code></th><td><code>claude -p</code>, stream-json</td><td>Claude Code on your login or an API key, with its own tools, sandbox and skills</td><td>Claude Code</td><td class="num">~100</td></tr>
+              <tr><th><code>codex-cli</code> <span class="muted small">later</span></th><td><code>codex exec --json</code></td><td>Codex on a ChatGPT login</td><td>Codex</td><td class="num">~80</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="split">
+          <div>
+            <div class="code-label">attache.toml</div>
+<pre><code>[routing]
+own_chats   = "claude"      <span class="c"># your Claude login</span>
+group_chats = "claude-api"  <span class="c"># API key</span>
+
+[endpoints.claude]
+api   = "claude-cli"          <span class="c"># your Claude Code login</span>
+model = "claude-sonnet-5-5"
+
+[endpoints.claude-api]
+api     = "anthropic"
+model   = "claude-sonnet-5-5"
+key_env = "ANTHROPIC_API_KEY"
+
+[endpoints.openai]
+api     = "openai-responses"
+model   = "gpt-5.4"
+key_env = "OPENAI_API_KEY"
+
+[endpoints.local]
+api      = "openai-chat"
+base_url = "http://localhost:11434/v1"
+model    = "qwen3:32b"</code></pre>
+          </div>
+          <div>
+            <div class="code-label">agent.py, the whole shared loop</div>
+<pre><code>class Backend(Protocol):
+    async def run(self, turn: Turn) -&gt; Reply: ...
+
+async def tool_loop(complete, turn, steps=20):
+    msgs = turn.history + [user(turn.text)]
+    for _ in range(steps):
+        out = await complete(turn.system, msgs,
+                             turn.tools)
+        msgs.append(out.message)
+        if not out.calls:
+            return Reply(out.text)
+        msgs.append(await run_tools(out.calls, turn))
+    return Reply("I stopped after 20 steps.")</code></pre>
+            <p class="small muted">Each API adapter only implements <code>complete()</code>: one request, translated to and from a shared message format. <code>run_tools</code> checks every call against the sender's role first.</p>
+          </div>
+        </div>
+        <ul>
+          <li><strong>Official SDKs only.</strong> <code>anthropic</code> and <code>openai</code> together resolve to 17 packages. LiteLLM resolves to 59, shipped 241 releases in 2026, and had two compromised PyPI releases (1.82.7 and 1.82.8) on 24 March 2026. nanobot replaced it with the two SDKs that day.</li>
+          <li><strong>Why two OpenAI adapters.</strong> From GPT-5.4 on, Chat Completions only allows tool calls when <code>reasoning_effort</code> is <code>none</code>, so OpenAI's own reasoning models need Responses. Local and hosted compatible servers mostly speak Chat Completions.</li>
+          <li><strong>How <code>claude-cli</code> works.</strong> It runs <code>claude -p --output-format stream-json --verbose --resume &lt;session&gt;</code> in a folder outside your home, keeps one Claude session per chat, and points <code>--mcp-config</code> at an MCP endpoint on the local web server, which serves only Attaché's own tools (Claude Code brings its own file and shell tools). When a session starts fresh it gets the earlier conversation as a transcript. It only answers your own chats, never a group. The <code>claude-agent-sdk</code> package does the same thing in-process, but it bundles the CLI (104 to 117 MB per platform wheel), so it stays an optional extra.</li>
+          <li><strong>Subscriptions.</strong> Anthropic's terms allow a Pro or Max login for your own individual use. Anything that serves other people should use an API key. Your choice follows that: <code>claude-cli</code> on your login for your own chats, <code>claude-api</code> with a key for group chats. A chat can still name its own endpoint. If <code>ANTHROPIC_API_KEY</code> is set, <code>claude -p</code> uses it instead of your login.</li>
+        </ul>
+      </section>
+
+      <!-- §6 -->
+      <section id="artifacts">
+        <div class="sec-head"><span class="sec-no">§7</span><h2>Artifacts and files on demand</h2></div>
+        <p>An artifact is an HTML file the agent writes into <code>artifacts/</code>. The local server serves it with a small bridge script, so a to-do board edits the real to-do collection. An open page updates when the agent or someone else changes the data. Try the example below; the log on the right shows the calls the page would make.</p>
+
+        <div class="demo-wrap">
+          <div class="window">
+            <div class="window-bar"><span class="url">localhost:8765/a/todo-board</span><span class="pill">example data</span></div>
+            <div class="board" id="board"></div>
+            <form class="add-row" id="add-form">
+              <label for="add-input" class="sr">New to-do</label>
+              <input id="add-input" placeholder="Add a to-do" autocomplete="off">
+              <button type="submit">Add</button>
+            </form>
+          </div>
+          <div class="window log-panel">
+            <div class="window-bar"><span>Bridge calls</span><button type="button" class="ghost" id="agent-btn">Agent adds one</button></div>
+            <ol class="log" id="log" aria-live="polite"></ol>
+          </div>
+        </div>
+
+        <div class="split">
+          <div>
+            <div class="code-label">What generated pages call</div>
+<pre><code>const todos = await attache.db.list("todos",
+                {list: "Home"})
+await attache.db.put("todos", id,
+                {...t, status: "done"})
+attache.on("todos", render)   <span class="c">// live, over SSE</span>
+<span class="c">// attache.ask(prompt) arrives in phase 3</span></code></pre>
+            <p class="small muted">The names follow Claude.ai's artifact storage API, which models already write against. Each page gets a token that reaches only the collections named in its <code>attache-collections</code> meta tag.</p>
+          </div>
+          <div>
+            <h3>How it reaches people</h3>
+            <ol>
+              <li>The agent calls <code>artifact(name="trip-checklist", html=…)</code>; the page declares <code>&lt;meta name="attache-collections" content="trip"&gt;</code>.</li>
+              <li>In the web app the page opens in a sandboxed frame. It can't reach the internet, other pages or any data it didn't declare.</li>
+              <li>In a chat app the reply is a PNG snapshot plus a signed link that expires. The signature is an HMAC from the standard library. Links are not single-use, because link-preview crawlers open them first.</li>
+              <li>On a laptop, links go out through Tailscale Funnel when you turn sharing on. In the cloud they use the public URL. Cloudflare quick tunnels also work but drop live updates, since they don't pass SSE.</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Someone asks for</th><th>Made by</th><th>Lives in</th></tr></thead>
+            <tbody>
+              <tr><th>An answer or a list</th><td>The model, as a chat message</td><td>Core</td></tr>
+              <tr><th>Markdown or CSV</th><td>Standard library</td><td>Core</td></tr>
+              <tr><th>An interactive page</th><td><code>artifact</code> tool and bridge</td><td>Core</td></tr>
+              <tr><th>A PNG or PDF of a page</th><td>Chrome or Edge already on the machine, headless. Saves the 150 to 200 MB Playwright browser download</td><td><code>render</code> skill</td></tr>
+              <tr><th>A Word document</th><td>python-docx through PEP 723</td><td><code>docx</code> skill</td></tr>
+              <tr><th>A spreadsheet</th><td>openpyxl</td><td><code>xlsx</code> skill</td></tr>
+              <tr><th>Slides</th><td>python-pptx</td><td><code>pptx</code> skill</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Generated pages share the design tokens in <code>artifact-kit</code>, so they look like one product. Ask for a different look and the agent edits the kit.</p>
+      </section>
+
+      <!-- §7 -->
+      <section id="groups">
+        <div class="sec-head"><span class="sec-no">§8</span><h2>Group chats and people</h2></div>
+        <p>In a group anyone can talk to Attaché, so the router settles three questions in a fixed order before a model sees anything.</p>
+        <ol class="pipeline">
+          <li><b>1 · ACCESS</b><h3>Is this chat allowed?</h3><p>Chats and people are listed in <code>attache.toml</code>, keyed by platform IDs, never display names. Unknown chats are ignored.</p></li>
+          <li><b>2 · TRIGGER</b><h3>Was Attaché addressed?</h3><p>A mention, a reply to the bot, or the chat's pattern. Other messages are stored as context and never answered.</p></li>
+          <li><b>3 · ROLE</b><h3>Who is asking?</h3><p>Owner, member or guest. The role decides which tools the turn gets.</p></li>
+        </ol>
+        <div class="split">
+          <div class="chat" aria-label="Example Signal family group">
+            <div class="chat-head"><strong>Family</strong><span>Signal group · You, Sam, Jo, Attaché</span></div>
+            <div class="msg"><b>Sam</b>@Attaché what time is our ferry on Saturday?<time>18:02</time></div>
+            <div class="msg bot"><b>Attaché</b>09:40 from Portsmouth. Check-in closes at 08:55, so leave by 08:00.<time>18:02</time></div>
+            <div class="msg"><b>Jo</b>@Attaché can you send the packing list as a PDF?<time>18:05</time></div>
+            <div class="msg bot"><b>Attaché</b><span class="filecard"><i>PDF</i>packing-list.pdf · 2 pages</span><time>18:05</time></div>
+            <div class="msg me"><b>You</b>@Attaché make us a shared checklist for the trip so everyone can tick things off<time>18:07</time></div>
+            <div class="msg bot"><b>Attaché</b>
+              <span class="snap"><span class="lines"><span class="t">Passports</span><span class="t">Ferry tickets</span><span>Phone chargers</span><span>Swimming kit</span></span><small>Trip checklist · 14 items<em>Tap to open. The link expires in 7 days.</em></small></span>
+              <time>18:07</time></div>
+            <div class="msg"><b>Sam</b>@Attaché read me Mum's last email<time>18:09</time></div>
+            <div class="msg bot"><b>Attaché</b>Email is private to the owner, so I can't read it out here.<time>18:09</time></div>
+          </div>
+          <div>
+            <h3>Safeguards</h3>
+            <ul>
+              <li>A guest's turn never gets private data and outbound sending together. That combination, plus untrusted input, is what Simon Willison calls the “lethal trifecta”.</li>
+              <li>Unmentioned messages enter the prompt fenced and labelled as transcript, never as instructions. Forged headers in message text are stripped.</li>
+              <li>Each sender and each chat gets a rate limit, and non-owner turns a daily cost cap (phase 2).</li>
+              <li>The bot ignores its own messages and other bots.</li>
+              <li>Sending to a different chat needs your confirmation.</li>
+              <li>In Slack the bot only sees channels it has been invited to. In Signal it only sees groups it has been added to, and it knows people by their Signal account ID, because phone numbers are hidden by default.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Tool access</th><th>Owner (you)</th><th>Member</th><th>Guest</th></tr></thead>
+            <tbody>
+              <tr><th>Answers in chat</th><td class="yes">Yes</td><td class="yes">Yes</td><td>Only if the chat is public</td></tr>
+              <tr><th>Files and artifacts for this chat</th><td class="yes">Yes</td><td class="yes">Yes</td><td>Read-only links</td></tr>
+              <tr><th>To-dos and reminders</th><td class="yes">All lists</td><td>Tick off and add items on lists shared with the chat; own reminders</td><td class="no">No</td></tr>
+              <tr><th>Email, calendar, other chats' memory</th><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+              <tr><th>Send to other chats</th><td>Yes, after confirming</td><td class="no">No</td><td class="no">No</td></tr>
+              <tr><th>Shell commands</th><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+              <tr><th>Edit skills</th><td class="yes">Yes</td><td>Suggest, you approve in your DM</td><td class="no">No</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>Shared lists</h3>
+        <p>Members of a chat can tick off items on any list shared with that chat. Both ways of ticking update the same record, so every open copy of the list changes at once.</p>
+        <ul>
+          <li>In the chat: “@Attaché tick off passports”. The tick is credited to the sender, because the router knows who they are.</li>
+          <li>On the list's page, from the link the bot posted. That link can change only that list, expires, and can be revoked. Ticks made there are logged as “via the Family link”, because a shared link can't tell people apart.</li>
+          <li>Members can add items too. Only you can delete a list, change who it is shared with or revoke its link. If you'd rather members only tick, that is one setting.</li>
+        </ul>
+        <h3>Slack and Signal</h3>
+        <p>Both run as sidecars with the same protocol, so the core treats them alike. They suit different people: Slack for you and colleagues, Signal for family and friends.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Slack</th><th>Signal</th></tr></thead>
+            <tbody>
+              <tr><th>Best for</th><td>Your own DM and work channels</td><td>Family and friends' groups</td></tr>
+              <tr><th>Setup on this PC</th><td>Create the app from a manifest and paste two tokens. Pure Python (slack-bolt)</td><td>Java 25 (not installed today), signal-cli, and a phone number for the bot, verified with a captcha and an SMS or voice code</td></tr>
+              <tr><th>Public URL</th><td>Not needed (Socket Mode)</td><td>Not needed</td></tr>
+              <tr><th>Standing</th><td>Official API. A single-workspace internal app fits Slack's API terms</td><td>No official bot API. signal-cli is unofficial but long tolerated. Signal's terms forbid bulk and automated messaging</td></tr>
+              <tr><th>Who can join</th><td>Members of your workspace. The free plan allows no guests</td><td>Anyone on Signal</td></tr>
+              <tr><th>Approvals</th><td>Buttons</td><td>A 👍 or 👎 reaction, or a reply</td></tr>
+              <tr><th>Privacy</th><td>Slack stores messages. Not end-to-end encrypted</td><td>End-to-end encrypted</td></tr>
+              <tr><th>Upkeep</th><td>Low</td><td>signal-cli has to stay under three months old or it can stop working</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="split">
+          <div>
+            <div class="code-label">Approval requests, the one addition to the protocol</div>
+<pre><code><span class="c"># attache → channel</span>
+{"type": "ask", "chat_id": "D07…", "ask_id": "a19",
+ "text": "Jo wants shopping lists as checklists. Update the skill?",
+ "options": ["Approve", "Decline"]}
+
+<span class="c"># channel → attache</span>
+{"type": "answer", "ask_id": "a19",
+ "sender_id": "U04…", "choice": "Approve"}</code></pre>
+            <p class="small muted">The router accepts an answer only from the person the question was for. Slack draws the options as buttons. Signal sends the question as text and maps 👍 and 👎 reactions to the two options.</p>
+          </div>
+          <div class="chat" aria-label="Example approval request in a Slack direct message">
+            <div class="chat-head"><strong>Attaché</strong><span>Slack, direct message</span></div>
+            <div class="msg bot"><b>Attaché</b>Jo asked in Family (Signal): “always send the shopping list as a checklist”. Update the shopping skill?<span class="fakebtns" aria-hidden="true"><span class="primary">Approve</span><span>Decline</span></span><time>19:12</time></div>
+            <div class="msg bot"><b>Attaché</b>Approved by you. I updated the shopping skill (commit 7d02e1f) and told the Family group.<time>19:13</time></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- §8 -->
+      <section id="interface">
+        <div class="sec-head"><span class="sec-no">§9</span><h2>CLI or web? Both, kept thin</h2></div>
+        <p>You weren't sure whether people should use a CLI or a web interface. My recommendation is three surfaces, each with one job, and none of them heavy.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Surface</th><th>Job</th><th>Built with</th></tr></thead>
+            <tbody>
+              <tr><th>CLI</th><td>Set up and operate: <code>init</code>, <code>run</code>, <code>chat</code>, <code>skills</code>, <code>service</code>, <code>doctor</code></td><td>argparse</td></tr>
+              <tr><th>Local web page</th><td>Chat with history, open and pin artifacts, the Home view</td><td>One HTML file and Starlette at <code>localhost:8765</code></td></tr>
+              <tr><th>Chat apps</th><td>Daily use from your phone, and group chats</td><td>Channel skills</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="split">
+          <div>
+<pre><code><span class="prompt">$</span> uvx attache init
+? Your name › Alex
+? Model › claude-cli (your Claude Code login)
+? Chat apps › slack, signal
+  Slack: create the app from attache-slack.yml
+  Bot token (xoxb-…) › ••••••••
+  App token (xapp-…) › ••••••••
+  Signal needs Java 25. Install with winget? › yes
+  Number for the bot › +44 7700 900123
+  Captcha from signalcaptchas.org › ••••••••
+  Code from the SMS › ••••••
+✓ Wrote ~/.attache/attache.toml
+✓ Copied 11 starter skills
+✓ Started a git repo in ~/.attache
+
+<span class="prompt">$</span> attache run
+  Open http://127.0.0.1:8765/#t=…
+  chats  terminal, slack (3), signal (2)
+  tasks  3 scheduled, next 07:30</code></pre>
+          </div>
+          <div>
+            <p>The Home view is itself an artifact built from <code>artifact-kit</code>: today's to-dos, reminders and pinned pages. Ask for a different layout and the agent edits it. The web UI code stays a chat box and an artifact frame.</p>
+            <p><code>attache service install</code> keeps it running after login, using launchd on macOS, a systemd user unit on Linux and Task Scheduler on Windows. The service needs the <code>uv tool install</code> copy, because the <code>uvx</code> cache can be cleared. On Windows the task runs only while you're logged on and without elevated rights, which Outlook automation needs.</p>
+            <p class="muted">Not recommended: a Textual TUI, a React app, NiceGUI, Gradio or Streamlit. Each adds more code or dependencies than the whole web page.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §9 -->
+      <section id="budget">
+        <div class="sec-head"><span class="sec-no">§10</span><h2>Code budget</h2></div>
+        <p>Phase 1 came in at 1,576 lines of code in <code>src/attache</code>, against a cap of 1,600 that CI enforces. Blank lines, comments and docstrings don't count, so the budget never pushes code to be denser than it should be. Bundled skills, static files and tests don't count either, but each bundled skill has its own cap: 300 lines by default, 1,200 for <code>mail</code>, which has three backends.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Module</th><th>Job</th><th>Code lines</th><th class="bar">Share</th></tr></thead>
+            <tbody>
+              <tr><th>cli.py</th><td>init, chat, run, doctor, skills</td><td class="num">100</td><td class="bar"><span style="--w:51.3%"></span></td></tr>
+              <tr><th>app.py</th><td>Wiring, supervision, clean shutdown</td><td class="num">65</td><td class="bar"><span style="--w:33.3%"></span></td></tr>
+              <tr><th>config.py</th><td>attache.toml, init_home</td><td class="num">117</td><td class="bar"><span style="--w:60.0%"></span></td></tr>
+              <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">165</td><td class="bar"><span style="--w:84.6%"></span></td></tr>
+              <tr><th>router.py</th><td>Access, roles, fencing, prompt, turns</td><td class="num">160</td><td class="bar"><span style="--w:82.1%"></span></td></tr>
+              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">53</td><td class="bar"><span style="--w:27.2%"></span></td></tr>
+              <tr><th>types.py</th><td>Shared types</td><td class="num">88</td><td class="bar"><span style="--w:45.1%"></span></td></tr>
+              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">47</td><td class="bar"><span style="--w:24.1%"></span></td></tr>
+              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">75</td><td class="bar"><span style="--w:38.5%"></span></td></tr>
+              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">115</td><td class="bar"><span style="--w:59.0%"></span></td></tr>
+              <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">26</td><td class="bar"><span style="--w:13.3%"></span></td></tr>
+              <tr><th>tools.py</th><td>Tools by role, path confinement</td><td class="num">174</td><td class="bar"><span style="--w:89.2%"></span></td></tr>
+              <tr><th>skills.py</th><td>Discovery, index, git history</td><td class="num">94</td><td class="bar"><span style="--w:48.2%"></span></td></tr>
+              <tr><th>channels.py</th><td>Channel manager, terminal</td><td class="num">40</td><td class="bar"><span style="--w:20.5%"></span></td></tr>
+              <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">59</td><td class="bar"><span style="--w:30.3%"></span></td></tr>
+              <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP endpoint</td><td class="num">195</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
+              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>1,576</strong></td><td class="bar"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="split">
+          <div>
+            <div class="code-label">pyproject.toml</div>
+<pre><code>[project]
+name = "attache"
+requires-python = "&gt;=3.11"
+dependencies = [
+  "anthropic", "openai",
+  "starlette", "uvicorn",
+  "pyyaml", "cronsim",
+]
+
+[project.optional-dependencies]
+claude-sdk = ["claude-agent-sdk"]
+
+[project.scripts]
+attache = "attache.cli:main"</code></pre>
+          </div>
+          <div>
+            <div class="code-label">tests/test_budget.py</div>
+<pre><code>CORE_LIMIT = 1600  <span class="c"># blanks, comments, docstrings free</span>
+
+def test_core_stays_small():
+    lines = sum(code_lines(p) for p in core_files())
+    assert lines &lt;= CORE_LIMIT, (
+        f"core is {lines} lines of code; "
+        "move the feature into a skill")</code></pre>
+            <p class="small muted">pyyaml and cronsim have no dependencies of their own. Starlette needs only anyio. Everything else, such as slack-bolt, pywin32, IMAPClient or python-docx, is declared by the skill script that needs it and never touches the core install.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §10 -->
+      <section id="roadmap">
+        <div class="sec-head"><span class="sec-no">§11</span><h2>Roadmap</h2></div>
+        <ol class="phases">
+          <li><div class="ph">PHASE 1<strong>Local core</strong></div><div><p>Package skeleton and budget test, config, store, terminal and web chat, the four adapters, tools, the skills folder with git, the scheduler, the <code>todos</code> skill and the Home artifact.</p><p class="done"><b>Done when</b><code>uvx attache</code> gives a working assistant on localhost with to-dos and reminders.</p></div></li>
+          <li><div class="ph">PHASE 2<strong>Messaging</strong></div><div><p>The sidecar protocol with approval requests, the <code>slack</code> and <code>signal</code> skills, router policy and roles, file sending, the <code>render</code> skill for PNG and PDF.</p><p class="done"><b>Done when</b>you approve actions from a Slack DM, and a family Signal group can ask for answers, files and a shared checklist.</p></div></li>
+          <li><div class="ph">PHASE 3<strong>Email and files</strong></div><div><p>The <code>mail</code> skill with its three backends: Outlook classic through COM or Microsoft Graph with OAuth, and IMAP for Gmail and Titan, with approved sends. The <code>mailbox</code> knowledge skill and a 07:30 triage task. Then docx, xlsx and pptx skills, sharing through Tailscale Funnel, <code>attache.ask</code> from artifacts, and <code>attache service install</code>.</p><p class="done"><b>Done when</b>each morning the assistant files new mail in all three accounts, drafts the replies you need, sends the ones you approve in Slack, and starts at login.</p></div></li>
+          <li><div class="ph">PHASE 4<strong>Cloud</strong></div><div><p>A Dockerfile with <code>ATTACHE_HOME=/data</code>, an owner login for the web page, a Fly.io guide (one machine, a volume, auto-stop off so the scheduler keeps running), an MCP client for the API backends, the <code>codex-cli</code> adapter.</p><p class="done"><b>Done when</b>the same package runs on a small cloud machine, with your folder synced by git.</p></div></li>
+        </ol>
+      </section>
+
+      <!-- §11 -->
+      <section id="risks">
+        <div class="sec-head"><span class="sec-no">§12</span><h2>Risks and decisions</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+            <tbody>
+              <tr><th>The core grows</th><td>The budget test <span class="ref">D9</span>, features as skills <span class="ref">D2</span>, and a CONTRIBUTING rule copied from nanoclaw.</td></tr>
+              <tr><th>A message or email tries to steer the assistant</th><td>Incoming content is marked untrusted and never treated as instructions. Sending email, forwarding and messaging other chats need your yes <span class="ref">D7</span> <span class="ref">D10</span>.</td></tr>
+              <tr><th>Microsoft moves you to new Outlook</th><td>Classic installs are supported until at least 2029. <code>mail doctor</code> detects the switch, and one line in <code>accounts.toml</code> moves the account to Graph.</td></tr>
+              <tr><th>A Graph sign-in expires or is blocked</th><td><code>doctor</code> separates expiry, consent and policy problems and asks you to sign in again. On this PC, COM stays available as a fallback.</td></tr>
+              <tr><th>Mail passwords leak</th><td>Stored in Windows Credential Manager through keyring, never in <code>attache.toml</code> or git. App passwords can be revoked on their own without touching your main password.</td></tr>
+              <tr><th>signal-cli stops working after a Signal change</th><td><code>attache doctor</code> checks its version, and the signal skill updates it. Releases come about monthly, and versions older than three months may fail.</td></tr>
+              <tr><th>Signal flags the bot's number</th><td>A dedicated number, low volume, and replies only to people who write to it, plus your own reminders.</td></tr>
+              <tr><th>Slack free plan limits</th><td>Attaché keeps its own message history in SQLite, so 90 days of visible Slack history doesn't limit its memory.</td></tr>
+              <tr><th>Prompt injection in groups</th><td>Toolsets by role, the trifecta rule, fenced context <span class="ref">D7</span>.</td></tr>
+              <tr><th>Shell access on the host</th><td><code>run</code> and the file tools are owner-only and confined to <code>~/.attache</code>, with <code>.secret</code>, the database and git blocked. <code>claude-cli</code> uses Claude Code's own permissions on your login, runs outside your home, and only answers your own chats. Docker for <code>run</code> comes later as an option.</td></tr>
+              <tr><th>Subscription terms</th><td>Group chats default to an API-key endpoint.</td></tr>
+              <tr><th>Weak tool calling on local models</th><td>Tolerant argument parsing, a list of tested models, and a model choice per chat.</td></tr>
+              <tr><th>CLI output formats change</th><td>Parse only <code>assistant</code> text and the final <code>result</code>, and test against recorded fixtures. Pin versions.</td></tr>
+              <tr><th>Windows differences</th><td>Copies instead of symlinks, Task Scheduler for the service, and CI on Windows from the start.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>Decided on 19 October</h3>
+        <ul>
+          <li><strong>Name:</strong> <code>attache</code>.</li>
+          <li><strong>Chat apps:</strong> Slack and Signal, both in phase 2, with Signal on your separate number. Telegram and WhatsApp are out of scope.</li>
+          <li><strong>Models:</strong> your Claude login (<code>claude-cli</code>) for your own chats, an API key (<code>claude-api</code>) for group chats.</li>
+          <li><strong>Email:</strong> Outlook through COM or Microsoft Graph with OAuth, chosen per account; Gmail and Titan over IMAP; all through the <code>mail</code> skill.</li>
+          <li><strong>Shared lists:</strong> members of a chat can tick off items on lists shared with it.</li>
+        </ul>
+        <h3>Deferred</h3>
+        <ul>
+          <li><strong>Cloud target.</strong> Nothing before phase 4 depends on it. Keeping everything in one folder under git, with Docker as the packaging, leaves Fly.io, Railway, a VPS and a home server all open.</li>
+        </ul>
+        <h3>To set up when we get there</h3>
+        <ul>
+          <li><strong>Phase 2, Slack:</strong> a workspace, and an app created from the manifest Attaché provides.</li>
+          <li><strong>Phase 2, Signal:</strong> Java 25 on this PC, then registering your separate number with a captcha and an SMS or voice code. Registering signs out any Signal app already using that number, so keep it for Attaché alone.</li>
+          <li><strong>Phase 3, Gmail:</strong> 2-Step Verification on, then an app password.</li>
+          <li><strong>Phase 3, Outlook through Graph (optional):</strong> a free Azure account for an Entra tenant, an app registration (desktop app, redirect <code>http://localhost</code>, delegated mail, calendar and tasks permissions), then <code>mail.py login outlook</code>.</li>
+          <li><strong>Phase 3, Titan:</strong> “Enable Titan on Other Apps” in webmail, and an Application Password if 2FA is on.</li>
+        </ul>
+        <div class="memo">
+          <span class="tag">Next step</span>
+          <p>Phase 1 is built and in review as a pull request in the private repo <code>OpenAfterHours/attache</code>. It started from a repo skeleton: the budget test, the store, the router, the <code>anthropic</code> and <code>claude-cli</code> adapters, and the terminal channel. A read-only <code>mail doctor</code> run against Outlook classic early on would prove COM access on this PC well before phase 3.</p>
+        </div>
+      </section>
+
+      <!-- §12 -->
+      <section id="sources">
+        <div class="sec-head"><span class="sec-no">§13</span><h2>Sources</h2></div>
+        <p class="small muted">Checked on 19 October 2026. Line counts for nanoclaw come from its repository at three points in time. The nanobot line count is an estimate from its file tree.</p>
+        <ul class="sources">
+          <li><a href="https://github.com/nanocoai/nanoclaw">nanoclaw repository</a>: README, CONTRIBUTING, docs</li>
+          <li><a href="https://github.com/nanocoai/nanoclaw/pull/212">nanoclaw PR #212</a>: no web UI</li>
+          <li><a href="https://docs.nanoclaw.dev/concepts/entity-model">nanoclaw entity model</a>: engage modes, roles</li>
+          <li><a href="https://github.com/openclaw/openclaw">OpenClaw repository</a></li>
+          <li><a href="https://docs.openclaw.ai/channels/groups">OpenClaw group policy</a></li>
+          <li><a href="https://docs.openclaw.ai/platforms/mac/canvas">OpenClaw canvas</a></li>
+          <li><a href="https://github.com/HKUDS/nanobot">nanobot repository</a></li>
+          <li><a href="https://github.com/HKUDS/nanobot/commit/3dfdab7">nanobot commit replacing LiteLLM</a></li>
+          <li><a href="https://code.claude.com/docs/en/headless">Claude Code headless mode</a></li>
+          <li><a href="https://code.claude.com/docs/en/cli-reference">Claude Code CLI reference</a></li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/python">Claude Agent SDK for Python</a></li>
+          <li><a href="https://code.claude.com/docs/en/legal-and-compliance">Claude Code legal and compliance</a>: subscription use</li>
+          <li><a href="https://agentskills.io/specification">Agent Skills specification</a></li>
+          <li><a href="https://developers.openai.com/api/docs/guides/migrate-to-responses">OpenAI: migrate to Responses</a></li>
+          <li><a href="https://developers.openai.com/api/docs/deprecations">OpenAI deprecations</a></li>
+          <li><a href="https://learn.chatgpt.com/docs/non-interactive-mode">Codex non-interactive mode</a></li>
+          <li><a href="https://securitylabs.datadoghq.com/articles/litellm-compromised-pypi-teampcp-supply-chain-campaign/">Datadog: LiteLLM PyPI compromise</a></li>
+          <li><a href="https://openrouter.ai/docs/guides/guides/claude-code-integration">OpenRouter Anthropic compatibility</a></li>
+          <li><a href="https://github.com/AsamK/signal-cli">signal-cli</a></li>
+          <li><a href="https://github.com/AsamK/signal-cli/blob/master/man/signal-cli-jsonrpc.5.adoc">signal-cli JSON-RPC</a></li>
+          <li><a href="https://signal.org/legal/">Signal terms</a></li>
+          <li><a href="https://pypi.org/project/slack-bolt/">slack-bolt on PyPI</a></li>
+          <li><a href="https://docs.slack.dev/reference/app-manifest">Slack app manifests</a></li>
+          <li><a href="https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps">Slack rate limits for non-Marketplace apps</a></li>
+          <li><a href="https://slack.com/terms-of-service/api">Slack API terms</a></li>
+          <li><a href="https://slack.com/help/articles/27204752526611">Slack free plan limits</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/microsoft-365-apps/outlook/get-started/guide-product-availability">Classic Outlook availability</a></li>
+          <li><a href="https://pypi.org/project/pywin32/">pywin32 on PyPI</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/office/vba/outlook/how-to/security/security-behavior-of-the-outlook-object-model">Outlook object model security behaviour</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/office/client-developer/integration/considerations-unattended-automation-office-microsoft-365-for-unattended-rpa">Microsoft: unattended Office automation</a></li>
+          <li><a href="https://www.itelio.com/en/microsoft-message-center/MC1227454">EWS retirement in Exchange Online (MC1227454)</a></li>
+          <li><a href="https://support.microsoft.com/en-us/topic/c5d65390-9676-4763-b41f-d7986499a90d">Outlook.com ends password sign-in for IMAP</a></li>
+          <li><a href="https://developers.google.com/workspace/gmail/imap/imap-smtp">Gmail IMAP and SMTP</a></li>
+          <li><a href="https://developers.google.com/workspace/gmail/imap/imap-extensions">Gmail IMAP extensions</a></li>
+          <li><a href="https://support.google.com/accounts/answer/185833">Google app passwords</a></li>
+          <li><a href="https://support.google.com/mail/answer/22839">Gmail sending limits</a></li>
+          <li><a href="https://support.titan.email/hc/en-us/articles/900000215446-Configure-Titan-on-other-apps-using-IMAP-POP">Titan IMAP and SMTP settings</a></li>
+          <li><a href="https://support.titan.email/hc/en-us/articles/59899461438233-Application-Password-in-Titan-for-Third-Party-Clients">Titan application passwords</a></li>
+          <li><a href="https://support.titan.email/hc/en-us/articles/360038836914">Titan sending limits</a></li>
+          <li><a href="https://pypi.org/project/IMAPClient/">IMAPClient on PyPI</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-create-new-tenant">Microsoft Entra: create a tenant</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app">Microsoft Entra: register an app</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/entra/identity-platform/publisher-verification-overview">Publisher verification</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens">Refresh token lifetimes</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/graph/permissions-reference">Microsoft Graph permissions</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/graph/outlook-immutable-id">Microsoft Graph immutable IDs</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/graph/throttling-limits">Microsoft Graph throttling limits</a></li>
+          <li><a href="https://pypi.org/project/msal/">msal on PyPI</a></li>
+          <li><a href="https://github.com/AzureAD/microsoft-authentication-extensions-for-python">msal-extensions</a></li>
+          <li><a href="https://pypi.org/project/keyring/">keyring on PyPI</a></li>
+          <li><a href="https://github.com/anasahmed07/outlook-classic-mcp">outlook-classic-mcp</a></li>
+          <li><a href="https://github.com/Robvred/outlook-mcp">Robvred/outlook-mcp</a></li>
+          <li><a href="https://docs.slack.dev/apis/events-api/using-socket-mode">Slack Socket Mode</a></li>
+          <li><a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/">Simon Willison: the lethal trifecta</a></li>
+          <li><a href="https://docs.astral.sh/uv/guides/scripts/">uv: running scripts, PEP 723</a></li>
+          <li><a href="https://docs.astral.sh/uv/concepts/tools/">uv: tools</a></li>
+          <li><a href="https://tailscale.com/kb/1223/funnel">Tailscale Funnel</a></li>
+          <li><a href="https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/">Cloudflare quick tunnels</a></li>
+          <li><a href="https://fly.io/docs/js/the-basics/volumes">Fly.io volumes</a></li>
+        </ul>
+      </section>
+
+      <footer>
+        <span>Attaché · design proposal v0.1</span>
+        <span>Package metadata from PyPI, 19 Oct 2026</span>
+      </footer>
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  var cols=[["todo","To do"],["waiting","Waiting on"],["done","Done"]];
+  var items=[
+    {id:"t1",title:"Renew car insurance",meta:"Home · due Fri 24 Oct",status:"todo"},
+    {id:"t2",title:"Send Q3 figures to Priya",meta:"Work · due Tue 21 Oct",status:"todo"},
+    {id:"t3",title:"Sign the school trip form",meta:"Family · added by Jo",status:"todo"},
+    {id:"t4",title:"Boiler service quote",meta:"Home · waiting on Dan since 14 Oct",status:"waiting",who:"Dan"},
+    {id:"t5",title:"Book the dentist",meta:"Home",status:"done"}
+  ];
+  var queue=[
+    {title:"Book the MOT before 3 Nov",meta:"Car · found in your email"},
+    {title:"Reply to Priya about Thursday",meta:"Work · found in your email"}
+  ];
+  var next=6;
+  var board=document.getElementById("board");
+  var log=document.getElementById("log");
+  var form=document.getElementById("add-form");
+  var input=document.getElementById("add-input");
+  var agentBtn=document.getElementById("agent-btn");
+  if(!board||!log)return;
+
+  function line(text,dir){
+    var li=document.createElement("li");
+    li.className=dir;li.textContent=text;
+    log.appendChild(li);log.scrollTop=log.scrollHeight;
+  }
+  function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
+
+  function render(freshId){
+    board.textContent="";
+    cols.forEach(function(c){
+      var list=items.filter(function(i){return i.status===c[0];});
+      var col=el("div","col");
+      var head=el("div","col-head");
+      head.appendChild(el("h4",null,c[1]));
+      head.appendChild(el("span",null,String(list.length)));
+      col.appendChild(head);
+      var ul=el("ul");
+      list.forEach(function(i){
+        var li=el("li","item"+(i.status==="done"?" done":"")+(i.id===freshId?" fresh":""));
+        var cb=document.createElement("input");
+        cb.type="checkbox";cb.id="cb-"+i.id;cb.checked=i.status==="done";
+        cb.addEventListener("change",function(){
+          if(cb.checked){i.prev=i.status;i.status="done";}
+          else{i.status=i.prev&&i.prev!=="done"?i.prev:"todo";}
+          line('attache.db.put("todos", "'+i.id+'", {status: "'+i.status+'"})',"out");
+          render();
+        });
+        var lab=el("label",null,i.title);lab.htmlFor=cb.id;
+        li.appendChild(cb);li.appendChild(lab);
+        li.appendChild(el("div","meta",i.meta));
+        if(i.status==="waiting"){
+          var b=el("button","ghost chase","Chase "+(i.who||""));
+          b.type="button";
+          b.addEventListener("click",function(){
+            b.disabled=true;
+            line('attache.ask("Draft a polite chase to '+(i.who||"them")+' about: '+i.title+'")',"out");
+            setTimeout(function(){line("reply: draft saved in Mail › Drafts for you to send","in");},700);
+          });
+          li.appendChild(b);
+        }
+        ul.appendChild(li);
+      });
+      col.appendChild(ul);
+      board.appendChild(col);
+    });
+  }
+
+  form.addEventListener("submit",function(e){
+    e.preventDefault();
+    var t=input.value.trim();if(!t)return;
+    var id="t"+(next++);
+    items.push({id:id,title:t,meta:"Home · added by you",status:"todo"});
+    input.value="";
+    line('attache.db.put("todos", "'+id+'", {title: "'+t.replace(/"/g,'\\"')+'", status: "todo"})',"out");
+    render(id);
+  });
+
+  agentBtn.addEventListener("click",function(){
+    var q=queue.shift();if(!q)return;
+    var id="t"+(next++);
+    items.unshift({id:id,title:q.title,meta:q.meta,status:"todo"});
+    line('event todos.changed by attache (morning email triage): '+id,"in");
+    render(id);
+    if(!queue.length){agentBtn.disabled=true;agentBtn.textContent="Queue empty";}
+  });
+
+  line('attache.db.list("todos") returned 5 items',"out");
+  line('attache.on("todos", render) subscribed to live events',"out");
+  render();
+})();
+</script>

@@ -1,0 +1,118 @@
+name: Release
+
+# Cutting a release is: bump `__version__` in src/attache/__init__.py, merge, tag `vX.Y.Z` on
+# main, push the tag. Everything below happens on the tag. See RELEASING.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs: this workflow can publish to PyPI and write releases.
+jobs:
+  verify:
+    name: verify tag matches package version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # First and dependency-free: a tag that disagrees with __version__ should cost seconds,
+      # not a full test matrix.
+      - id: version
+        shell: python
+        run: |
+          import ast, os, re, sys
+          tree = ast.parse(open("src/attache/__init__.py", encoding="utf-8").read())
+          version = next(
+              node.value.value
+              for node in tree.body
+              if isinstance(node, ast.Assign) and node.targets[0].id == "__version__"
+          )
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          if tag != version:
+              sys.exit(f"tag v{tag} does not match __version__ {version}")
+          prerelease = bool(re.search(r"(a|b|rc|dev)\d*$", version))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"version={version}\nprerelease={str(prerelease).lower()}\n")
+
+  ci:
+    name: ci
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: build release artifacts
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - run: uv build
+      - name: Check the metadata PyPI will render
+        run: uvx twine check --strict dist/*
+      # The wheel filename is what gets uploaded, so assert on it rather than trusting that the
+      # build backend read the same version the verify job did.
+      - name: Confirm the artifacts carry the tagged version
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -f "dist/attache-${VERSION}-py3-none-any.whl" || { ls -1 dist; exit 1; }
+          test -f "dist/attache-${VERSION}.tar.gz" || { ls -1 dist; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 30
+
+  publish:
+    name: publish to PyPI
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Trusted Publishing: PyPI accepts uploads from this repository and this workflow file, with
+    # no API token stored anywhere. GitHub's free plan only allows environments in public
+    # repositories, so there is no `environment:` here while the repo is private. Once it is
+    # public, add `environment: {name: pypi, url: https://pypi.org/p/attache}` and set the same
+    # environment name on PyPI's publisher; that is also where an approval gate can go.
+    permissions:
+      id-token: write  # mints the short-lived OIDC token PyPI exchanges for an upload token
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  github-release:
+    name: create the GitHub release
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0  # --generate-notes diffs against the previous tag
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: dist
+          path: dist/
+      # Last, so a release never claims success for an upload that failed.
+      - name: gh release create
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=(--generate-notes --verify-tag --title "${GITHUB_REF_NAME}")
+          if [ "${PRERELEASE}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${flags[@]}" dist/*

@@ -1,0 +1,88 @@
+/* Attaché design tokens (artifact-kit/tokens.css). Paste this whole file into a <style>
+   element at the top of every artifact: pages cannot load other files. Use only these color
+   tokens, so the page follows the viewer's light or dark setting. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #eeece7;
+  --text: #1f1e1c;
+  --muted: #6d6a64;
+  --border: #e0ddd6;
+  --accent: #2b5fd9;
+  --accent-text: #ffffff;
+  --ok: #2e7d32;
+  --warn: #9a5b00;
+  --danger: #b3261e;
+  --radius: 10px;
+  --gap: 12px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --surface: #1f1f1d;
+    --surface-2: #2a2a27;
+    --text: #ecebe7;
+    --muted: #a3a09a;
+    --border: #363531;
+    --accent: #7aa2ff;
+    --accent-text: #0d1630;
+    --ok: #81c784;
+    --warn: #ffb74d;
+    --danger: #ff8a80;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px;
+  background: var(--bg); color: var(--text); font: 15px/1.5 var(--font);
+}
+h1 { margin: 0; font-size: 20px; font-weight: 650; }
+h2 {
+  margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.page { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.card {
+  padding: 12px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.error { color: var(--danger); }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+.board { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.column { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.item .title { overflow-wrap: anywhere; }
+.item.done .title { color: var(--muted); text-decoration: line-through; }
+.badge {
+  padding: 1px 8px; font-size: 12px; white-space: nowrap; color: var(--muted);
+  background: var(--surface-2); border-radius: 999px;
+}
+.badge.today { color: var(--warn); }
+.badge.late { color: var(--danger); }
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea {
+  min-width: 0; padding: 6px 10px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+button {
+  padding: 6px 12px; cursor: pointer; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.quiet { padding: 2px 6px; background: none; border-color: transparent; color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) {
+  body { padding: 12px; }
+  .board { grid-template-columns: 1fr; }
+}
