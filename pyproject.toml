@@ -1,11 +1,25 @@
 [project]
 name = "attache"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A personal assistant you install with one command. Small core; channels, email and file formats are skills."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+authors = [{ name = "OpenAfterHours contributors" }]
+keywords = ["assistant", "agent", "claude", "openai", "skills", "local-first"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Scheduling",
+]
 dependencies = [
     "anthropic>=0.40",
     "openai>=1.66",
@@ -14,6 +28,11 @@ dependencies = [
     "pyyaml>=6",
     "cronsim>=2.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/OpenAfterHours/attache"
+Repository = "https://github.com/OpenAfterHours/attache"
+Issues = "https://github.com/OpenAfterHours/attache/issues"
 
 [project.scripts]
 attache = "attache.cli:main"
@@ -28,6 +47,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/attache/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/attache"]
