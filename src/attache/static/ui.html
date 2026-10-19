@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attaché</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f5f2; --surface: #ffffff; --surface-2: #eeece7; --text: #1f1e1c;
+    --muted: #6d6a64; --border: #e0ddd6; --accent: #2b5fd9; --accent-text: #ffffff;
+    --mine: #e3ebfb; --danger: #b3261e; --ok: #2e7d32;
+    --radius: 10px; --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --surface: #1f1f1d; --surface-2: #2a2a27; --text: #ecebe7;
+      --muted: #a3a09a; --border: #363531; --accent: #7aa2ff; --accent-text: #0d1630;
+      --mine: #26324f; --danger: #ff8a80; --ok: #81c784;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+  body, button, textarea { font: 15px/1.5 var(--font); }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); }
+  header, #bar { border-bottom: 1px solid var(--border); }
+  h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--ok); }
+  .views { margin-left: auto; display: none; gap: 4px; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(300px, 420px) 1fr; }
+  #chat { display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+  #chat { border-right: 1px solid var(--border); }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg {
+    max-width: 85%; padding: 8px 12px; border-radius: var(--radius); background: var(--surface-2);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .msg.you { align-self: flex-end; background: var(--mine); }
+  .msg.error { color: var(--danger); }
+  .msg.typing { color: var(--muted); font-style: italic; background: none; }
+  .msg a { color: var(--accent); }
+  .files { margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
+  form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
+  textarea, button { color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
+  textarea { flex: 1; min-height: 42px; max-height: 160px; resize: vertical; padding: 8px 10px; background: var(--bg); }
+  button { padding: 6px 12px; cursor: pointer; background: var(--surface-2); }
+  button.primary, button[aria-pressed="true"] {
+    background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #pages { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; }
+  #bar .muted { color: var(--muted); }
+  #open { margin-left: auto; font-size: 14px; color: var(--accent); }
+  iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; }
+    .views { display: flex; }
+    #chat { border-right: 0; }
+    body[data-view="chat"] #pages, body[data-view="pages"] #chat { display: none; }
+  }
+</style>
+</head>
+<body data-view="chat">
+<header>
+  <span class="dot" id="status" title="Connecting"></span>
+  <h1>Attaché</h1>
+  <nav class="views" aria-label="View">
+    <button type="button" data-view="chat" aria-pressed="true">Chat</button>
+    <button type="button" data-view="pages" aria-pressed="false">Pages</button>
+  </nav>
+</header>
+<main>
+  <section id="chat" aria-label="Chat">
+    <div id="log" aria-live="polite">
+      <p class="empty" id="hello">Ask Attaché anything. Replies appear here.</p>
+    </div>
+    <form id="send">
+      <textarea id="text" rows="1" placeholder="Message Attaché" aria-label="Message (Enter sends, Shift+Enter for a new line)"></textarea>
+      <button class="primary">Send</button>
+    </form>
+  </section>
+  <section id="pages" aria-label="Pages">
+    <div id="bar"></div>
+    <iframe id="frame" title="Page" sandbox="allow-scripts allow-forms allow-popups" hidden></iframe>
+  </section>
+</main>
+<script>
+  "use strict";
+  const TOKEN = "__ATTACHE_UI_TOKEN__";
+  const $ = (id) => document.getElementById(id);
+  const log = $("log"), input = $("text"), frame = $("frame"), bar = $("bar");
+  const URLS = /(https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
+  let current = null, thinking = null;
+
+  async function api(method, path, body) {
+    const headers = { "X-Attache-Token": TOKEN, "Content-Type": "application/json" };
+    const res = await fetch(path, { method, headers, body: body && JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text) node.textContent = text;
+    return node;
+  }
+
+  // Message text is untrusted: build text nodes and links, never innerHTML.
+  function writeText(node, text) {
+    text.split(URLS).forEach((part, i) => {
+      if (i % 2 === 0) {
+        if (part) node.append(part);
+        return;
+      }
+      const link = el("a", "", part);
+      Object.assign(link, { href: part, target: "_blank", rel: "noopener noreferrer" });
+      let page = null;
+      try {
+        const url = new URL(part);
+        page = url.origin === location.origin && url.pathname.match(/^\/a\/([a-z0-9-]+)$/);
+      } catch {
+        page = null;
+      }
+      if (page) link.addEventListener("click", (e) => { e.preventDefault(); show(page[1], true); });
+      node.append(link);
+    });
+  }
+
+  function add(who, text, files) {
+    $("hello")?.remove();
+    const msg = el("div", `msg ${who}`);
+    writeText(msg, text);
+    if (files && files.length) {
+      msg.append(el("div", "files", "Files: " + files.map((f) => f.split(/[\\/]/).pop()).join(", ")));
+    }
+    log.append(msg);
+    log.scrollTop = log.scrollHeight;
+    return msg;
+  }
+
+  function setThinking(on) {
+    if (on && !thinking) thinking = add("typing", "Thinking…");
+    if (!on && thinking) { thinking.remove(); thinking = null; }
+  }
+
+  $("send").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    add("you", text);
+    setThinking(true);
+    try {
+      await api("POST", "/api/chat", { text });
+    } catch (err) {
+      setThinking(false);
+      add("error", `Not sent: ${err.message}`);
+    }
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $("send").requestSubmit();
+    }
+  });
+
+  function setView(name) {
+    document.body.dataset.view = name;
+    for (const b of document.querySelectorAll(".views button")) {
+      b.setAttribute("aria-pressed", String(b.dataset.view === name));
+    }
+  }
+  for (const b of document.querySelectorAll(".views button")) {
+    b.addEventListener("click", () => setView(b.dataset.view));
+  }
+
+  function show(name, focus = false) {
+    if (name !== current) frame.src = `/a/${name}`;
+    current = name;
+    frame.hidden = false;
+    for (const b of bar.querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", String(b.dataset.name === name));
+    }
+    const open = $("open");
+    if (open) open.href = `/a/${name}`;
+    if (focus) setView("pages");
+  }
+
+  async function loadPages() {
+    let pages;
+    try {
+      pages = await api("GET", "/api/artifacts");
+    } catch (err) {
+      bar.replaceChildren(el("span", "muted", `Could not list pages: ${err.message}`));
+      return;
+    }
+    bar.replaceChildren();
+    if (!pages.length) {
+      bar.append(el("span", "muted", "No pages yet. Ask Attaché for a to-do board or a checklist."));
+      frame.hidden = true;
+      return;
+    }
+    for (const page of pages) {
+      const button = el("button", "", page.title);
+      button.type = "button";
+      button.dataset.name = page.name;
+      button.addEventListener("click", () => show(page.name));
+      bar.append(button);
+    }
+    const open = el("a", "", "Open in new tab");
+    Object.assign(open, { id: "open", target: "_blank", rel: "noopener" });
+    bar.append(open);
+    const names = pages.map((p) => p.name);
+    show(names.includes(current) ? current : names.includes("home") ? "home" : names[0]);
+  }
+
+  function connect() {
+    const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+    const status = $("status");
+    events.onopen = () => { status.className = "dot live"; status.title = "Connected"; };
+    events.onerror = () => { status.className = "dot"; status.title = "Reconnecting…"; };
+    events.addEventListener("message", (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.chat_key !== "web:local") return;
+      setThinking(false);
+      add("bot", msg.text || "", msg.files);
+    });
+    events.addEventListener("doc", (event) => {
+      const change = JSON.parse(event.data);
+      if (change.collection !== "_artifacts") return;
+      if (change.id === current) frame.src = `/a/${current}`; // the page was rewritten
+      loadPages();
+    });
+  }
+
+  connect();
+  loadPages();
+</script>
+</body>
+</html>

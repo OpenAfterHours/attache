@@ -1,52 +1,45 @@
-"""Route outbound messages to channels; the terminal channel. Owner: runtime. Budget ~55 lines.
-
-Sidecar channels (Slack, Signal) arrive in phase 2 and plug in here as Channel objects.
-"""
+"""Route outbound messages to channels by chat key prefix; the terminal REPL. Owner: runtime."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 
-from attache.types import Channel, OnMessage, Outbound
+from attache.types import Channel, Inbound, OnMessage, Outbound
 
 
 class ChannelManager:
     def __init__(self) -> None:
         self.channels: dict[str, Channel] = {}
-        raise NotImplementedError
 
     def add(self, channel: Channel) -> None:
-        raise NotImplementedError
+        self.channels[channel.name] = channel
 
-    async def send(self, msg: Outbound) -> None:
-        """Deliver via the channel named by the part of chat_key before the first ":".
-        An unknown channel is logged, not raised."""
-        raise NotImplementedError
+    async def send(self, msg: Outbound) -> None:  # an unknown channel is logged, not raised
+        channel = self.channels.get(msg.chat_key.split(":", 1)[0])
+        await channel.send(msg) if channel else logging.warning("no channel for %s", msg.chat_key)
 
     async def start(self, on_message: OnMessage) -> list[asyncio.Task[None]]:
-        raise NotImplementedError
+        return [asyncio.create_task(c.start(on_message)) for c in self.channels.values()]
 
     async def stop(self) -> None:
-        raise NotImplementedError
+        await asyncio.gather(*(c.stop() for c in self.channels.values()), return_exceptions=True)
 
 
-class TerminalChannel:
-    """Chat in the terminal. Chat key "terminal:local", sender id "owner".
-
-    Reads lines in a worker thread so the event loop keeps running; prints replies as they
-    arrive. EOF, "/quit" or "/exit" sets `done`. Prints the web URL once at start."""
-
-    name = "terminal"
-
+class TerminalChannel:  # chat key "terminal:local", sender "owner"; EOF, /quit or /exit sets done
     def __init__(self, owner_name: str, web_url: str) -> None:
-        self.done = asyncio.Event()
-        raise NotImplementedError
+        self.name, self.done, self.user, self.url = "terminal", asyncio.Event(), owner_name, web_url
 
     async def start(self, on_message: OnMessage) -> None:
-        raise NotImplementedError
+        print(f"Attaché is also at {self.url}. Type /quit to leave.")
+        with contextlib.suppress(EOFError):  # input() runs in a thread so the loop keeps going
+            while (line := await asyncio.to_thread(input, "> ")) not in ("/quit", "/exit"):
+                await on_message(Inbound("terminal", "local", "owner", self.user, line))
+        self.done.set()
 
     async def send(self, msg: Outbound) -> None:
-        raise NotImplementedError
+        print(f"attaché> {msg.text}" + "".join(f"\n  file: {f}" for f in msg.files), flush=True)
 
     async def stop(self) -> None:
-        raise NotImplementedError
+        self.done.set()

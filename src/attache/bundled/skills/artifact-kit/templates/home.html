@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="attache-collections" content="todos,_tasks">
+<title>Home</title>
+<style>
+/* Attaché design tokens (artifact-kit/tokens.css). Paste this whole file into a <style>
+   element at the top of every artifact: pages cannot load other files. Use only these color
+   tokens, so the page follows the viewer's light or dark setting. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #eeece7;
+  --text: #1f1e1c;
+  --muted: #6d6a64;
+  --border: #e0ddd6;
+  --accent: #2b5fd9;
+  --accent-text: #ffffff;
+  --ok: #2e7d32;
+  --warn: #9a5b00;
+  --danger: #b3261e;
+  --radius: 10px;
+  --gap: 12px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --surface: #1f1f1d;
+    --surface-2: #2a2a27;
+    --text: #ecebe7;
+    --muted: #a3a09a;
+    --border: #363531;
+    --accent: #7aa2ff;
+    --accent-text: #0d1630;
+    --ok: #81c784;
+    --warn: #ffb74d;
+    --danger: #ff8a80;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0; padding: 16px;
+  background: var(--bg); color: var(--text); font: 15px/1.5 var(--font);
+}
+h1 { margin: 0; font-size: 20px; font-weight: 650; }
+h2 {
+  margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.page { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.card {
+  padding: 12px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.error { color: var(--danger); }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+.board { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.column { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.item .title { overflow-wrap: anywhere; }
+.item.done .title { color: var(--muted); text-decoration: line-through; }
+.badge {
+  padding: 1px 8px; font-size: 12px; white-space: nowrap; color: var(--muted);
+  background: var(--surface-2); border-radius: 999px;
+}
+.badge.today { color: var(--warn); }
+.badge.late { color: var(--danger); }
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea {
+  min-width: 0; padding: 6px 10px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+button {
+  padding: 6px 12px; cursor: pointer; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.quiet { padding: 2px 6px; background: none; border-color: transparent; color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) {
+  body { padding: 12px; }
+  .board { grid-template-columns: 1fr; }
+}
+/* Home page */
+.add input[name="title"] { flex: 2 1 200px; }
+.add input[name="list"] { flex: 1 1 110px; }
+.reminders { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="row">
+    <h1 class="grow">Today</h1>
+    <span class="muted small" id="today"></span>
+  </header>
+
+  <form class="card row add" id="add">
+    <input name="title" placeholder="Add a to-do" aria-label="New to-do" autocomplete="off" required>
+    <input name="list" placeholder="List (Inbox)" aria-label="List" list="lists" autocomplete="off">
+    <input name="due" type="date" aria-label="Due date">
+    <button class="primary">Add</button>
+    <datalist id="lists"></datalist>
+  </form>
+
+  <p class="error small" id="problem" role="alert" hidden></p>
+  <p class="empty card" id="empty" hidden>
+    No to-dos yet. Add your first one above, or tell Attaché
+    “add book the dentist to my list”.
+  </p>
+  <section class="board" id="board" aria-label="To-dos"></section>
+
+  <section class="card" aria-labelledby="reminders-title">
+    <h2 id="reminders-title">Upcoming reminders</h2>
+    <ul class="reminders" id="reminders"></ul>
+  </section>
+</main>
+<script>
+  "use strict";
+  // Home: today's to-dos by status, and upcoming reminders. Data comes from window.attache,
+  // which Attaché injects; all text goes in with textContent.
+  const COLUMNS = [["todo", "To do"], ["waiting", "Waiting"], ["done", "Done today"]];
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, "0");
+  const localDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = String(text);
+    return node;
+  }
+
+  function problem(err) {
+    $("problem").hidden = !err;
+    $("problem").textContent = err ? `Something went wrong: ${err.message || err}` : "";
+  }
+
+  async function save(todo, status) {
+    const { id, _updated, _by, ...data } = todo; // the store sets these itself
+    try {
+      await attache.db.put("todos", id, { ...data, status });
+      problem(null);
+    } catch (err) {
+      problem(err);
+    }
+  }
+
+  function card(todo, today) {
+    const done = todo.status === "done";
+    const item = el("div", done ? "item done" : "item");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = done;
+    box.setAttribute("aria-label", `Done: ${todo.title || "untitled"}`);
+    box.addEventListener("change", () => save(todo, box.checked ? "done" : "todo"));
+
+    const body = el("div", "grow");
+    body.append(el("div", "title", todo.title || "(untitled)"));
+    const meta = el("div", "row small");
+    if (todo.list) meta.append(el("span", "badge", todo.list));
+    if (todo.due) {
+      const day = String(todo.due).slice(0, 10);
+      const late = !done && day < today;
+      const kind = late ? "badge late" : day === today ? "badge today" : "badge";
+      meta.append(el("span", kind, day === today ? "today" : late ? `overdue ${day}` : day));
+    }
+    if (todo.notes) meta.append(el("span", "muted", todo.notes));
+    body.append(meta);
+    item.append(box, body);
+
+    if (!done) {
+      const waiting = todo.status === "waiting";
+      const toggle = el("button", "quiet small", waiting ? "Resume" : "Wait");
+      toggle.type = "button";
+      toggle.title = waiting ? "Move back to To do" : "Waiting on someone";
+      toggle.addEventListener("click", () => save(todo, waiting ? "todo" : "waiting"));
+      item.append(toggle);
+    }
+    return item;
+  }
+
+  async function renderTodos() {
+    let todos;
+    try {
+      todos = await attache.db.list("todos");
+    } catch (err) {
+      return problem(err);
+    }
+    problem(null);
+    const now = new Date();
+    const today = localDate(now);
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+    const shown = todos.filter((t) => t.status !== "done" || (t._updated || 0) >= midnight);
+    shown.sort((a, b) =>
+      String(a.due || "9999").localeCompare(String(b.due || "9999")) ||
+      String(a.title || "").localeCompare(String(b.title || "")));
+
+    $("empty").hidden = todos.length > 0;
+    $("board").hidden = todos.length === 0;
+    const columns = COLUMNS.map(([status, label]) => {
+      const items = shown.filter((t) => (COLUMNS.some(([s]) => s === t.status) ? t.status : "todo") === status);
+      const column = el("div", "column");
+      column.append(el("h2", "", `${label} · ${items.length}`));
+      if (!items.length) column.append(el("p", "muted small", status === "todo" ? "All clear." : "Nothing here."));
+      for (const todo of items) column.append(card(todo, today));
+      return column;
+    });
+    $("board").replaceChildren(...columns);
+
+    const lists = [...new Set(todos.map((t) => t.list).filter(Boolean))].sort();
+    $("lists").replaceChildren(...lists.map((name) => Object.assign(el("option"), { value: name })));
+  }
+
+  function when(epoch) {
+    const d = new Date(epoch * 1000);
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const days = Math.round((new Date(localDate(d)) - new Date(localDate(new Date()))) / 86400000);
+    if (days === 0) return `Today ${time}`;
+    if (days === 1) return `Tomorrow ${time}`;
+    if (days > 1 && days < 7) return `${d.toLocaleDateString([], { weekday: "long" })} ${time}`;
+    return `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+  }
+
+  async function renderReminders() {
+    let tasks;
+    try {
+      tasks = await attache.db.list("_tasks");
+    } catch (err) {
+      return problem(err);
+    }
+    const rows = tasks.slice(0, 8).map((task) => {
+      const row = el("li", "row");
+      row.append(el("span", "badge", when(task.due)), el("span", "grow", task.text));
+      if (task.cron) row.append(el("span", "muted small", "repeats"));
+      return row;
+    });
+    if (!rows.length) rows.push(el("li", "muted small", "No reminders. Try “remind me at 5pm to call Sam”."));
+    $("reminders").replaceChildren(...rows);
+  }
+
+  $("add").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fields = event.target.elements;
+    const title = fields.namedItem("title").value.trim();
+    if (!title) return;
+    const todo = { title, list: fields.namedItem("list").value.trim() || "Inbox", status: "todo" };
+    if (fields.namedItem("due").value) todo.due = fields.namedItem("due").value;
+    try {
+      await attache.db.put("todos", null, todo);
+      fields.namedItem("title").value = "";
+      fields.namedItem("due").value = "";
+      fields.namedItem("title").focus();
+      problem(null);
+    } catch (err) {
+      problem(err);
+    }
+  });
+
+  $("today").textContent = new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+  if (window.attache) {
+    attache.on("todos", renderTodos); // live: re-render whenever a to-do changes
+    renderTodos();
+    renderReminders();
+    setInterval(renderReminders, 60000); // reminders have no live feed; refresh each minute
+  } else {
+    problem(new Error("open this page from Attaché, which provides its data"));
+  }
+</script>
+</body>
+</html>
