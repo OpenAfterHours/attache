@@ -118,23 +118,24 @@ def test_choose() -> None:
     assert choose(OPTIONS, "3") is choose(OPTIONS, "maybe") is choose(OPTIONS, "0") is None
 
 
+async def asked(hub: ChannelManager, *question: Any) -> str | None:
+    """ask(), then wait for its answer, as the tools do."""
+    return await (await hub.ask(*question))
+
+
 def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
     hub = ChannelManager()
     plain, native = Channel("slack"), AskingChannel("slack")
     hub.add(plain)
     hub.add(native)
 
-    shown: list[str] = []
-
     async def main() -> None:
-        ask = hub.ask("slack:D0ALEX", "owner", "Send it?", OPTIONS, shown=lambda: shown.append(1))
-        task = asyncio.create_task(ask)
-        await until(lambda: native.asked)
+        answer = await hub.ask("slack:D0ALEX", "owner", "Send it?", OPTIONS)  # once shown
+        assert isinstance(answer, asyncio.Task) and not answer.done()
         ((chat_id, ask_id, text, options),) = native.asked
         assert (chat_id, text, options) == ("D0ALEX", "Send it?", OPTIONS)
         assert len(ask_id) == 16 and list(hub.pending) == [ask_id]  # 64 random bits
         assert hub.pending[ask_id].text == "Send it?"  # for the page to rebuild after a reload
-        assert shown == [1]  # once, although two surfaces showed it
         assert [(m.chat_key, m.text) for m in plain.sent] == [
             ("slack:D0ALEX", "Send it?\nReply 1 for Approve, 2 for Decline.")
         ]
@@ -142,7 +143,7 @@ def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
         assert not hub.answer("unknown", "owner", "Approve")
         assert not hub.answer(ask_id, "owner", "Maybe")  # not one of the options
         assert hub.answer(ask_id, "owner", "approve")
-        assert await task == "Approve"
+        assert await answer == "Approve"
         assert hub.pending == {}
         assert not hub.answer(ask_id, "owner", "Approve")  # answered already: gone
 
@@ -150,22 +151,22 @@ def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
 
 
 def test_ask_raises_lookup_error_at_once_when_nobody_can_see_it() -> None:
-    hub, shown = ChannelManager(), []
+    hub = ChannelManager()
     began = time.monotonic()
     with pytest.raises(LookupError):  # no channel at all
-        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS, shown=lambda: shown.append(1)))
+        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS))
     hub.add(AskingChannel("slack", sees=False))  # e.g. its sidecar is down
     with pytest.raises(LookupError):
-        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS, shown=lambda: shown.append(1)))
+        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS))
     assert time.monotonic() - began < 2  # not the 600 s timeout
-    assert hub.pending == {} and shown == []  # never shown, so the caller stores nothing
+    assert hub.pending == {} and hub.tasks == set()  # never shown: nothing waits for it
 
 
 def test_ask_gives_none_on_timeout() -> None:
     hub = ChannelManager()
     hub.add(Channel("local"))
     hub.ask_seconds = 0.05
-    assert asyncio.run(hub.ask("local:me", "owner", "Hello?", ["Yes"])) is None
+    assert asyncio.run(asked(hub, "local:me", "owner", "Hello?", ["Yes"])) is None
     assert hub.pending == {}
 
 
@@ -183,9 +184,9 @@ def test_a_typed_reply_answers_only_the_one_question_waiting_for_its_sender() ->
     hub.add(Channel("slack"))
 
     async def main() -> None:
-        tea = asyncio.create_task(hub.ask("local:me", "owner", "Tea?", ["Yes", "No"]))
-        colour = asyncio.create_task(hub.ask("slack:C1", "sam", "Which?", ["Red", "Blue"]))
-        theirs = asyncio.create_task(hub.ask("local:me", "sam", "Sam's?", ["Yes", "No"]))
+        tea = asyncio.create_task(asked(hub, "local:me", "owner", "Tea?", ["Yes", "No"]))
+        colour = asyncio.create_task(asked(hub, "slack:C1", "sam", "Which?", ["Red", "Blue"]))
+        theirs = asyncio.create_task(asked(hub, "local:me", "sam", "Sam's?", ["Yes", "No"]))
         await until(lambda: len(hub.pending) == 3)
         assert not hub.match("slack:C1", "sam", "green")  # not an option
         assert not hub.match("slack:C2", "sam", "red")  # another chat
@@ -205,8 +206,8 @@ def test_with_two_questions_open_a_typed_reply_is_just_a_message() -> None:
     async def main() -> None:
         # A member's request and the owner's own question, both waiting for the owner: a
         # typed "Approve" must not be taken for either, or a member could aim it at theirs.
-        mine = asyncio.create_task(hub.ask("local:me", "owner", "Send it?", OPTIONS))
-        request = asyncio.create_task(hub.ask("local:me", "owner", "Sam asks…", OPTIONS))
+        mine = asyncio.create_task(asked(hub, "local:me", "owner", "Send it?", OPTIONS))
+        request = asyncio.create_task(asked(hub, "local:me", "owner", "Sam asks…", OPTIONS))
         await until(lambda: len(hub.pending) == 2)
         assert not hub.match("local:me", "owner", "Approve")
         assert not mine.done() and not request.done()
@@ -273,7 +274,7 @@ def test_a_terminal_turn_can_wait_for_an_answer_typed_in_the_terminal(
 
     async def handle(msg: Inbound) -> None:  # a router in miniature
         if not hub.match(msg.chat_key, "owner", msg.text):
-            results.append(await hub.ask(msg.chat_key, "owner", "Sure?", ["Yes", "No"]))
+            results.append(await asked(hub, msg.chat_key, "owner", "Sure?", ["Yes", "No"]))
 
     async def main() -> None:
         await asyncio.wait_for(asyncio.gather(*await hub.start(handle)), 5)

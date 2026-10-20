@@ -230,16 +230,14 @@ async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
     return json.dumps({"url": url, "snapshot": web.snapshot_url(services, name)})  # for render
 
 
-async def _ask(ctx: TurnContext, chat_key: str, question: str, options: list[str]) -> str | None:
-    """Put a question to the owner in `chat_key` and wait for the choice (None: no answer in
-    time). Once a surface shows it, it is kept in that chat's history, so a page reload still
-    shows it; a question nobody saw is never kept, so a later "Approve" typed there is just a
-    message. LookupError when no surface showed it."""
-
-    def keep() -> None:
-        ctx.services.store.add_message(chat_key, "assistant", question)
-
-    return await ctx.services.channels.ask(chat_key, "owner", question, options, shown=keep)
+async def _ask(ctx: TurnContext, chat_key: str, question: str, options: list[str]) -> Any:
+    """Put a question to the owner in `chat_key`; once a surface has shown it, keep it in that
+    chat's history and return a task giving the choice (None: no answer in time). A question
+    nobody saw is never kept, so a later "Approve" typed there is just a message: LookupError,
+    straight away."""
+    answer = await ctx.services.channels.ask(chat_key, "owner", question, options)
+    ctx.services.store.add_message(chat_key, "assistant", question)
+    return answer
 
 
 @_tool("question options?")
@@ -248,16 +246,17 @@ async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
     and No. Returns the chosen option, "no answer", or "couldn't reach the owner just now"."""
     options = list(args.get("options") or ["Yes", "No"])
     try:
-        return await _ask(ctx, ctx.chat_key, args["question"], options) or "no answer"
+        answer = await _ask(ctx, ctx.chat_key, args["question"], options)
     except LookupError:  # no surface showed the question
         return "couldn't reach the owner just now"
+    return await answer or "no answer"
 
 
 @_tool("summary", MEMBER)
 async def request(args: dict[str, Any], ctx: TurnContext) -> str:
     """Ask the owner to approve something only they can do, such as changing a skill or how a
-    shared list works. The summary says what and why, in under 300 characters. Returns at
-    once; the owner's answer comes to this chat later."""
+    shared list works. The summary says what and why, in under 300 characters. Returns once
+    the owner has been asked, or couldn't be; their answer comes to this chat later."""
     services, summary = ctx.services, str(args["summary"])
     if len(summary) > 300:
         raise ValueError("keep the summary under 300 characters")
@@ -268,11 +267,13 @@ async def request(args: dict[str, Any], ctx: TurnContext) -> str:
     question = f"{ctx.sender.name} in {where} asks: {quote(summary)}"
     owner_chat = services.config.approvals  # where approvals are asked, and the work happens
 
+    try:
+        answer = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
+    except LookupError:  # no surface showed the question, so it was not kept either
+        return f"Couldn't reach {owner} just now; try again later."
+
     async def wait_and_act() -> str:  # sends the member's chat a notice, whatever happens
-        try:
-            choice = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
-        except LookupError:  # no surface showed the question, so it was not kept either
-            return await send({"text": f"Couldn't reach {owner} just now; try again later."}, ctx)
+        choice = await answer
         if choice == "Approve":
             fenced = f"<<<\n[{who}]: {quote(summary)}\n>>>"
             text = f"You approved this request from {who} in {where}. Do it, within your rules:"

@@ -119,11 +119,12 @@ not JSON, and objects with an unknown `type`, are ignored (and logged).
 
 When Attaché asks someone a question, it goes to every surface of that chat: the sidecar's
 `ask`, the open web page, or the terminal as numbered text. The question counts as shown once
-one surface has taken it (a running sidecar, an open page, the terminal); only then is it
-stored in the chat's history (`ChannelManager.ask` calls its `shown` callback). If no surface
-could show it, because the sidecar is down or no page is open, the ask fails at once with a
-`LookupError` instead of waiting, and the tool or the member's chat is told Attaché couldn't
-reach the owner just now.
+one surface has taken it (a running sidecar, an open page, the terminal).
+`ChannelManager.ask` returns as soon as it is shown, with a task that gives the answer, so the
+question is stored in the chat's history only then, and a member's `request` replies "Asked
+Alex" knowing that is true. If no surface could show it, because the sidecar is down or no
+page is open, `ask` raises `LookupError` at once instead of waiting, and the tool's own reply
+says Attaché couldn't reach the owner just now.
 
 A button or reaction answers its own question. A typed reply naming an option, or its number,
 answers only when exactly one open question in that chat waits for the person typing. With two

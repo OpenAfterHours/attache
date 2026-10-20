@@ -441,9 +441,8 @@ def test_an_answer_runs_no_turn(world: World) -> None:
     hub = world.services.channels
 
     async def main() -> None:
-        mine = asyncio.create_task(hub.ask("local:me", "owner", "Send it?", ["Yes", "No"]))
-        sams = asyncio.create_task(hub.ask("slack:CFAM", "sam", "Which?", ["Red", "Blue"]))
-        await asyncio.sleep(0)
+        mine = await hub.ask("local:me", "owner", "Send it?", ["Yes", "No"])  # shown: waiting
+        sams = await hub.ask("slack:CFAM", "sam", "Which?", ["Red", "Blue"])
         local = Inbound("local", "me", "owner", "Alex", "yes", origin="web")
         assert await world.router.handle(local) is None
         unmentioned = Inbound("slack", "CFAM", "USAM", "Sam", "2", True)  # needs no mention
@@ -538,11 +537,11 @@ def test_a_request_nobody_can_see_is_reported_and_not_kept(world: World) -> None
 
     async def main() -> None:
         reply = await world.router.handle(said("@Attaché can we have a chores list?"))
-        assert reply is not None and reply.text.startswith("Asked Alex;")
-        await until(lambda: len(world.slack.sent) == 2)
+        assert reply is not None and reply.text == "Couldn't reach Alex just now; try again later."
 
     asyncio.run(main())
-    assert world.slack.sent[-1].text == "Couldn't reach Alex just now; try again later."
+    # The turn's own reply says so, and nothing later contradicts it.
+    assert [m.text for m in world.slack.sent] == ["Couldn't reach Alex just now; try again later."]
     assert world.store.history("slack:CFAM")[-1]["role"] == "assistant"  # kept in Sam's chat
     assert world.store.history(owner_chat) == []  # so a typed "Approve" there has no question
     assert world.store.task_list() == []

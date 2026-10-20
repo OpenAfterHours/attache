@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Coroutine
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -47,9 +47,6 @@ SPAWN: dict[str, Any] = {"stdin": PIPE, "stdout": PIPE, "limit": 2**24, "start_n
 SPAWN["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
-Shown = Callable[[], object] | None  # ask()'s callback for "a surface has shown it"
-
-
 class Pending(NamedTuple):
     """A question waiting for one person's answer."""
 
@@ -58,6 +55,9 @@ class Pending(NamedTuple):
     text: str
     options: list[str]
     future: asyncio.Future[str]
+
+
+Waiting = asyncio.Task[str | None]  # what ask() gives: the choice, or None after ask_seconds
 
 
 def choose(options: list[str], text: str) -> str | None:
@@ -114,32 +114,37 @@ class ChannelManager:
         for channel in self._targets(msg.chat_key):
             await channel.send(msg)
 
-    async def ask(
-        self, chat_key: str, person_id: str, text: str, options: list[str], shown: Shown = None
-    ) -> str | None:
+    async def ask(self, chat_key: str, person_id: str, text: str, options: list[str]) -> Waiting:
         """Show the question, with native buttons where a channel has ask() and as numbered
-        text elsewhere, and wait for person_id's choice; None after ask_seconds. `shown` is
-        called once, as soon as a surface has shown it; LookupError when none could.
-        person_id is a config person id ("owner", "sam")."""
+        text elsewhere, and return a task giving person_id's choice (None after ask_seconds).
+        Returns once it is shown, so the caller knows at once; LookupError when no surface
+        could show it. person_id is a config person id ("owner", "sam")."""
         ask_id = secrets.token_hex(8)
         chat_id = chat_key.split(":", 1)[1]
         future = asyncio.get_running_loop().create_future()
         self.pending[ask_id] = Pending(chat_key, person_id, text, options, future)
         numbered = ", ".join(f"{n} for {option}" for n, option in enumerate(options, 1))
+        seen = False
         try:
-            seen = False
             for channel in self._targets(chat_key):
                 if hasattr(channel, "ask"):
                     reached = await channel.ask(chat_id, ask_id, text, options)
                 else:
                     await channel.send(Outbound(chat_key, f"{text}\nReply {numbered}."))
                     reached = True
-                if reached and not seen and shown:
-                    shown()  # once, at the first surface that showed it
                 seen = seen or reached
-            if not seen:
-                raise LookupError(f"nothing in {chat_key} could show the question")
-            return await asyncio.wait_for(future, self.ask_seconds)
+        except BaseException:
+            del self.pending[ask_id]
+            raise
+        waiting = self.spawn(self._wait(ask_id)) if seen else None
+        if waiting is None:  # nobody could see it, or Attaché is stopping
+            del self.pending[ask_id]
+            raise LookupError(f"nothing in {chat_key} could show the question")
+        return waiting
+
+    async def _wait(self, ask_id: str) -> str | None:
+        try:
+            return await asyncio.wait_for(self.pending[ask_id].future, self.ask_seconds)
         except TimeoutError:
             return None
         finally:
@@ -272,9 +277,9 @@ class SidecarChannel:
             await on_message(Inbound(self.name, **known, files=files))  # others are dropped
         elif kind == "answer":
             ask_id, sender_id = event["ask_id"], event["sender_id"]
-            accepted = self.on_answer(self.name, ask_id, sender_id, event["choice"])
-            result = {"ask_id": ask_id, "sender_id": sender_id, "accepted": accepted}
-            await self._write(type="answered", **result)  # Slack updates its buttons on this
+            taken = self.on_answer(self.name, ask_id, sender_id, event["choice"])
+            # The verdict goes back, with the platform id as it came: Slack updates its buttons.
+            await self._write(type="answered", ask_id=ask_id, sender_id=sender_id, accepted=taken)
         elif kind in ("ready", "log"):
             logger.info("channel %s %s: %s", self.name, kind, event.get("text", event))
 
