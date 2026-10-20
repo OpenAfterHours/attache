@@ -78,19 +78,24 @@ def test_skills(
         assert exit.value.code == 2
 
 
-def test_skill_runs_the_skills_own_script(
-    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_skill_runs_the_skills_own_script(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script = home / "skills" / "service" / "scripts" / "service.py"
     script.parent.mkdir(parents=True)
     script.write_text("print('hi')\n", encoding="utf-8")
     ran: list[list[str]] = []
     monkeypatch.setattr(cli.subprocess, "run", lambda argv: ran.append(argv) or Done(3))
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
     # Every argument after the name is the script's, options included: argparse never sees them.
     assert cli.main(["skill", "service", "install", "--dry-run"]) == 3  # its exit code
     assert ran == [["uv", "run", str(script), "install", "--dry-run"]]
+    # SystemExit with a message: Python prints that one line on stderr and exits with code 1.
     for bad in (["skill"], ["skill", "nope"], ["skill", ".."], ["skill", "../service"]):
-        assert cli.main(bad) == 1 and "attache init" in capsys.readouterr().err
+        with pytest.raises(SystemExit, match="new bundled skills arrive with `attache init`"):
+            cli.main(bad)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit) as exit:
+        cli.main(["skill", "service", "status"])
+    assert str(exit.value) == "uv is not installed: see https://docs.astral.sh/uv/"
     assert len(ran) == 1
 
 

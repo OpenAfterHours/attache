@@ -68,7 +68,8 @@ class Channels:
 def services(home: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[app.Services]:
     monkeypatch.setattr(tools.web, "snapshot_url", lambda services, name: f"snap:{name}")
     monkeypatch.setattr(tools.web, "share_url", lambda services, name: f"share:{name}")
-    (home / "attache.toml").write_text('[owner]\nname = "Alex"\n', encoding="utf-8")
+    people = '[owner]\nname = "Alex"\n[people.sam]\nname = "Sam"\n'  # Sam: a member
+    (home / "attache.toml").write_text(people, encoding="utf-8")
     db = Store(home / "attache.db")
     cfg, scheduler = config.load(home), Scheduler(db)
     yield app.Services(cfg, db, scheduler, Channels(), {}, "http://test")
@@ -262,7 +263,9 @@ def test_script_member_gating(services: app.Services, monkeypatch: pytest.Monkey
         call(ctx(services), "script", skill="nope", script="hello.py")
     with pytest.raises(FileNotFoundError):
         call(ctx(services), "script", skill="private", script="missing.py")
-    for arg in ["../x.txt", "/etc/passwd", "C:x", "a\\b", "file:///etc/passwd", "\\\\host\\s"]:
+    paths = ["../x.txt", "/etc/passwd", "C:x", "a\\b", "file:///etc/passwd", "\\\\host\\s"]
+    paths += ["{../../etc/passwd}", '["../x"]', '{"a": 1} ../x']  # not a JSON object
+    for arg in paths:
         with pytest.raises(PermissionError, match="file name"):  # could name a path elsewhere
             call(member, "script", skill="shared", script="hello.py", args=[arg])
     spec = '{"title": "Trip 3/4: Paris", "rows": ["a/b", "../c"]}'  # inline JSON: data
@@ -521,48 +524,108 @@ def test_request(services: app.Services) -> None:
     assert "request" not in [t.name for t in tools.build(ctx(services))]  # the owner just asks
 
 
-def test_ask_writes_an_approval_only_for_the_first_option(services: app.Services) -> None:
+PREVIEW = "Send from work (imap)\nTo: sam@example.com\nSubject: Ferry\n\nSee you at nine."
+
+
+def test_ask_shows_the_drafts_own_preview_and_approves_only_on_send(
+    services: app.Services,
+) -> None:
     hub, folder = services.channels, services.home / ".approvals"
-    hub.answers = ["Send", "Keep", None]
-    options = ["Send", "Keep"]
-    for fingerprint, choice in [("abc12345", "Send"), ("def67890", "Keep"), ("ghi13579", None)]:
-        out = call(ctx(services), "ask", question="Send it?", options=options, approves=fingerprint)
+    folder.mkdir()
+    for fingerprint in ("abc12345", "def67890", "ghi13579"):
+        (folder / f"{fingerprint}.preview").write_text(PREVIEW, encoding="utf-8")
+    hub.answers = ["Send", "Not now", None]
+    for fingerprint, choice in [("abc12345", "Send"), ("def67890", "Not now"), ("ghi13579", None)]:
+        # A hijacked turn asks something harmless; the owner still sees the real draft.
+        out = call(ctx(services), "ask", question="Archive the newsletters?", approves=fingerprint)
         assert out == (choice or "no answer")
-    assert [p.name for p in folder.iterdir()] == ["abc12345"]  # only for the first option
-    assert (folder / "abc12345").read_bytes() == b""
-    for bad in ("short1", "../../etc/x", "a" * 65, "abc-12345"):
-        with pytest.raises(ValueError, match="8 to 64 letters and digits"):
+    shown = {(text, tuple(options)) for _, _, text, options in hub.asked}
+    assert shown == {(PREVIEW, ("Send", "Not now"))}  # verbatim, with the options fixed
+    assert sorted(p.name for p in folder.iterdir() if p.suffix != ".preview") == ["abc12345"]
+    assert (folder / "abc12345").read_bytes() == b""  # written on Send only
+    for bad in ("nopreview1", "short1", "../../etc/x", "a" * 65, "abc-12345"):
+        with pytest.raises(FileNotFoundError, match="no preview for that fingerprint"):
             call(ctx(services), "ask", question="Send it?", approves=bad)
-    assert len(hub.asked) == 3  # a bad fingerprint is refused before anyone is asked
+    assert len(hub.asked) == 3  # refused before anyone is asked
 
 
 def test_an_approval_checks_the_requester_is_still_a_member(services: app.Services) -> None:
     services.config.chats[GROUP] = ChatConfig(GROUP, "Family", members=["sam"])
+    assert services.config.people["sam"].role == "member"
     hub, store = services.channels, services.store
-    hub.answers = ["Approve", "Approve"]
+    hub.answers = ["Approve"] * 4
     call(ctx(services, "member", GROUP), "request", summary="a chores list")
     services.config.chats[GROUP].members = []  # Sam left the chat before the owner answered
     hub.run_spawned()
     assert hub.sent[-1] == Outbound(GROUP, "declined: no longer a member here")
     assert store.task_list() == [] and store.doc_list("_requests") == []
-    call(ctx(services, "member", "slack:DSAM"), "request", summary="a chores list")
-    hub.run_spawned()  # a direct chat has no member list: the approval goes ahead
+    dm = ctx(services, "member", "slack:DSAM")  # a direct chat: Sam's configured role decides
+    call(dm, "request", summary="a chores list")
+    hub.run_spawned()
     assert hub.sent[-1].text == "Alex approved the request from Sam." and store.task_list()
+    services.config.people["sam"] = Person("sam", "Sam", "guest")  # now only a guest
+    call(dm, "request", summary="a chores list")
+    hub.run_spawned()
+    assert hub.sent[-1].text == "declined: no longer a member here"
+    del services.config.people["sam"]  # and now not known at all
+    call(dm, "request", summary="a chores list")
+    hub.run_spawned()
+    assert hub.sent[-1].text == "declined: no longer a member here"
+    assert len(store.task_list()) == 1
 
 
-def test_requests_are_asked_again_after_a_restart(services: app.Services) -> None:
-    store, hub, now = services.store, services.channels, time.time()
+def test_a_request_never_runs_twice(services: app.Services) -> None:
+    hub, store = services.channels, services.store
+    hub.answers = ["Approve"]
+    call(ctx(services, "member", GROUP), "request", summary="a chores list")
+
+    async def down(msg: Outbound) -> None:
+        raise ConnectionError("the chat is down")
+
+    hub.send = down  # telling the member fails, after the owner turn was added
+    with pytest.raises(ConnectionError):
+        hub.run_spawned()
+    assert len(store.task_list()) == 1  # added once
+    assert store.doc_list("_requests") == []  # forgotten first: a restart can't add it again
+
+
+class Clock:
+    """Stands in for tools.datetime: now() is a fixed time, which the stubbed sleep moves."""
+
+    def __init__(self, now: float) -> None:
+        self.time = now
+
+    def now(self) -> Clock:
+        return self
+
+    def timestamp(self) -> float:
+        return self.time
+
+
+def test_requests_are_asked_again_after_a_restart(
+    services: app.Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock, slept = Clock(1000.0), []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock.time += seconds
+
+    monkeypatch.setattr(tools, "datetime", clock)
+    monkeypatch.setattr(tools.asyncio, "sleep", sleep)
+    store, hub = services.store, services.channels
     asked = {"member_chat": GROUP, "sender_id": "sam", "sender_name": "Sam"}
     asked |= {"who": "Sam (member)", "where": "Family"}
-    store.doc_put("_requests", "live", {**asked, "summary": "a chores list", "until": now + 60})
-    store.doc_put("_requests", "late", {**asked, "summary": "a rota", "until": now - 1})
-    store.doc_put("_requests", "unseen", {**asked, "summary": "a map", "until": now + 1})
+    store.doc_put("_requests", "live", {**asked, "summary": "a chores list", "until": 1600.0})
+    store.doc_put("_requests", "late", {**asked, "summary": "a rota", "until": 999.0})
+    store.doc_put("_requests", "unseen", {**asked, "summary": "a map", "until": 1120.0})
     hub.answers = [UNSEEN, UNSEEN, "Approve"]  # just after a start, nothing can show it yet
-    asyncio.run(tools.resume_requests(services, retry=0.05))
-    questions = [text for _, _, text, _ in hub.asked]
-    assert questions[:3] == ['Sam in Family asks: "a chores list"'] * 3  # tried until shown
-    assert set(questions[3:]) == {'Sam in Family asks: "a map"'}  # the late one: not asked
-    assert len(questions) > 5  # the map was tried again and again until its time was up
+    asyncio.run(tools.resume_requests(services))
+    assert [text for _, _, text, _ in hub.asked] == [
+        *['Sam in Family asks: "a chores list"'] * 3,  # at 1000, 1030 and 1060: then shown
+        *['Sam in Family asks: "a map"'] * 2,  # at 1060 and 1090; its time is up at 1120
+    ]  # and the late one is not asked at all
+    assert slept == [30.0] * 4
     hub.run_spawned()
     assert [m.text for m in hub.sent] == [
         "Alex approved the request from Sam.",

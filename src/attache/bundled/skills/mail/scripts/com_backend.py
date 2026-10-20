@@ -20,11 +20,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+Text = str | None
+When = datetime | str
+
 # Outlook's enumerations, which late binding doesn't load.
 INBOX, CALENDAR, TASKS = 6, 9, 13  # OlDefaultFolders
 MAIL_ITEM, APPOINTMENT_ITEM = 0, 1  # OlItemType, also a folder's DefaultItemType
 MAIL, APPOINTMENT, MEETING_REQUEST = 43, 26, 53  # OlObjectClass
-TO, CC = 1, 2  # OlMailRecipientType
+TO, CC, BCC = 1, 2, 3  # OlMailRecipientType
+PLAIN = 1  # OlBodyFormat olFormatPlain
 MEETING = 1  # OlMeetingStatus olMeeting: the recipients are invited
 MARK_NO_DATE = 4  # OlMarkInterval: a follow-up flag without a due date
 FLAGGED = 2  # OlFlagStatus olFlagMarked
@@ -48,7 +52,7 @@ NEW_OUTLOOK = (
     "This PC uses the new Outlook app, which has no COM. Switch back to Outlook classic (turn "
     'off the "New Outlook" toggle), or set backend = "graph" for this account in accounts.toml.'
 )
-NO_PYWIN32 = "pywin32 isn't installed. Run this through `uv run mail.py`, which installs it."
+NO_PYWIN32 = "pywin32 isn't installed. Run mail commands with `attache skill mail`, which adds it."
 MOVED = "No such item. Outlook ids change when an item moves, so list the folder again."
 NOT_DRAFT = "That isn't an unsent draft."
 
@@ -110,7 +114,7 @@ def utc(value: Any) -> str | None:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ") if moment else None
 
 
-def wall(value: datetime | str) -> datetime:
+def wall(value: When) -> datetime:
     """An ISO time or a datetime as this PC's naive local time, which Outlook expects."""
     moment = datetime.fromisoformat(value) if isinstance(value, str) else value
     return moment.astimezone().replace(tzinfo=None)
@@ -135,12 +139,12 @@ def addresses(item: Any, kind: int) -> list[str]:
     return [smtp(r.AddressEntry) or r.Address for r in item.Recipients if r.Type == kind]
 
 
-def preview(text: str | None) -> str:
-    """The first 200 characters of a body, on one line."""
-    return " ".join((text or "").split())[:200]
+def attachments(item: Any) -> list[dict]:
+    """An item's attachments, inline pictures too, as {name, size}."""
+    return [{"name": a.FileName, "size": a.Size} for a in item.Attachments]
 
 
-def dasl(unread: bool, query: str | None) -> str:
+def dasl(unread: bool, query: Text) -> str:
     """A Table filter in DASL, the syntax that has no locale-dependent parts."""
     parts = ['"urn:schemas:httpmail:read" = 0'] if unread else []
     if query:
@@ -184,7 +188,6 @@ class Backend:
         """Every mail folder with its unread and total counts."""
         return [
             {
-                "account": self.account,
                 "folder": folder.Name,
                 "path": path(folder),
                 "unread": folder.UnReadItemCount,
@@ -194,12 +197,7 @@ class Backend:
         ]
 
     def list(
-        self,
-        folder: str | None,
-        unread: bool,
-        limit: int,
-        since: datetime | None,
-        query: str | None,
+        self, folder: Text, unread: bool, limit: int, since: datetime | None, query: Text
     ) -> list[dict]:
         """Summaries, newest first: one folder (the Inbox by default), or with a query and no
         folder, every mail folder."""
@@ -218,7 +216,6 @@ class Backend:
         sender = getattr(item, "Sender", None)
         return {
             "id": item.EntryID,
-            "account": self.account,
             "folder": path(item.Parent),
             "subject": item.Subject or "",
             "from": {
@@ -226,14 +223,14 @@ class Backend:
                 "smtp": smtp(sender) or item.SenderEmailAddress,
             },
             "received_utc": utc(item.ReceivedTime),
-            "preview": preview(body),
+            "preview": body,
             "unread": bool(item.UnRead),
             "flagged": item.FlagStatus == FLAGGED,
             "to": addresses(item, TO),
             "cc": addresses(item, CC),
             "body": body[:max_chars],
             "truncated": len(body) > max_chars,
-            "attachments": [{"name": a.FileName, "size": a.Size} for a in item.Attachments],
+            "attachments": attachments(item),
         }
 
     def move(self, natives: list[str], folder: str) -> list[str]:
@@ -261,13 +258,7 @@ class Backend:
         return natives
 
     def draft(
-        self,
-        to: list[str],
-        cc: list[str],
-        subject: str,
-        body: str,
-        reply_to: str | None,
-        reply_all: bool,
+        self, to: list[str], cc: list[str], subject: str, body: str, reply_to: Text, reply_all: bool
     ) -> dict:
         """Save a new message, or a reply to reply_to, in Drafts. A reply's body is only the
         text given: the original isn't quoted, so the draft is exactly what the owner approves."""
@@ -286,21 +277,26 @@ class Backend:
         return self.get_draft(mail.EntryID)
 
     def get_draft(self, native: str) -> dict:
-        """A draft as Outlook holds it now."""
+        """A draft as Outlook holds it now, with everything that would be sent: a BCC or an
+        attachment added in Outlook too."""
         item = self._draft(native)
         return {
             "id": item.EntryID,
-            "account": self.account,
             "to": addresses(item, TO),
             "cc": addresses(item, CC),
+            "bcc": addresses(item, BCC),
             "subject": item.Subject or "",
             "body": item.Body or "",
+            "attachments": attachments(item),
         }
 
     def send_draft(self, native: str) -> str:
-        """Send a draft. Outlook files it in Sent Items under a new id, which COM doesn't give
-        back, so this returns the draft's id."""
-        self._draft(native).Send()
+        """Send a draft as plain text, so it carries only the body the owner saw and not an HTML
+        part edited in elsewhere. Outlook files it in Sent Items under a new id, which COM
+        doesn't give back, so this returns the draft's id. A ValueError means nothing was sent."""
+        item = self._draft(native)
+        item.BodyFormat = PLAIN
+        item.Send()
         return native
 
     def agenda(self, days: int) -> list[dict]:
@@ -333,7 +329,6 @@ class Backend:
         return [
             {
                 "id": task.EntryID,
-                "account": self.account,
                 "subject": task.Subject or "",
                 "due": due.date().isoformat() if (due := local(task.DueDate)) else None,
                 "done": bool(task.Complete),
@@ -341,7 +336,7 @@ class Backend:
             for task in items
         ]
 
-    def respond(self, native: str, response: str, body: str | None) -> None:
+    def respond(self, native: str, response: str, body: Text) -> None:
         """Accept, tentatively accept or decline a meeting: an invitation in the mail or an
         event from the agenda (an occurrence answers for its whole series)."""
         item = self._item(native)
@@ -357,12 +352,7 @@ class Backend:
         reply.Send()
 
     def create_event(
-        self,
-        subject: str,
-        start: datetime | str,
-        end: datetime | str,
-        attendees: list[str],
-        body: str | None,
+        self, subject: str, start: When, end: When, attendees: list[str], body: Text
     ) -> str:
         """Add an event to the calendar, inviting the attendees if there are any."""
         event = self.app.CreateItem(APPOINTMENT_ITEM)
@@ -387,7 +377,7 @@ class Backend:
                 yield folder
                 yield from self._walk(folder)
 
-    def _folder(self, name: str | None) -> Any:
+    def _folder(self, name: Text) -> Any:
         """A mail folder by path (Inbox/Receipts) or name; the Inbox when there's none."""
         if not name:
             return self.session.GetDefaultFolder(INBOX)
@@ -413,7 +403,6 @@ class Backend:
             rows.append(
                 {
                     "id": row["EntryID"],
-                    "account": self.account,
                     "folder": where_path,
                     "subject": row["Subject"] or "",
                     "from": {
@@ -421,7 +410,7 @@ class Backend:
                         "smtp": row[SMTP] or row["SenderEmailAddress"] or "",
                     },
                     "received_utc": received,
-                    "preview": preview(row[PREVIEW]),
+                    "preview": row[PREVIEW] or "",
                     "unread": bool(row["UnRead"]),
                     "flagged": row[FLAG] == FLAGGED,
                 }
@@ -433,7 +422,6 @@ class Backend:
         invited = f"{item.RequiredAttendees or ''};{item.OptionalAttendees or ''}".split(";")
         return {
             "id": item.EntryID,
-            "account": self.account,
             "subject": item.Subject or "",
             "start": begins.isoformat(),
             "end": ends.isoformat(),
@@ -444,11 +432,11 @@ class Backend:
         }
 
     def _item(self, native: str) -> Any:
-        """The item with this EntryID."""
+        """The item with this EntryID. A ValueError: mail.py knows nothing was sent."""
         try:
             return self.session.GetItemFromID(native)
         except Exception:
-            raise LookupError(MOVED) from None
+            raise ValueError(MOVED) from None
 
     def _draft(self, native: str) -> Any:
         """The unsent mail item with this EntryID; anything else is refused."""

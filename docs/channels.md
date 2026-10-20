@@ -133,9 +133,10 @@ down or no page is open, `ask` returns `None` at once instead of waiting, and th
 reply says Attaché couldn't reach the owner just now.
 
 A member's `request` is kept until the owner answers, so it survives a restart: when Attaché
-starts again it asks the owner once more. One that ran out of time meanwhile, or that no
-surface can show right then, gets "did not answer". Buttons from before the restart no longer
-answer anything.
+starts again it asks the owner once more. Right after a start no sidecar may be up yet and no
+page open, so while nothing can show the question it tries again every 30 seconds, until the
+request's time runs out; only then does the member get "did not answer". Buttons from before
+the restart no longer answer anything.
 
 A button or reaction answers its own question. A typed reply naming an option, or its number,
 answers only when exactly one open question in that chat waits for the person typing. With two

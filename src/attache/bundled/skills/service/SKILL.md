@@ -23,7 +23,7 @@ yes. `status` is safe to run any time.
 
 | System | What | Check it |
 |---|---|---|
-| Windows | A Task Scheduler task, `Attache`, that runs at logon, only while the owner is logged on and without elevated rights, which Outlook automation needs. Started now too. | `schtasks /Query /TN Attache` |
+| Windows | A Task Scheduler task, `Attache`, started at the owner's own logon, only while they are logged on and without elevated rights, which Outlook automation needs. It also runs on battery, has no time limit, and is started now too. A standard user can install it: no administrator needed. | `schtasks /Query /TN Attache` |
 | macOS | A LaunchAgent, `~/Library/LaunchAgents/ai.attache.plist`: started now, at login, and again if it stops. Log: `<home>/logs/service.log`. | `launchctl print gui/$(id -u)/ai.attache` |
 | Linux | A systemd user unit, `~/.config/systemd/user/attache.service`, enabled and started, and restarted if it fails. | `journalctl --user -u attache` |
 
@@ -41,10 +41,9 @@ task, agent or unit.
 
 ## Good to know
 
-- **Windows.** A console window opens for Attaché at logon: minimise it, because closing it
-  stops Attaché until the next logon. If schtasks says "Access is denied", run the install
-  once from a terminal opened with "Run as administrator"; the task still runs as the owner,
-  without elevated rights.
+- **Windows.** Attaché runs in a console window, opened at logon. Minimising it keeps
+  Attaché running; closing it stops Attaché until the next logon (or `schtasks /Run /TN
+  Attache`).
 - **Environment.** The service sees the PATH from the moment of install (macOS and Linux) or
   the owner's saved environment variables (Windows), but not variables set only in a shell
   profile, such as `ANTHROPIC_API_KEY`. On Windows save them as user environment variables;

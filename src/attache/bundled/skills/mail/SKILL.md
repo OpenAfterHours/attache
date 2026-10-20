@@ -32,12 +32,12 @@ to do. Ids look like `gmail:1801234567890123456`; pass them back exactly as give
 | Command | Gives |
 |---|---|
 | `inbox [--account A] [--unread] [--limit 25] [--since 2026-10-20T07:00]` | `items`: summaries, newest first, all accounts unless `--account` |
-| `search --query Q [--account A] [--folder F] [--limit 25]` | `items`. Gmail understands its own search syntax (`from:dan has:attachment`) |
+| `search --query=Q [--account A] [--folder F] [--limit 25]` | `items`. Gmail understands its own search syntax (`--query=from:dan has:attachment`) |
 | `read ID [--max-chars 8000]` | `item`: the message with `to`, `cc`, `body` (plain text), `truncated`, `attachments` |
 | `folders [--account A]` | `items`: each folder's `path`, `unread` and `total` |
 | `agenda [--days 7]` | Outlook only: `items`, events with recurring meetings expanded |
 | `tasks` | Outlook only: `items`, Outlook tasks or Microsoft To Do |
-| `move ID... --to FOLDER` | `moved`: on Gmail the label is added and the message leaves the inbox |
+| `move ID... --to FOLDER` | `moved`: the ids after the move (they change outside Gmail). On Gmail the label is added and the message leaves the inbox |
 | `flag ID... [--off]`, `mark-read ID... [--off]` | `changed` |
 | `doctor [--account A]` | each account's state and, when it fails, the cause and the fix |
 
@@ -46,38 +46,44 @@ to do. Ids look like `gmail:1801234567890123456`; pass them back exactly as give
   while the others still answer.
 - Moving more than 20 messages at once needs the owner's yes: ask first, then run the same
   command again with `--many`.
+- `move`, `flag` and `mark-read` act on each id on its own: one that fails ("no such message
+  (it may have moved)") is listed under `errors`, and the rest are done. After a move, use the
+  new ids from `moved`.
 - Folder names are the paths `folders` gives (`Inbox/Receipts` in Outlook, `Receipts` in Gmail).
+- A value starting with `-` goes after `=`: `--query=-in:chats`, `--body=- first point`.
 
 ## Drafting
 
 - `draft-reply ID --body TEXT [--all]` saves a reply in that account's Drafts. The body is
   only what you write; the original isn't quoted.
 - `draft-new --account A --to ADDR... [--cc ADDR...] --subject S --body TEXT` saves a new one.
-- Both return `draft: {id, account, to, cc, subject, body, fingerprint}`.
+- Both return `draft: {id, account, to, cc, bcc, subject, body, attachments, fingerprint}`.
 
 ## Sending: only on the owner's Send
 
-1. Save the draft with `draft-reply` or `draft-new`.
-2. Show it with the `ask` tool, from the draft the command returned (not from memory):
-   `ask {question: "Send this from Gmail?\nTo: dan@example.com\nSubject: Re: Quote\n\nThanks Dan, Thursday at 9am works.", options: ["Send", "Edit", "Not now"], approves: "<fingerprint>"}`.
-   Keep **Send** first: only the first option approves.
-3. On **Send**: `send-draft DRAFT_ID --fingerprint <fingerprint>`. On **Edit**: ask what to
-   change, make a new draft, and show that one. On **Not now** or no answer: leave the draft
-   in Drafts and say so.
+1. Save the draft with `draft-reply` or `draft-new`. Its `fingerprint` F stands for exactly
+   that draft, in that account.
+2. Ask the owner: `ask {question: "Send this reply to Dan?", approves: "F"}`. Attaché shows
+   the owner the draft itself, as the mail command wrote it (recipients, Bcc, subject,
+   attachments and text), in place of your question, with the buttons **Send** and **Not now**.
+3. On **Send**: `send-draft DRAFT_ID --fingerprint F`. On **Not now** or no answer: leave the
+   draft in Drafts and say so. To change it, make a new draft and ask again.
 
-`send-draft` checks two things. The fingerprint must match the draft as it is now, so a draft
-that changed after the yes is refused ("the draft changed since it was approved"): show the
-new one and ask again. And the owner's Send must have been given in `ask` with that
-fingerprint, which the core records; each approval sends once. Without `--fingerprint` it
-returns `needs_approval` and a `preview` instead of sending.
+`send-draft` refuses when:
+- the draft changed after the yes ("the draft changed since it was approved"): ask again;
+- the owner didn't press Send for that F ("not approved"), or did so over 15 minutes ago;
+- the same approval was used already: each Send sends once;
+- an earlier try may have sent it ("this may already have been sent"): ask the owner to look
+  in Sent, and never send it again yourself.
 
-Be honest about what this proves: it stops an email talking you into sending through these
-commands alone, but a turn that can run shell commands could forge an approval. It is no
-substitute for the rules above.
+Without `--fingerprint`, `send-draft` returns `needs_approval` and the `preview` text.
 
-Outlook sends through Outlook itself. Gmail and Titan send through SMTP, and a retry of a send
-that went through isn't sent twice. Titan accounts may have a `send_limit_hour`; a send past
-it is refused until the hour has passed.
+Be honest about what this proves: an email that talks you into sending can't do it with these
+commands, because the owner sees the real draft. But a turn that can run shell commands could
+forge an approval, so it is no substitute for the rules above.
+
+Outlook sends through Outlook itself; Gmail and Titan through SMTP, never twice for one draft.
+Titan accounts may have a `send_limit_hour`; a send past it is refused until later.
 
 ## Meetings and events (Outlook)
 
@@ -86,8 +92,8 @@ it is refused until the hour has passed.
   adds an event, and invites the attendees.
 - Times are ISO, such as `2026-10-23T09:00`, local time unless a zone is given.
 
-Both work like sending: the first call returns `{needs_approval: F, preview}`. Show the
-preview with `ask` (`approves: F`, Send first), then run the same command again with
+Both work like sending: the first call returns `{needs_approval: F, preview}`. Ask with
+`ask {question: "...", approves: "F"}`, and on Send run the same command again with
 `--fingerprint F`.
 
 ## When something fails

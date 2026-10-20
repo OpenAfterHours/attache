@@ -101,6 +101,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
 
 
+def _discard(files: list[str]) -> None:
+    """Delete the files of a message from someone Attaché neither answers nor keeps."""
+    for path in files:
+        with contextlib.suppress(OSError):
+            Path(path).unlink()
+
+
 class Router:
     def __init__(
         self, services: Services, make_backend: Callable[[Endpoint], Backend] | None = None
@@ -156,16 +163,9 @@ class Router:
 
     async def handle(self, msg: Inbound) -> Reply | None:
         """Steps 1-8 above. Never raises; a message with no text and no files is ignored. The
-        files of a message that gets no turn are deleted: nothing will read them, and they came
-        from people Attaché does not answer."""
-        reply = await self._handle(msg)
-        if reply is None:
-            for path in msg.files:
-                with contextlib.suppress(OSError):
-                    Path(path).unlink()
-        return reply
-
-    async def _handle(self, msg: Inbound) -> Reply | None:
+        files of a message that is not admitted, or from a guest who isn't stored, are deleted
+        (_discard). The owner's and members' files stay, answered or not: they stay in the
+        chat's context."""
         try:
             # A chat listed in [chats] is a group whatever the channel says, so a sidecar cannot
             # give it a direct chat's trust.
@@ -174,9 +174,11 @@ class Router:
             empty = not msg.text.strip() and not msg.files
             admitted = None if empty else self.admit(msg)
             if admitted is None:
+                _discard(msg.files)
                 return None
             sender, chat = admitted
             if sender.role == "guest" and not (chat and chat.guests == "public"):
+                _discard(msg.files)
                 return None  # not answered, and not stored either
             store, channels = self.services.store, self.services.channels
             msg_id = store.add_message(msg.chat_key, "user", msg.text, sender.id, sender.name)
@@ -197,17 +199,21 @@ class Router:
             logging.getLogger(__name__).exception("message in %s failed", msg.chat_key)
             return None
 
-    def _limited(self, chat_key: str, sender: Person) -> tuple[bool, str]:
+    def _limited(self, chat_key: str | None, sender: Person) -> tuple[bool, str]:
         """Sliding windows on turns (config.limits): per sender and per chat each hour, and a
         daily pool shared by everyone of a kind: guests and pages in one ("guest_daily"), so a
         public chat cannot use up the members' ("member_daily"). (over a limit?, notice): the
         first turn over a limit gets the notice; later ones get "" (silence) until that window
-        has room again. handle() exempts the owner."""
+        has room again. handle() exempts the owner. page_turn passes chat_key None: a page
+        counts against itself and the guests' pool, so an auto-refreshing page never silences
+        its chat."""
         limits, now = self.services.config.limits, time.time()
         pool = "guest" if sender.role in ("guest", "page") else "member"
-        keys = (f"sender {sender.id}", f"chat {chat_key}", f"{pool}s")
-        caps = (limits["per_sender_hour"], limits["per_chat_hour"], limits[f"{pool}_daily"])
-        for key, span, cap in zip(keys, (3600, 3600, 86400), caps, strict=True):
+        windows = [(f"sender {sender.id}", 3600, limits["per_sender_hour"])]
+        if chat_key is not None:
+            windows.append((f"chat {chat_key}", 3600, limits["per_chat_hour"]))
+        windows.append((f"{pool}s", 86400, limits[f"{pool}_daily"]))
+        for key, span, cap in windows:
             self.recent[key] = [t for t in self.recent[key] if t > now - span]
             if len(self.recent[key]) >= cap:
                 free = self.recent[key][0] + span  # when the window has room again
@@ -215,7 +221,7 @@ class Router:
                     return True, ""  # told already in this window
                 self.noticed[key] = free
                 return True, BUSY.format(max(1, round((free - now) / 60)))
-        for key in keys:
+        for key, _, _ in windows:
             self.recent[key].append(now)
         return False, ""
 
@@ -260,7 +266,7 @@ class Router:
         rights never reach a page. Returns the reply's text."""
         key = scope.chat_key or "local:me"
         sender = Person(f"page:{scope.slug}", f"page {scope.slug}", "page")
-        limited, notice = self._limited(key, sender)
+        limited, notice = self._limited(None, sender)  # not in its chat's window: see _limited
         if limited:
             return notice or APOLOGY
         msg = Inbound(*key.split(":", 1), sender.id, sender.name, prompt)

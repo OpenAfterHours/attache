@@ -86,10 +86,11 @@ def _skill(home: Path, argv: list[str]) -> int:
     """Run a skill's own script, such as the owner's one-time `mail login`, in this terminal."""
     name, *rest = argv or [""]
     script = home / "skills" / name / "scripts" / f"{name}.py"
+    if not shutil.which("uv"):  # SystemExit with a message: that one line, and exit code 1
+        raise SystemExit("uv is not installed: see https://docs.astral.sh/uv/")
     if not channels.PLAIN_NAME.fullmatch(name) or not script.is_file():
         hint = "new bundled skills arrive with `attache init`, which never overwrites"
-        print(f"No skills/{name}/scripts/{name}.py in {home}: {hint}.", file=sys.stderr)
-        return 1
+        raise SystemExit(f"No skills/{name}/scripts/{name}.py in {home}: {hint}.")
     return subprocess.run(["uv", "run", str(script), *rest]).returncode
 
 

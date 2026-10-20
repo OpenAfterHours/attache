@@ -198,8 +198,15 @@ def test_load_accepts_a_byte_order_mark(home: Path) -> None:
         ('[routing]\nown = "x"\n', r"unknown key own in \[routing\]"),
         ('[assistant]\nnick = "x"\n', r"unknown key nick in \[assistant\]"),
         ('[chats."slack:C1"]\nengage = "always"\nmember = []\n', r'\[chats\."slack:C1"\]'),
-        ('[web]\nport = "eighty"\n', r"\[web\] port must be a number, not 'eighty'"),
-        ("[web]\npublic_port = []\n", r"\[web\] public_port must be a number, not \[\]"),
+        ('[web]\nport = "eighty"\n', r"\[web\] port must be a port, 1 to 65535, not 'eighty'"),
+        ("[web]\nport = -1\n", r"\[web\] port must be a port, 1 to 65535, not -1"),
+        ("[web]\nport = 65536\n", r"\[web\] port must be a port"),
+        ("[web]\nport = true\n", r"\[web\] port must be a port"),
+        ("[web]\nport = 8080.5\n", r"\[web\] port must be a port"),
+        ("[web]\npublic_port = []\n", r"\[web\] public_port must be a port, 1 to 65535, not \[\]"),
+        ("[web]\npublic_port = 0\n", r"\[web\] public_port must be a port"),
+        ("[web]\nport = 65535\n", r"\[web\] public_port must be a port, 1 to 65535, not 65536"),
+        ("[web]\nport = 9000\npublic_port = 9000\n", r"\[web\] public_port must differ from port"),
         ('[web]\npublic_url = "http://pc.ts.net"\n', r"\[web\] public_url must be"),  # not https
         ('[web]\npublic_url = "https://pc.ts.net/s"\n', r"\[web\] public_url must be"),  # a path
         ('[web]\npublic_url = "https://pc.ts.net/"\n', r"\[web\] public_url must be"),
@@ -279,7 +286,7 @@ def test_init_home_creates_a_home(home: Path, no_git: None, restricted: list[Pat
     assert "skills/artifact-kit" in bundled
     for folder in ("memory/chats", "files", "logs"):
         assert (home / folder).is_dir()
-    assert not (home / ".secret").exists()  # app.build makes it
+    assert not (home / ".secret").exists()  # nothing makes one now: share links are docs
     page = skills.BUNDLED / "artifact-kit" / "templates" / "home.html"
     home_page = (home / "artifacts" / "home.html").read_text(encoding="utf-8")
     assert home_page == page.read_text(encoding="utf-8")
@@ -291,6 +298,18 @@ def test_init_home_creates_a_home(home: Path, no_git: None, restricted: list[Pat
     ignored = (home / ".gitignore").read_text(encoding="utf-8").split()
     assert ignored == ["attache.db*", ".secret", "files/", "logs/", ".mail/", ".approvals/"]
     assert restricted == [home]  # the folder is made yours alone
+
+
+def test_init_home_restricts_the_folder_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_git: None
+) -> None:
+    seen: list[tuple[Path, list[str]]] = []
+    monkeypatch.setattr(config, "restrict", lambda p: seen.append((p, sorted(os.listdir(p)))))
+    home = tmp_path / "new" / "home"  # not there yet: init makes it, then restricts it
+    config.init_home(home, "Alex")
+    assert seen == [(home, [])]  # so all it writes inherits that
+    config.init_home(home, "Alex")  # again, as after an upgrade: an existing home, restricted
+    assert seen[1][0] == home and "attache.toml" in seen[1][1]
 
 
 def fake_commands(calls: list[list[str]], fail: str = "") -> Any:
@@ -323,6 +342,39 @@ def test_restrict(system: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             ["whoami", "/user", "/fo", "csv", "/nh"],
             ["icacls", str(tmp_path), "/inheritance:r", *grant],
         ]
+
+
+@pytest.mark.parametrize(
+    ("contents", "restricted"),
+    [
+        ([], True),  # empty: a new home
+        (["attache.toml", "attache.db", "memory/"], True),  # a home already: init upgrades it
+        (["taxes.pdf"], False),  # someone else's folder (--home by mistake): left alone
+        (["memory/"], False),  # no attache.toml: not known to be a home
+    ],
+)
+def test_restrict_only_a_folder_that_is_attaches(
+    contents: list[str],
+    restricted: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    for name in contents:
+        if name.endswith("/"):
+            (tmp_path / name).mkdir()
+        else:
+            (tmp_path / name).write_text("", encoding="utf-8")
+    calls: list[list[str]] = []
+    modes: list[int] = []
+    monkeypatch.setattr(config.subprocess, "check_output", fake_commands(calls))
+    monkeypatch.setattr(type(tmp_path), "chmod", lambda self, mode: modes.append(mode))
+    with caplog.at_level(logging.WARNING, logger="attache.config"):
+        REAL_RESTRICT(tmp_path)
+    assert (modes == [0o700]) is restricted
+    assert bool(calls) is (restricted and os.name == "nt")
+    left = "it holds other files, so its permissions are left as they are"
+    assert (left in caplog.text) is not restricted
 
 
 @pytest.mark.parametrize("fail", ["whoami", "icacls", "chmod"])

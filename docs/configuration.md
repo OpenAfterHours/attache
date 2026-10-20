@@ -11,6 +11,14 @@ starting file.
 After upgrading Attaché, run `attache init` to add new bundled skills; it never overwrites
 your files.
 
+`attache init` also makes the home folder yours alone, an existing home included, so running
+it after an upgrade locks down a home made by an older Attaché too. On macOS and Linux that
+is `chmod 700`. On Windows it is an access list that lets in only you and SYSTEM, with
+inheritance off, so everyone else, Administrators included, loses access to everything in
+it. It does this only to a folder that is new, empty or already a home (it holds
+`attache.toml`). It leaves any other folder as it is and says so, in case `--home` named
+the wrong one.
+
 Attaché reads the file once, when it starts, so restart `attache` or `attache run` after you
 change it. Run `attache doctor` to check your edits; a mistyped key is reported with the keys
 that section accepts:
@@ -98,6 +106,11 @@ picks the two defaults:
 A chat listed under [`[chats]`](#chats-group-chats) can name its own `endpoint`, which wins
 over both. Your own messages in a group chat also go to `group_chats`, because other people
 can read the reply.
+
+So does a page that asks the assistant with `attache.ask`, even one of your own pages. That
+turn is the page's, not yours: it sees only the docs shared with the page's chat, and for
+one of your own pages that means the docs shared with `local:me`, never everything. See
+[Pages](pages.md#asking-from-a-page).
 
 The split exists because of Anthropic's terms: a Claude Pro or Max login is for your own use,
 so the `claude-cli` backend answers only your own chats and refuses every other turn. Anything
@@ -305,7 +318,7 @@ from the internet to it.
     $ tailscale funnel --bg 8766
     ```
 
-Point Funnel at `public_port`, never at `port`. The server on `public_port` has only the
+**Point Funnel at `public_port`, never at `port`.** The server on `public_port` has only the
 share link routes and what a shared page needs to run (its data and live updates); your
 chat, your own pages and Claude Code's MCP endpoint are not there at all, and it answers only
 requests for the `public_url` host. `tailscale funnel reset` turns it off. What a share link

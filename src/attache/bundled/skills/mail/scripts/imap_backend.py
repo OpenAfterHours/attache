@@ -1,13 +1,19 @@
 """Gmail, Titan and other IMAP accounts for the mail skill: IMAPClient to read and file,
-smtplib to send. mail.py adds the account prefix, the fingerprints, the caps and the log.
+smtplib to send. mail.py adds the account prefix, the previews and approvals, the caps and
+the log.
 
 Native ids: Gmail's X-GM-MSGID, which survives moves and labels; elsewhere
 "<folder>/<UIDVALIDITY>/<UID>" in url-safe base64, refused once the server renumbers the
-folder. Gmail's folders are labels, so a move there adds the label and takes the message out
-of the inbox, and Gmail files sent mail itself; other servers get a copy APPENDed to
-`sent_folder`. A draft is APPENDed to the folder flagged \\Drafts (SPECIAL-USE) with its own
-Message-ID, and the Sent folder is searched for that Message-ID before sending, so a retry
-after a send that went through doesn't send it twice.
+folder, so a move gives back new ids. Gmail's folders are labels, so a move there adds the
+label and takes the message out of the inbox, and Gmail files sent mail itself; other servers
+get a copy APPENDed to `sent_folder`.
+
+Drafts are plain text, APPENDed to the folder flagged \\Drafts (SPECIAL-USE) with a Message-ID
+of their own. send_draft rebuilds the message from what get_draft gives (to, cc, bcc, subject,
+body), so nothing goes that the owner wasn't shown, and refuses a draft with other parts. Until
+the SMTP server has the message, every failure is a ValueError: nothing went. Just before SMTP
+the Message-ID is recorded in <home>/.mail/sent.jsonl with its number of recipients, and a
+recorded Message-ID is never sent again. Those records also count `send_limit_hour`.
 
 The password is in the OS keyring (service "attache-mail", username the account name), put
 there by `mail.py login`. IMAPClient, keyring and getpass are imported inside functions, and
@@ -18,13 +24,14 @@ signed-in SMTP stand-in.
 from __future__ import annotations
 
 import base64
+import contextlib
 import email
 import html
 import imaplib
+import json
 import re
 import smtplib
 import ssl
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from email import policy
 from email.message import EmailMessage
@@ -37,8 +44,10 @@ PARTIAL = b"BODY.PEEK[]<0.32768>"  # enough of a listed message for its headers 
 NOT_IN_V1 = "not in v1 for IMAP accounts: calendar and tasks are Outlook only"
 GMAIL_FIX = "make a new app password (Google cancels them when the Google password changes)"
 TITAN_FIX = "for Titan, switch on 'Enable Titan on Other Apps' in webmail, or use an app password"
+PARTS = "this draft has parts Attaché can't show you; send it from your mail app"
 SEEN, FLAGGED, DRAFT = rb"\Seen", rb"\Flagged", rb"\Draft"
 Json = dict[str, Any]
+Text = str | None
 
 
 def host_port(text: str, port: int) -> tuple[str, int]:
@@ -88,9 +97,40 @@ def addresses(msg: EmailMessage, *headers: str) -> list[str]:
 
 
 def parse(row: Json) -> EmailMessage:
-    """The message in a fetch row: BODY[], a partial BODY[]<0> or BODY[HEADER]."""
+    """The message in a fetch row: BODY[], a partial BODY[]<0> or BODY[HEADER...]."""
     raw = next(value for key, value in row.items() if key.startswith(b"BODY["))
     return email.message_from_bytes(raw or b"", policy=policy.default)
+
+
+def compose(sender: str, fields: Json, headers: dict[str, str]) -> EmailMessage:
+    """A plain-text message of exactly these fields; `headers` adds the Message-ID and the
+    threading. Bcc is never a header: only SMTP is told."""
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = ", ".join(fields["to"])
+    if fields["cc"]:
+        msg["Cc"] = ", ".join(fields["cc"])
+    msg["Subject"] = fields["subject"]
+    msg["Date"] = formatdate(localtime=True)
+    for name, value in headers.items():
+        if value:
+            msg[name] = value
+    msg.set_content(fields["body"])
+    return msg
+
+
+def draft_fields(native: str, msg: EmailMessage) -> Json:
+    """A draft as get_draft gives it: what the fingerprint covers, and all send_draft sends.
+    read() takes the addresses, subject and body from here too."""
+    return {
+        "id": native,
+        "to": addresses(msg, "to"),
+        "cc": addresses(msg, "cc"),
+        "bcc": addresses(msg, "bcc"),
+        "subject": str(msg.get("subject", "")),
+        "body": text_of(msg),
+        "attachments": [],  # not in v1 for IMAP: a draft with any is refused
+    }
 
 
 def utc(moment: datetime) -> str:
@@ -138,11 +178,6 @@ class Backend:
             self._imap = self._connect()
         return self._imap
 
-    def refused(self) -> str:
-        """What to do when the server refuses the password."""
-        fix = GMAIL_FIX if self.gmail else TITAN_FIX
-        return f"{self.settings['imap']} refused the password: {fix}; then run login again"
-
     def doctor(self) -> tuple[bool, str]:
         try:
             status = self.imap.folder_status("INBOX", [b"MESSAGES", b"UNSEEN"])
@@ -150,7 +185,8 @@ class Backend:
         except LookupError as error:  # no password stored
             return False, str(error)
         except (imaplib.IMAP4.error, smtplib.SMTPAuthenticationError):
-            return False, self.refused()
+            fix = GMAIL_FIX if self.gmail else TITAN_FIX
+            return False, f"{self.settings['imap']} refused the password: {fix}; then log in again"
         except OSError as error:
             return False, f"can't reach the server: {error}; check imap and smtp in accounts.toml"
         unread, total = status[b"UNSEEN"], status[b"MESSAGES"]
@@ -165,11 +201,7 @@ class Backend:
         password = getpass.getpass(f"{self.account} {kind} for {self.user} (not shown): ").strip()
         if not password:
             raise ValueError("no password given; nothing stored")
-        try:
-            self._imap = self._connect(password)  # check it before keeping it
-        except imaplib.IMAP4.error:
-            raise PermissionError(self.refused()) from None
-        keyring.set_password(SERVICE, self.account, password)
+        keyring.set_password(SERVICE, self.account, password)  # `doctor` then checks it
 
     # finding messages
 
@@ -190,33 +222,25 @@ class Backend:
     def _native(self, folder: str, validity: int, uid: int, row: Json) -> str:
         return str(row[b"X-GM-MSGID"]) if self.gmail else encode_id(folder, validity, uid)
 
-    def _each(self, natives: list[str], readonly: bool, folder: str = "") -> Iterator[tuple]:
-        """Select each folder holding these messages in turn, and yield (folder, {uid: native})
-        for it. Gmail ids are looked up in `folder`, All Mail unless given."""
+    def _locate(self, native: str, readonly: bool, folder: str = "") -> tuple[str, int]:
+        """Select the folder holding this message: (folder, uid), or LookupError if it isn't
+        there. A Gmail id is looked up in `folder`, All Mail unless given."""
         if self.gmail:
             folder = folder or self._special(rb"\All", "[Gmail]/All Mail")
             self._select(folder, readonly)
-            found = {}
-            for native in natives:
-                uids = self.imap.search(["X-GM-MSGID", int(native)]) if native.isdigit() else []
-                if not uids:
-                    raise LookupError(f"no message {native} in {folder}: list again")
-                found[uids[0]] = native
-            yield folder, found
-            return
-        groups: dict[tuple[str, int], dict[int, str]] = {}
-        for native in natives:
-            name, validity, uid = decode_id(native)
-            groups.setdefault((name, validity), {})[uid] = native
-        for (name, validity), found in groups.items():
-            if self._select(name, readonly) != validity:
-                raise LookupError(f"the server renumbered {name}: list it again")
-            yield name, found
+            uids = self.imap.search(["X-GM-MSGID", int(native)]) if native.isdigit() else []
+        else:
+            folder, validity, uid = decode_id(native)
+            if self._select(folder, readonly) != validity:
+                raise LookupError(f"the server renumbered {folder}: list it again")
+            uids = list(self.imap.fetch([uid], [b"FLAGS"]))  # IMAP ignores a UID not there
+        if not uids:
+            raise LookupError("no such message (it may have moved)")
+        return folder, uids[0]
 
     def _message(self, native: str, *items: bytes, folder: str = "") -> tuple[str, int, Json]:
         """One message's folder (now selected), uid and fetched items."""
-        name, found = next(self._each([native], True, folder))
-        uid = next(iter(found))
+        name, uid = self._locate(native, True, folder)
         return name, uid, self._fetch([uid], *items)[uid]
 
     def _find(self, folder: str, message_id: str) -> str | None:
@@ -250,18 +274,13 @@ class Backend:
             "subject": str(msg.get("subject", "")),
             "from": {"name": name, "smtp": address},
             "received_utc": utc(row[b"INTERNALDATE"]),
-            "preview": " ".join(text_of(msg).split())[:200],
+            "preview": text_of(msg),  # mail.py flattens and caps it
             "unread": SEEN.lower() not in flags,
             "flagged": FLAGGED.lower() in flags,
         }
 
     def list(
-        self,
-        folder: str | None,
-        unread: bool,
-        limit: int,
-        since: datetime | None,
-        query: str | None,
+        self, folder: Text, unread: bool, limit: int, since: datetime | None, query: Text
     ) -> list[Json]:
         folder = folder or "INBOX"
         validity = self._select(folder)
@@ -272,51 +291,51 @@ class Backend:
             criteria += ["X-GM-RAW", query] if self.gmail else ["TEXT", query]
         uids = sorted(self.imap.search(criteria or ["ALL"], charset="UTF-8" if query else None))
         rows = self._fetch(uids[-limit:], b"FLAGS", b"INTERNALDATE", PARTIAL) if uids else {}
-        found = [
+        return [  # mail.py puts them newest first, across the accounts
             self._summary(self._native(folder, validity, uid, row), folder, row, parse(row))
             for uid, row in rows.items()
             if not since or row[b"INTERNALDATE"].astimezone(UTC) >= since
         ]
-        return sorted(found, key=lambda summary: summary["received_utc"], reverse=True)
 
     def read(self, native: str, max_chars: int) -> Json:
         folder, _, row = self._message(native, b"FLAGS", b"INTERNALDATE", b"BODY.PEEK[]")
         msg = parse(row)
-        body = text_of(msg)
         attachments = [
             {"name": part.get_filename() or "", "size": len(part.get_payload(decode=True) or b"")}
             for part in msg.iter_attachments()
         ]
-        return {
-            **self._summary(native, folder, row, msg),
-            "to": addresses(msg, "to"),
-            "cc": addresses(msg, "cc"),
-            "body": body[:max_chars],
-            "truncated": len(body) > max_chars,
-            "attachments": attachments,
-        }
+        message = self._summary(native, folder, row, msg) | draft_fields(native, msg)
+        return message | {"attachments": attachments}  # mail.py caps the body at max_chars
 
     # filing
 
     def move(self, natives: list[str], folder: str) -> list[str]:
+        """Move messages; their ids afterwards. Outside Gmail a moved message is found again
+        by its Message-ID, since IMAPClient doesn't hand back MOVE's COPYUID."""
         moved = []
-        for _, found in self._each(natives, readonly=False):
+        for native in natives:
+            _, uid = self._locate(native, readonly=False)
             if self.gmail:  # a label; INBOX is the \Inbox label itself
                 label = "\\Inbox" if folder.upper() == "INBOX" else folder
-                self.imap.add_gmail_labels(list(found), [label])
+                self.imap.add_gmail_labels([uid], [label])
                 if label != "\\Inbox":
-                    self.imap.remove_gmail_labels(list(found), ["\\Inbox"])
-            else:
-                self.imap.move(list(found), folder)
-            moved += found.values()
+                    self.imap.remove_gmail_labels([uid], ["\\Inbox"])
+                moved.append(native)
+                continue
+            head = self._fetch([uid], b"BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]")[uid]
+            message_id = parse(head).get("message-id")
+            self.imap.move([uid], folder)
+            new = self._find(folder, str(message_id)) if message_id else None
+            if new is None:
+                raise LookupError(f"moved to {folder}, but can't find it there: list it")
+            moved.append(new)
         return moved
 
     def _flags(self, natives: list[str], flag: bytes, on: bool) -> list[str]:
-        changed = []
-        for _, found in self._each(natives, readonly=False):
-            (self.imap.add_flags if on else self.imap.remove_flags)(list(found), [flag])
-            changed += found.values()
-        return changed
+        for native in natives:
+            _, uid = self._locate(native, readonly=False)
+            (self.imap.add_flags if on else self.imap.remove_flags)([uid], [flag])
+        return natives
 
     def flag(self, natives: list[str], on: bool) -> list[str]:
         return self._flags(natives, FLAGGED, on)
@@ -326,10 +345,10 @@ class Backend:
 
     # drafts and sending
 
-    def draft(self, to, cc, subject, body, reply_to: str | None, reply_all: bool) -> Json:
+    def draft(self, to, cc, subject, body, reply_to: Text, reply_all: bool) -> Json:
         """Save a new message, or a reply to reply_to (to, cc and subject then come from it),
         in Drafts. A reply holds only the body given, without the original quoted."""
-        msg = EmailMessage()
+        threading = {}
         if reply_to:
             original = parse(self._message(reply_to, b"BODY.PEEK[HEADER]")[2])
             to = addresses(original, "reply-to") or addresses(original, "from")
@@ -339,61 +358,84 @@ class Backend:
             subject = str(original.get("subject", ""))
             subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
             if parent := original.get("message-id"):
-                msg["In-Reply-To"] = parent
-                msg["References"] = f"{original.get('references', '')} {parent}".strip()
-        msg["From"] = self.user
-        msg["To"] = ", ".join(to)
-        if cc:
-            msg["Cc"] = ", ".join(cc)
-        msg["Subject"] = subject
-        msg["Date"] = formatdate(localtime=True)
-        msg["Message-ID"] = make_msgid(domain=self.user.rpartition("@")[2] or "localhost")
-        msg.set_content(body)
+                references = f"{original.get('references', '')} {parent}".strip()
+                threading = {"In-Reply-To": str(parent), "References": references}
+        message_id = make_msgid(domain=self.user.rpartition("@")[2] or "localhost")
+        fields = {"to": to, "cc": cc or [], "subject": subject, "body": body}
+        msg = compose(self.user, fields, {"Message-ID": message_id, **threading})
         drafts = self._special(rb"\Drafts", "Drafts")
         self.imap.append(drafts, msg.as_bytes(policy=policy.SMTP), flags=[DRAFT, SEEN])
-        native = self._find(drafts, msg["Message-ID"])
+        native = self._find(drafts, message_id)
         if native is None:
             raise LookupError(f"the draft was saved in {drafts} but isn't there")
         return self.get_draft(native)
 
     def _draft(self, native: str) -> tuple[str, int, EmailMessage]:
-        """A message in Drafts: its folder, uid and contents. Only drafts are ever sent."""
+        """A plain-text message in Drafts: its folder, uid and contents. Only those are sent."""
         drafts = self._special(rb"\Drafts", "Drafts")
         folder, uid, row = self._message(native, b"BODY.PEEK[]", folder=drafts)
         msg = parse(row)
         if folder != drafts or not msg.get("message-id"):
-            raise LookupError(f"{native} is not a draft saved by draft-new or draft-reply")
+            raise ValueError(f"{native} is not a draft saved by draft-new or draft-reply")
+        if msg.get_content_type() != "text/plain":
+            raise ValueError(PARTS)
         return folder, uid, msg
 
     def get_draft(self, native: str) -> Json:
-        msg = self._draft(native)[2]
-        return {
-            "id": native,
-            "to": addresses(msg, "to"),
-            "cc": addresses(msg, "cc"),
-            "subject": str(msg.get("subject", "")),
-            "body": text_of(msg),
-        }
+        return draft_fields(native, self._draft(native)[2])
+
+    def _may_send(self, message_id: str, recipients: int) -> None:
+        """Refuse a Message-ID that went to SMTP before, by <home>/.mail/sent.jsonl, and a
+        send past send_limit_hour."""
+        path = self.home / ".mail" / "sent.jsonl"
+        hour_ago = (datetime.now(UTC) - timedelta(hours=1)).isoformat(timespec="seconds")
+        records, recent = [], 0
+        for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
+            with contextlib.suppress(ValueError):  # a line cut short
+                records.append(json.loads(line))
+        for record in records:
+            if record.get("message_id") == message_id:
+                again = "check Sent; to send it again, draft it again"
+                raise ValueError(f"already sent at {record.get('ts')}: {again}")
+            if record.get("account") == self.account and record.get("ts", "") >= hour_ago:
+                recent += record.get("recipients", 0)
+        limit = self.settings.get("send_limit_hour")
+        if limit and recent + recipients > limit:
+            raise ValueError(f"{self.account} sends to {limit} people an hour; {recent} so far")
+
+    def _record(self, message_id: str, recipients: int) -> None:
+        path = self.home / ".mail" / "sent.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        when = datetime.now(UTC).isoformat(timespec="seconds")
+        record = {"ts": when, "account": self.account, "message_id": message_id}
+        with path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps({**record, "recipients": recipients}) + "\n")
 
     def send_draft(self, native: str) -> str:
-        """Send to exactly the To and Cc the fingerprint covers, file it in Sent, and remove
-        the draft. A draft whose Message-ID is in Sent already isn't sent again."""
-        folder, uid, msg = self._draft(native)
+        """Send what get_draft gives, file it in Sent and remove the draft: see the module
+        docstring for what a failure means."""
+        try:
+            folder, uid, msg = self._draft(native)
+            draft = draft_fields(native, msg)
+            recipients = draft["to"] + draft["cc"] + draft["bcc"]
+            keep = ("Message-ID", "In-Reply-To", "References")
+            headers = {name: str(msg.get(name, "")) for name in keep}
+            outgoing = compose(self.user, draft, headers)
+            self._may_send(headers["Message-ID"], len(recipients))
+            session = self._smtp()
+            self._record(headers["Message-ID"], len(recipients))
+        except Exception as error:  # the server has nothing yet
+            raise ValueError(str(error) or type(error).__name__) from error
+        with session:
+            session.send_message(outgoing, to_addrs=recipients)
         sent_folder = self.settings.get("sent_folder") or self._special(rb"\Sent", "Sent")
-        message_id = str(msg["message-id"])
-        sent = self._find(sent_folder, message_id)
-        if sent is None:
-            del msg["bcc"]
-            with self._smtp() as session:
-                session.send_message(msg, to_addrs=addresses(msg, "to", "cc"))
-            if not self.gmail:  # Gmail files sent mail itself
-                self.imap.append(sent_folder, msg.as_bytes(policy=policy.SMTP), flags=[SEEN])
-            sent = self._find(sent_folder, message_id) or ""
+        if not self.gmail:  # Gmail files sent mail itself
+            self.imap.append(sent_folder, outgoing.as_bytes(policy=policy.SMTP), flags=[SEEN])
         self._select(folder, readonly=False)
         self.imap.delete_messages([uid])
         if self.imap.has_capability("UIDPLUS"):  # else the server expunges it in its own time
             self.imap.expunge([uid])
-        return sent
+        return self._find(sent_folder, headers["Message-ID"]) or ""
 
     def agenda(self, *args: Any) -> Any:
         """Outlook only, like tasks, respond and create_event."""

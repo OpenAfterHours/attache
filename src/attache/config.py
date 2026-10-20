@@ -128,12 +128,13 @@ def load(home: Path | None = None) -> Config:
     settings: dict[str, Any] = {"channels": channels, "limits": limits, "approvals": approvals}
     for section, keys in SECTIONS.items():
         settings.update(_check(path, section, raw.get(section, {}), keys))
-    for key in ("port", "public_port"):
+    for key in ("port", "public_port"):  # a number, or digits in a string: "9000" is fine
         value = settings.get(key, 8765 if key == "port" else settings["port"] + 1)
-        try:
-            settings[key] = int(value)
-        except (TypeError, ValueError):
-            raise ValueError(f"{path}: [web] {key} must be a number, not {value!r}") from None
+        if not str(value).isdigit() or not 0 < int(value) < 65536:
+            raise ValueError(f"{path}: [web] {key} must be a port, 1 to 65535, not {value!r}")
+        settings[key] = int(value)
+    if settings["public_port"] == settings["port"]:
+        raise ValueError(f"{path}: [web] public_port must differ from port")
     if not PUBLIC_URL.fullmatch(str(settings.get("public_url", ""))):
         raise ValueError(f'{path}: [web] public_url must be "https://<host>", with no path')
     return Config(home, owner, people, chats, endpoints, **settings)
@@ -164,13 +165,19 @@ def _ids(table: dict[str, Any]) -> dict[str, str]:
 
 def restrict(path: Path) -> None:
     """Make the folder `path` yours alone: chmod 700, or on Windows an ACL that grants only you
-    (by SID, from `whoami /user`) and SYSTEM, with inheritance off. A failure is logged, never
-    raised: the folder still works, only less privately."""
+    (by SID, from `whoami /user`) and SYSTEM, with inheritance off, so everyone else loses
+    access to everything in it. So it does this only to a folder that is Attaché's: an empty
+    one, or a home already (it holds attache.toml). It leaves any other folder as it is, such
+    as one that --home pointed at by mistake. Either that or a failure is logged, never raised:
+    the folder still works, only less privately."""
     try:
+        if any(path.iterdir()) and not (path / "attache.toml").is_file():
+            raise ValueError("it holds other files, so its permissions are left as they are")
         path.chmod(0o700)  # on Windows this only clears the read-only flag; the ACL does the rest
         if os.name == "nt":
             out = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"])
-            sid = out.decode(errors="replace").strip().split(",")[-1].strip('"')  # "pc\me","S-1…"
+            line = out.decode(errors="replace").strip()  # "pc\alex","S-1-5-21-…-1001"
+            sid = line.split(",")[-1].strip('"')  # the last field, unquoted
             grants = ["/grant:r", f"*{sid}:(OI)(CI)F", "/grant:r", "*S-1-5-18:(OI)(CI)F"]  # SYSTEM
             subprocess.check_output(["icacls", str(path), "/inheritance:r", *grants])
     except Exception as e:  # never fatal
@@ -179,10 +186,18 @@ def restrict(path: Path) -> None:
 
 def init_home(home: Path, owner_name: str, endpoint: str = "claude") -> list[Path]:
     """Create a home: attache.toml, memory/, skills/ (bundled copies), artifacts/home.html and
-    a git repo with a first commit, and restrict() the folder. app.build makes .secret.
+    a git repo with a first commit. Run again on a home (after an upgrade, say), it adds only
+    what is missing, such as new bundled skills.
+
+    First it restrict()s the folder, before writing anything: a new or empty one, or an
+    existing home, which locks down homes made before restrict() existed too.
 
     Never overwrites an existing file. Returns the paths it created.
     """
+    home.mkdir(parents=True, exist_ok=True)
+    restrict(home)  # first, so what is written next inherits it
+    for folder in ("memory/chats", "artifacts", "files", "logs"):  # every file's folder too
+        (home / folder).mkdir(parents=True, exist_ok=True)
     home_page = skills.BUNDLED / "artifact-kit" / "templates" / "home.html"
     files = {
         "attache.toml": _template(owner_name, endpoint),
@@ -197,12 +212,8 @@ def init_home(home: Path, owner_name: str, endpoint: str = "claude") -> list[Pat
     for relative, text in files.items():
         path = home / relative
         if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
             created.append(path)
-    for folder in ("memory/chats", "files", "logs"):
-        (home / folder).mkdir(parents=True, exist_ok=True)
-    restrict(home)
     created += skills.install_bundled(home)
     skills.git(home, "init", "-b", "main")
     skills.commit(home, "attache init")

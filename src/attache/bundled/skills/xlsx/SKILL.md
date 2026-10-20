@@ -17,7 +17,7 @@ metadata:
       "rows": [["Item", "Cost", "Paid on"],
                ["Hotel", 300, "2026-11-02"],
                ["Train", 84.5, null],
-               ["Total", "=SUM(B2:B3)"]],
+               ["Total", {"formula": "=SUM(B2:B3)"}]],
       "widths": {"A": 30},
       "formats": {"B": "£#,##0.00", "C": "d mmm yyyy"}}
    ]}
@@ -45,9 +45,10 @@ Cells:
 - Numbers stay numbers: write `300`, not `"300"`, so they sort and sum.
 - `"2026-11-02"` or `"2026-11-02T09:30"` becomes a real date.
 - `true` and `false` stay as they are, and `null` leaves a cell empty.
-- Text starting with `=` is a formula, such as `"=SUM(B2:B9)"`. Write formulas yourself only.
-  Text from someone's message that starts with `=`, `+`, `-` or `@` gets a space in front, so
-  it stays text.
+- A formula is an object: `{"formula": "=SUM(B2:B9)"}`. Write formulas yourself, never from
+  someone's message.
+- Text is always text, even when it starts with `=`, `+`, `-` or `@`: `"=HYPERLINK(...)"`
+  shows as those characters and never runs.
 
 The script refuses unknown keys and names them: fix the spec and run it again.
 

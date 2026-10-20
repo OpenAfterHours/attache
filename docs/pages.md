@@ -112,7 +112,9 @@ A page names the collections it uses in its `<head>`:
 
 This is the only place a page gets data access. A page can reach the collections listed
 there and no others, and a page without the tag can reach none. Calls to anything else fail
-with an error such as `this page may not use collection 'notes'`.
+with an error such as `this page may not use collection 'notes'`. Two collections are never
+a page's, even when listed: `_shares` (Attaché's share links) and `_requests` (members'
+requests waiting for your answer).
 
 ## The bridge: `attache.db`, `attache.on` and `attache.ask`
 
@@ -265,6 +267,9 @@ What a share link can do:
   pages can't. The link reaches only the documents shared with that chat, in the collections
   the page declared when the link was made, under the same rules as the chat's members: it
   can add and edit, not delete.
+- **Capped writes.** Each link may make 60 changes an hour, each at most 64 KB, and adds no
+  document once the chat has 500 in that collection (it can still edit those). A page shows
+  the error, such as `this link has made 60 changes this hour; try again later`.
 - **Seven days, one version.** A link stops working after 7 days, or as soon as the page
   changes or is deleted. Then it says "this link has expired or the page changed; ask for a
   new one", and a new link comes with the next publish.

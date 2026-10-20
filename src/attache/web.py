@@ -39,7 +39,9 @@ which Tailscale Funnel exposes as [web] public_url. Nothing else exists there.
                                once the link has expired or the page has changed
   GET  /bridge.js, /fonts/...  as above
   /api/db/..., /api/events     as above, for share scopes only: the X-Attache-Share header,
-                               or ?share= for SSE
+                               or ?share= for SSE. Writes through a link are capped: 64 KB
+                               a body (413), 60 an hour per link (429), and no new doc once
+                               the chat has 500 in that collection (403)
 
 Security
   Artifacts are written by the agent and may quote emails or web pages, so they are untrusted.
@@ -51,13 +53,15 @@ Security
   X-Attache-Artifact: <slug> and X-Attache-Token: page_token(services, slug), so page
   tokens change with every run, as the UI token does. Its collections come only from its
   <meta name="attache-collections" content="a,b">. Pages published by a member or in a group
-  have an "_artifacts" record {chat_key}, and see only docs shared with that chat.
+  have an "_artifacts" record {chat_key}, and see only docs shared with that chat. No page
+  reaches "_shares" or "_requests".
   Only loopback Host headers are served (against DNS rebinding); never a wildcard address.
   Starlette keeps the brackets of an IPv6 host, so "[::1]" matches.
   Share links (share_url) exist only for pages with a chat_key, and get that chat's member
   access, never the owner's. The store keeps only the sha256 of each link's token, in
   "_shares". Funnel connects from loopback too, so the public app is a separate server on its
-  own port, rather than routes told apart by the Host header; it serves only the public host.
+  own port, rather than routes told apart by the Host header. It takes the public host and
+  the loopback names (Funnel may pass either on), and has only the share routes.
   /mcp refuses any request with an Origin header (403), so web pages cannot post to it, and
   wants Content-Type: application/json (415). Bad token 401, refused 403, missing 404, and a
   body that is not a JSON object 400.
@@ -96,7 +100,6 @@ from attache.types import Inbound, OnMessage, Outbound, ToolCall
 
 if TYPE_CHECKING:
     from attache.app import Services
-    from attache.router import Router
 
 UI = "_ui"  # the scope slug of the Attaché page itself
 PING_SECONDS = 15
@@ -124,15 +127,18 @@ def page_token(services: Services, name: str) -> str:
     return hmac.new(services.ui_token.encode(), f"attache:{name}".encode(), "sha256").hexdigest()
 
 
-def _version(page: Path) -> str | None:
-    """A short hash of the page file, so a share link dies when the page changes."""
+def _version(services: Services, name: str) -> str | None:
+    """A short hash of the page file (None when there is none), so a share link dies when the
+    page changes or goes."""
+    page = services.config.home / "artifacts" / f"{name}.html"
     return hashlib.sha256(page.read_bytes()).hexdigest()[:12] if page.is_file() else None
 
 
 def snapshot_url(services: Services, name: str) -> str:
     """A link that opens the page `name` top-level, for the render skill to take a picture of.
     Its r= token is random, for that page only, and lasts 10 minutes of this run
-    (services.snapshots, in memory)."""
+    (services.snapshots, in memory, which drops the expired ones as new ones come)."""
+    services.snapshots = {t: s for t, s in services.snapshots.items() if s[1] > time.time()}
     token = secrets.token_urlsafe(16)
     services.snapshots[token] = (name, time.time() + 600)
     return f"{services.web_url}/a/{name}?t={page_token(services, name)}&r={token}"
@@ -144,12 +150,12 @@ def share_url(services: Services, name: str) -> str:
     a member or in a group) can be shared, else PermissionError; the link gets that chat's
     member access to the collections the page declares now. The store keeps the token's
     sha256 only, so reading "_shares" gives no working link."""
-    scope, page = page_scope(services, name), services.config.home / "artifacts" / f"{name}.html"
+    scope = page_scope(services, name)
     if scope.chat_key is None:
         raise PermissionError("only a page made in a chat can be shared")
     token = secrets.token_urlsafe(24)
     grant = {"name": name, "chat_key": scope.chat_key, "collections": sorted(scope.collections)}
-    share = {**grant, "version": _version(page), "until": time.time() + 7 * 86400}  # a week
+    share = {**grant, "version": _version(services, name), "until": time.time() + 7 * 86400}
     services.store.doc_put("_shares", hashlib.sha256(token.encode()).hexdigest(), share)
     return f"{services.config.public_url}/s/{token}"
 
@@ -164,20 +170,22 @@ class Scope(NamedTuple):
 
 def page_scope(services: Services, name: str) -> Scope:
     """The page's scope now: the collections its <meta> declares, and the chat_key of its
-    "_artifacts" record, if it has one."""
+    "_artifacts" record, if it has one. "_shares" (link hashes) and "_requests" (members'
+    requests to the owner) are never a page's, even if it declares them."""
     page = services.config.home / "artifacts" / f"{name}.html"
     match = page.is_file() and META.search(page.read_text(encoding="utf-8"))
-    names = match[1].split(",") if match else []
+    declared = match[1].split(",") if match else []
+    names = {n.strip() for n in declared if n.strip()} - {"_shares", "_requests"}
     record = services.store.doc_get("_artifacts", name) or {}
-    return Scope(name, frozenset(n.strip() for n in names if n.strip()), record.get("chat_key"))
+    return Scope(name, frozenset(names), record.get("chat_key"))
 
 
 def share_scope(services: Services, token: str) -> Scope:
-    """The scope a share link's token grants, as stored when the link was made: 410 once the
-    link has expired, or the page has changed or gone."""
-    share = services.store.doc_get("_shares", hashlib.sha256(token.encode()).hexdigest()) or {}
-    page = services.config.home / "artifacts" / f"{share.get('name')}.html"
-    if not share or share["until"] < time.time() or _version(page) != share["version"]:
+    """The scope a share link's token grants, as stored when the link was made: 410 for an
+    unknown token, and once the link has expired, or the page has changed or gone."""
+    share = services.store.doc_get("_shares", hashlib.sha256(token.encode()).hexdigest())
+    gone = share is None or share["until"] < time.time()  # an unknown token, or a week old
+    if gone or _version(services, share["name"]) != share["version"]:
         raise HTTPException(410, "this link has expired or the page changed; ask for a new one")
     return Scope(share["name"], frozenset(share["collections"]), share["chat_key"])
 
@@ -291,11 +299,13 @@ async def _error(request: Request, exc: Exception) -> JSONResponse:
 
 
 def create_app(
-    services: Services, channel: WebChannel, router: Router | None = None, public: bool = False
+    services: Services, channel: WebChannel, router: Any = None, public: bool = False
 ) -> Starlette:
     """The local app, or with public=True the share links' app (see the module docstring).
-    The local one registers a store listener, so doc changes reach open pages, both apps'."""
+    router is the local app's Router (app.run's), whose page_turn answers /api/ask. The local
+    one registers a store listener, so doc changes reach open pages, both apps'."""
     store, home = services.store, services.config.home
+    writes: dict[tuple[str, int], int] = {}  # (share token, hour) -> writes through that link
     if not public:
         store.on_change.append(lambda c, i, d: channel.publish("doc", collection=c, id=i, doc=d))
 
@@ -374,6 +384,16 @@ def create_app(
             raise PermissionError(f"this page may not use collection {collection!r}")
         ops = {"POST": "put", "PUT": "put", "DELETE": "delete"}
         op = ops.get(request.method) or ("get" if doc_id else "list")
+        if public and op == "put":  # anyone with a share link can write, so its writes are capped
+            hour = (request.headers["x-attache-share"], int(time.time() // 3600))
+            writes[hour] = writes.get(hour, 0) + 1
+            if writes[hour] > 60:
+                raise HTTPException(429, "this link has made 60 changes this hour; try again later")
+            if len(await request.body()) > 64 * 1024:
+                raise HTTPException(413, "a change through a share link is at most 64 KB")
+            new = not doc_id or store.doc_get(collection, doc_id) is None
+            if new and len(store.doc_list(collection, shared_with=scope.chat_key)) >= 500:
+                raise PermissionError(f"{collection} already holds 500 docs for this chat")
         data = await body(request) if op == "put" else None
         by, chat = f"web:{scope.slug}", scope.chat_key
         return JSONResponse(db_access(store, op, collection, doc_id, data, by=by, chat=chat))

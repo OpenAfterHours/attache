@@ -281,7 +281,7 @@ def test_signal_cli_is_an_absolute_path_never_in_the_skill_or_working_folder(
 
 
 class Sidecar:
-    """channel.py running as Attaché runs it, with its stdout read on a thread."""
+    """channel.py running as Attaché runs it, with its stdout and stderr read on threads."""
 
     def __init__(self, tmp_path: Path, **env: str) -> None:
         store = tmp_path / "xdg" / "signal-cli" / "attachments"
@@ -304,11 +304,36 @@ class Sidecar:
             argv, cwd=SKILL, stdin=pipe, stdout=pipe, stderr=pipe, env=full_env
         )
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
-        threading.Thread(target=self._read, daemon=True).start()
+        self.err: list[str] = []
+        self.readers = [
+            threading.Thread(target=self._read, daemon=True),
+            threading.Thread(target=self._read_err, daemon=True),
+        ]
+        for reader in self.readers:
+            reader.start()
 
     def _read(self) -> None:
         for line in self.proc.stdout:
             self.events.put(json.loads(line.decode("utf-8")))
+
+    def _read_err(self) -> None:
+        for line in self.proc.stderr:
+            self.err.append(line.decode("utf-8", errors="replace"))
+
+    def exited(self) -> None:
+        """Wait for its output to end, once the process has exited."""
+        for reader in self.readers:
+            reader.join(timeout=10)
+
+    def stderr(self) -> str:
+        """What it has written on stderr so far."""
+        return "".join(self.err)
+
+    def wait_for_stderr(self, text: str, seconds: float = 20) -> None:
+        deadline = time.monotonic() + seconds
+        while text not in self.stderr():
+            assert time.monotonic() < deadline, f"{text!r} never came; stderr: {self.stderr()!r}"
+            time.sleep(0.02)
 
     def next(self, kind: str) -> dict[str, Any]:
         """The next event of this type, skipping logs."""
@@ -318,10 +343,11 @@ class Sidecar:
 
     def rest(self) -> list[dict[str, Any]]:
         """The events still to come, once it has exited."""
+        self.exited()
         events = []
         with contextlib.suppress(queue.Empty):
             while True:
-                events.append(self.events.get(timeout=1))
+                events.append(self.events.get_nowait())
         return events
 
     def write(self, command: dict[str, Any]) -> None:
@@ -333,7 +359,8 @@ class Sidecar:
         self.write({"type": "stop"})
         self.proc.stdin.close()
         code = self.proc.wait(timeout=30)
-        return code, self.proc.stderr.read().decode("utf-8", errors="replace")
+        self.exited()
+        return code, self.stderr()
 
     def recorded(self) -> list[dict[str, Any]]:
         lines = self.requests.read_text(encoding="utf-8").splitlines()
@@ -427,7 +454,7 @@ def test_when_signal_cli_dies_the_sidecar_exits_non_zero(tmp_path: Path) -> None
     side.next("ready")
     assert side.proc.wait(timeout=20) == 3  # its stdin is still open: Attaché did not stop it
     assert any(e["type"] == "log" and "exited with code 3" in e["text"] for e in side.rest())
-    assert b"Fatal Python error" not in side.proc.stderr.read()
+    assert "Fatal Python error" not in side.stderr()
 
 
 @pytest.mark.parametrize(
@@ -445,7 +472,8 @@ def test_a_setup_problem_is_explained_and_then_it_waits(
     tmp_path: Path, env: dict[str, str], why: str
 ) -> None:
     side = Sidecar(tmp_path, **env)
-    time.sleep(3)
+    side.wait_for_stderr(why)  # it says why, and then waits
+    time.sleep(0.3)
     assert side.proc.poll() is None  # still up, so Attaché does not restart it every minute
     code, stderr = side.stop()
     assert code == 0 and why in stderr and "run doctor" in stderr

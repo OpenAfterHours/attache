@@ -12,6 +12,8 @@ import smtplib
 import ssl
 import sys
 from datetime import UTC, date, datetime, timedelta
+from email import policy
+from email.message import EmailMessage
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -24,6 +26,7 @@ SCRIPTS = skills.BUNDLED / "mail" / "scripts"
 FIXTURES = Path(__file__).parent / "fixtures"
 SEEN, FLAGGED, DRAFT, DELETED = rb"\Seen", rb"\Flagged", rb"\Draft", rb"\Deleted"
 NOW = datetime(2026, 10, 20, 9, 30, tzinfo=UTC)
+GONE = "no such message (it may have moved)"
 TITAN = {
     "backend": "imap",
     "imap": "imap.titan.email:993",
@@ -61,6 +64,12 @@ def fixture(name: str) -> bytes:
     return (FIXTURES / f"mail_{name}.eml").read_bytes()
 
 
+@pytest.fixture(autouse=True)
+def in_a_temporary_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backends below get Path(".") as their home, where .mail/sent.jsonl goes."""
+    monkeypatch.chdir(tmp_path)
+
+
 class FakeSMTP:
     def __init__(self, server: FakeIMAP) -> None:
         self.server = server
@@ -71,7 +80,9 @@ class FakeSMTP:
     def __exit__(self, *exc: Any) -> None:
         self.quit()
 
-    def send_message(self, msg: email.message.EmailMessage, to_addrs: list[str]) -> None:
+    def send_message(self, msg: EmailMessage, to_addrs: list[str]) -> None:
+        if self.server.smtp_fails:
+            raise self.server.smtp_fails
         self.server.sent.append((msg, to_addrs))
         if self.server.gmail:  # Gmail files sent mail itself
             self.server.add("[Gmail]/Sent Mail", msg.as_bytes(), [SEEN])
@@ -81,8 +92,9 @@ class FakeSMTP:
 
 
 class FakeIMAP:
-    """IMAPClient stand-in, signed in already: folders of messages in memory. On Gmail every
-    message is in All Mail too, as the same message with the same X-GM-MSGID."""
+    """IMAPClient stand-in, signed in already: folders of messages in memory. As RFC 3501
+    says, a UID that isn't there is ignored without an error. On Gmail every message is in
+    All Mail too, as the same message with the same X-GM-MSGID."""
 
     def __init__(self, gmail: bool = False) -> None:
         self.gmail = gmail
@@ -94,6 +106,8 @@ class FakeIMAP:
         self.sent: list[tuple] = []
         self.selected = ""
         self.next_msgid = 1801234567890123456
+        self.smtp_fails: Exception | None = None
+        self.append_fails: Exception | None = None
 
     def smtp(self) -> FakeSMTP:
         return FakeSMTP(self)
@@ -113,6 +127,9 @@ class FakeIMAP:
 
     def messages(self, folder: str | None = None) -> dict[int, dict[str, Any]]:
         return self.boxes[folder or self.selected]["messages"]
+
+    def _there(self, uids: list[int]) -> list[int]:
+        return [uid for uid in uids if uid in self.messages()]
 
     # the IMAPClient methods the backend uses
 
@@ -138,8 +155,9 @@ class FakeIMAP:
     def fetch(self, uids: list[int], items: list[bytes]) -> dict[int, dict[bytes, Any]]:
         self.calls.append(("fetch", self.selected, list(uids), list(items)))
         rows = {}
-        for uid in uids:
+        for uid in self._there(uids):
             message, row = self.messages()[uid], {}
+            head = re.split(rb"\r?\n\r?\n", message["raw"], maxsplit=1)[0]
             for item in items:
                 if item == b"FLAGS":
                     row[item] = tuple(message["flags"])
@@ -150,7 +168,10 @@ class FakeIMAP:
                 elif item == b"BODY.PEEK[]":
                     row[b"BODY[]"] = message["raw"]
                 elif item == b"BODY.PEEK[HEADER]":
-                    row[b"BODY[HEADER]"] = re.split(rb"\r?\n\r?\n", message["raw"], maxsplit=1)[0]
+                    row[b"BODY[HEADER]"] = head
+                elif item == b"BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]":
+                    found = re.search(rb"(?im)^message-id:.*$", head)
+                    row[b"BODY[HEADER.FIELDS (MESSAGE-ID)]"] = found[0] if found else b""
                 elif partial := re.fullmatch(rb"BODY\.PEEK\[\]<0\.(\d+)>", item):
                     row[b"BODY[]<0>"] = message["raw"][: int(partial[1])]
                 else:
@@ -159,18 +180,20 @@ class FakeIMAP:
         return rows
 
     def append(self, folder: str, raw: bytes, flags: Any = (), msg_time: Any = None) -> bytes:
+        if self.append_fails and folder == "Sent":
+            raise self.append_fails
         self.calls.append(("append", folder, set(flags)))
         self.add(folder, raw, flags)
         return b"[APPENDUID 7 1] APPEND completed"
 
     def add_flags(self, uids: list[int], flags: list[bytes]) -> None:
         self.calls.append(("add_flags", self.selected, list(uids), list(flags)))
-        for uid in uids:
+        for uid in self._there(uids):
             self.messages()[uid]["flags"].update(flags)
 
     def remove_flags(self, uids: list[int], flags: list[bytes]) -> None:
         self.calls.append(("remove_flags", self.selected, list(uids), list(flags)))
-        for uid in uids:
+        for uid in self._there(uids):
             self.messages()[uid]["flags"].difference_update(flags)
 
     def add_gmail_labels(self, uids: list[int], labels: list[str]) -> None:
@@ -179,17 +202,18 @@ class FakeIMAP:
     def remove_gmail_labels(self, uids: list[int], labels: list[str]) -> None:
         self.calls.append(("remove_gmail_labels", self.selected, list(uids), list(labels)))
 
-    def move(self, uids: list[int], folder: str) -> None:
+    def move(self, uids: list[int], folder: str) -> bytes:
         self.calls.append(("move", self.selected, list(uids), folder))
-        for uid in uids:
+        for uid in self._there(uids):
             self._put(folder, self.messages().pop(uid))
+        return b"Move completed"  # IMAPClient gives only this; COPYUID came untagged
 
     def delete_messages(self, uids: list[int]) -> None:
         self.add_flags(uids, [DELETED])
 
     def expunge(self, uids: list[int]) -> None:
         self.calls.append(("expunge", self.selected, list(uids)))
-        for uid in uids:
+        for uid in self._there(uids):
             if DELETED in self.messages()[uid]["flags"]:
                 del self.messages()[uid]
 
@@ -219,12 +243,17 @@ def matches(message: dict[str, Any], criteria: list[Any]) -> bool:
     return True
 
 
-def titan(fake: FakeIMAP | None = None) -> Any:
-    return imap.Backend("titan", TITAN, Path("."), client=fake or FakeIMAP())
+def titan(fake: FakeIMAP | None = None, **settings: Any) -> Any:
+    return imap.Backend("titan", TITAN | settings, Path("."), client=fake or FakeIMAP())
 
 
 def gmail(fake: FakeIMAP | None = None) -> Any:
     return imap.Backend("gmail", GMAIL, Path("."), client=fake or FakeIMAP(gmail=True))
+
+
+def sent_records() -> list[dict[str, Any]]:
+    text = Path(".mail", "sent.jsonl").read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines()]
 
 
 @pytest.fixture
@@ -273,7 +302,7 @@ def test_ids_round_trip_and_bad_ones_are_refused() -> None:
 
 
 def test_html_bodies_become_text() -> None:
-    msg = email.message_from_bytes(fixture("html"), policy=email.policy.default)
+    msg = email.message_from_bytes(fixture("html"), policy=policy.default)
     text = imap.text_of(msg)
     assert text == "Your order #77 has shipped.\nTrack it & relax.\nQuestions? Ask us"
     assert imap.strip_html("<table><tr><td>a</td><td>b</td></tr></table><!-- x -->") == "a b"
@@ -282,27 +311,25 @@ def test_html_bodies_become_text() -> None:
 # reading
 
 
-def test_titan_lists_summaries_newest_first() -> None:
+def test_titan_lists_summaries() -> None:
     fake = FakeIMAP()
     old = fake.add("INBOX", fixture("plain"), [SEEN, FLAGGED], NOW - timedelta(days=2))
     new = fake.add("INBOX", fixture("attachment"), (), NOW)
-    found = titan(fake).list(None, False, 25, None, None)
-    assert [item["id"] for item in found] == [
-        imap.encode_id("INBOX", 7, new),
-        imap.encode_id("INBOX", 7, old),
-    ]
-    assert found[1] == {
+    found = {item["id"]: item for item in titan(fake).list(None, False, 25, None, None)}
+    assert set(found) == {imap.encode_id("INBOX", 7, new), imap.encode_id("INBOX", 7, old)}
+    first = found[imap.encode_id("INBOX", 7, old)]
+    assert first == {
         "id": imap.encode_id("INBOX", 7, old),
         "folder": "INBOX",
         "subject": "Boiler service quote",
         "from": {"name": "Dan Price", "smtp": "dan@example.com"},
         "received_utc": "2026-10-18T09:30:00Z",
-        "preview": found[1]["preview"],
+        "preview": first["preview"],
         "unread": False,
         "flagged": True,
     }
-    assert found[1]["preview"].startswith("Hi, attached is the quote for the boiler service.")
-    assert len(found[1]["preview"]) <= 200 and found[0]["unread"] and not found[0]["flagged"]
+    assert first["preview"].startswith("Hi, attached is the quote for the boiler service.\n")
+    assert found[imap.encode_id("INBOX", 7, new)]["unread"] is True  # mail.py caps previews
     assert ("select", "INBOX", True) in fake.calls  # read-only: listing marks nothing read
     fetched = next(call for call in fake.calls if call[0] == "fetch")
     assert b"BODY.PEEK[]<0.32768>" in fetched[3]  # a partial fetch, not whole attachments
@@ -335,7 +362,7 @@ def test_gmail_ids_are_x_gm_msgid_and_search_is_gmails() -> None:
     message = backend.read(summary["id"], 8000)
     assert message["folder"] == ALL_MAIL and message["body"].startswith("Your order #77")
     assert ("search", ALL_MAIL, ["X-GM-MSGID", 1801234567890123456], None) in fake.calls
-    with pytest.raises(LookupError, match="list again"):
+    with pytest.raises(LookupError, match=re.escape(GONE)):
         backend.read("999", 8000)
 
 
@@ -346,13 +373,28 @@ def test_read_gives_text_addresses_and_attachments() -> None:
     message = titan(fake).read(plain, 8000)
     assert message["to"] == ["you@yourdomain.com", "ann@example.com"]
     assert message["cc"] == ["sam@example.com", "you@yourdomain.com"]
-    assert "evil@example.com" in message["body"] and message["truncated"] is False
-    assert message["attachments"] == []
-    other = titan(fake).read(files, 20)
-    assert other["body"] == "The minutes are atta" and other["truncated"] is True
+    assert "evil@example.com" in message["body"] and message["attachments"] == []
+    other = titan(fake).read(files, 20)  # mail.py caps the body
+    assert other["body"] == "The minutes are attached. Café at noon?"
     assert other["attachments"] == [{"name": "minutes.pdf", "size": 19}]
-    assert titan(fake).read(files, 8000)["body"] == "The minutes are attached. Café at noon?"
     assert SEEN not in fake.messages("INBOX")[1]["flags"]  # reading peeks
+
+
+def test_a_stale_or_unknown_id_is_no_such_message() -> None:
+    fake = FakeIMAP()
+    native = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))
+    backend = titan(fake)
+    backend.move([native], "INBOX/Work")
+    for call in (
+        lambda: backend.read(native, 8000),
+        lambda: backend.flag([native], True),
+        lambda: backend.mark_read([native], True),
+        lambda: backend.move([native], "INBOX"),
+        lambda: backend.flag([imap.encode_id("INBOX", 7, 999)], True),
+    ):
+        with pytest.raises(LookupError, match=re.escape(GONE)):
+            call()
+    assert all(not message["flags"] for message in fake.messages("INBOX/Work").values())
 
 
 def test_folders_skip_the_unselectable() -> None:
@@ -376,25 +418,36 @@ def test_a_renumbered_folder_is_refused() -> None:
 # filing
 
 
-def test_titan_moves_and_flags() -> None:
+def test_titan_moves_give_the_new_ids_and_flags_change() -> None:
     fake = FakeIMAP()
     natives = [imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain"))) for _ in range(2)]
     backend = titan(fake)
     assert backend.flag(natives, True) == natives
     assert backend.mark_read(natives[:1], False) == natives[:1]
-    assert ("add_flags", "INBOX", [1, 2], [FLAGGED]) in fake.calls
+    assert ("add_flags", "INBOX", [1], [FLAGGED]) in fake.calls
+    assert ("add_flags", "INBOX", [2], [FLAGGED]) in fake.calls
     assert ("remove_flags", "INBOX", [1], [SEEN]) in fake.calls
     assert ("select", "INBOX", False) in fake.calls  # changes need a read-write select
-    assert backend.move(natives, "INBOX/Work") == natives
-    assert ("move", "INBOX", [1, 2], "INBOX/Work") in fake.calls
+    moved = backend.move(natives, "INBOX/Work")
+    assert moved == [imap.encode_id("INBOX/Work", 7, 1), imap.encode_id("INBOX/Work", 7, 2)]
     assert len(fake.messages("INBOX/Work")) == 2 and not fake.messages("INBOX")
+    assert backend.read(moved[0], 8000)["folder"] == "INBOX/Work"  # the new id works
+
+
+def test_a_moved_message_without_a_message_id_is_reported() -> None:
+    fake = FakeIMAP()
+    bare = re.sub(rb"(?im)^message-id:.*\r?\n", b"", fixture("plain"))
+    native = imap.encode_id("INBOX", 7, fake.add("INBOX", bare))
+    with pytest.raises(LookupError, match="moved to INBOX/Work, but can't find it there"):
+        titan(fake).move([native], "INBOX/Work")
+    assert len(fake.messages("INBOX/Work")) == 1  # it did move
 
 
 def test_gmail_moves_by_label() -> None:
     fake = FakeIMAP(gmail=True)
     fake.add("INBOX", fixture("html"))
     backend = gmail(fake)
-    backend.move(["1801234567890123456"], "Receipts")
+    assert backend.move(["1801234567890123456"], "Receipts") == ["1801234567890123456"]
     labels = [call for call in fake.calls if "gmail_labels" in call[0]]
     assert labels == [
         ("add_gmail_labels", ALL_MAIL, [1], ["Receipts"]),
@@ -414,21 +467,21 @@ def test_gmail_moves_by_label() -> None:
 def test_a_new_draft_goes_to_the_special_use_drafts_folder() -> None:
     fake = FakeIMAP()
     backend = titan(fake)
-    draft = backend.draft(
-        ["Dan <dan@example.com>"], ["sam@example.com"], "Quote", "Yes.", None, False
-    )
+    to, cc = ["Dan <dan@example.com>"], ["sam@example.com"]
+    draft = backend.draft(to, cc, "Quote", "Yes.", None, False)
     assert draft == {
         "id": imap.encode_id("Brouillons", 7, 1),
         "to": ["dan@example.com"],
         "cc": ["sam@example.com"],
+        "bcc": [],
         "subject": "Quote",
         "body": "Yes.\n",
+        "attachments": [],
     }
     assert ("append", "Brouillons", {DRAFT, SEEN}) in fake.calls
     saved = email.message_from_bytes(fake.messages("Brouillons")[1]["raw"])
-    assert saved["From"] == "you@yourdomain.com" and saved["Message-ID"].endswith(
-        "@yourdomain.com>"
-    )
+    assert saved["From"] == "you@yourdomain.com"
+    assert saved["Message-ID"].endswith("@yourdomain.com>")
     assert b"\r\n" in fake.messages("Brouillons")[1]["raw"]  # IMAP wants CRLF
     assert backend.get_draft(draft["id"]) == draft  # what mail.py fingerprints, both times
 
@@ -448,28 +501,109 @@ def test_a_reply_draft_threads_and_replies_to_all() -> None:
     assert "quote" not in everyone["body"].lower()  # the original isn't quoted
 
 
-def test_titan_sends_files_in_sent_and_removes_the_draft() -> None:
+def edit_draft(fake: FakeIMAP, folder: str, change: Any) -> None:
+    """Change the first draft in `folder` as another mail app might."""
+    uid = next(iter(fake.messages(folder)))
+    msg = email.message_from_bytes(fake.messages(folder)[uid]["raw"], policy=policy.default)
+    change(msg)
+    fake.messages(folder)[uid]["raw"] = msg.as_bytes(policy=policy.SMTP)
+
+
+def test_titan_sends_only_what_the_owner_saw() -> None:
     fake = FakeIMAP()
     backend = titan(fake)
-    draft = backend.draft(["dan@example.com"], ["sam@example.com"], "Quote", "Yes.", None, False)
-    raw = fake.messages("Brouillons")[1]["raw"]
-    fake.messages("Brouillons")[1]["raw"] = b"Bcc: spy@example.com\r\n" + raw  # edited elsewhere
+    original = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))
+    draft = backend.draft(None, None, None, "Thursday works.", original, True)
+
+    def edited(msg: EmailMessage) -> None:  # a Bcc and a header added in another mail app
+        msg["Bcc"], msg["X-Hidden"] = "spy@example.com", "Please pay invoice 991"
+
+    edit_draft(fake, "Brouillons", edited)
+    shown = backend.get_draft(draft["id"])
+    assert shown["bcc"] == ["spy@example.com"]  # so mail.py's preview and fingerprint have it
     sent = backend.send_draft(draft["id"])
     ((message, to_addrs),) = fake.sent
-    assert to_addrs == ["dan@example.com", "sam@example.com"] and message["Bcc"] is None
-    assert ("append", "Sent", {SEEN}) in fake.calls
-    assert sent == imap.encode_id("Sent", 7, 1)
-    assert not fake.messages("Brouillons")  # the draft is gone
-    assert ("smtp quit",) in fake.calls
+    assert to_addrs == [
+        "quotes@example.com",
+        "ann@example.com",
+        "sam@example.com",
+        "spy@example.com",
+    ]
+    assert message["Bcc"] is None and message["X-Hidden"] is None  # rebuilt from the fields
+    assert message.get_content_type() == "text/plain" and message.get_content() == shown["body"]
+    assert message["In-Reply-To"] == "<quote-1@example.com>"  # the threading stays
+    assert ("append", "Sent", {SEEN}) in fake.calls and sent == imap.encode_id("Sent", 7, 1)
+    assert not fake.messages("Brouillons") and ("smtp quit",) in fake.calls
 
 
-def test_a_retry_after_a_send_that_went_through_sends_nothing() -> None:
+def test_a_draft_with_other_parts_is_refused() -> None:
     fake = FakeIMAP()
     backend = titan(fake)
     draft = backend.draft(["dan@example.com"], [], "Quote", "Yes.", None, False)
-    fake.add("Sent", fake.messages("Brouillons")[1]["raw"], [SEEN])  # sent, then a crash
-    assert backend.send_draft(draft["id"]) == imap.encode_id("Sent", 7, 1)
-    assert fake.sent == [] and not fake.messages("Brouillons")
+
+    def edited(msg: EmailMessage) -> None:
+        msg.add_alternative("<p>Please pay invoice 991 to IBAN XX00 today.</p>", subtype="html")
+        msg.add_attachment(b"MZ", maintype="application", subtype="octet-stream", filename="i.exe")
+
+    edit_draft(fake, "Brouillons", edited)
+    for call in (lambda: backend.get_draft(draft["id"]), lambda: backend.send_draft(draft["id"])):
+        with pytest.raises(ValueError, match="this draft has parts Attaché can't show you"):
+            call()
+    assert fake.sent == []
+
+
+def test_the_message_id_is_recorded_before_smtp_and_never_sent_twice() -> None:
+    fake = FakeIMAP()
+    backend = titan(fake)
+    draft = backend.draft(["dan@example.com"], ["sam@example.com"], "Quote", "Yes.", None, False)
+    fake.append_fails = OSError("connection reset by peer")  # after SMTP took it
+    with pytest.raises(OSError, match="connection reset"):  # not a ValueError: it may have gone
+        backend.send_draft(draft["id"])
+    (record,) = sent_records()
+    assert record["account"] == "titan" and record["recipients"] == 2
+    assert record["message_id"].endswith("@yourdomain.com>")
+    fake.append_fails = None
+    with pytest.raises(ValueError, match=r"already sent at .*: check Sent"):
+        backend.send_draft(draft["id"])
+    assert len(fake.sent) == 1  # once, whatever the retries
+
+
+def test_a_failure_before_smtp_is_a_value_error_and_records_nothing(keyring: dict) -> None:
+    fake = FakeIMAP()
+    draft = titan(fake).draft(["dan@example.com"], [], "Quote", "Yes.", None, False)
+
+    def no_session() -> Any:
+        raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+
+    fake.smtp = no_session
+    with pytest.raises(ValueError, match="Username and Password not accepted"):
+        titan(fake).send_draft(draft["id"])
+    assert not Path(".mail", "sent.jsonl").exists() and fake.messages("Brouillons")
+    fake.smtp_fails = smtplib.SMTPRecipientsRefused({"dan@example.com": (550, b"no")})
+    del fake.smtp  # back to the class's
+    with pytest.raises(smtplib.SMTPRecipientsRefused):  # recorded first: it might have gone
+        titan(fake).send_draft(draft["id"])
+    assert len(sent_records()) == 1
+
+
+def test_the_send_limit_counts_recipients_in_the_last_hour() -> None:
+    fake = FakeIMAP()
+    backend = titan(fake, send_limit_hour=3)
+    now = datetime.now(UTC)
+    Path(".mail").mkdir()
+    with Path(".mail", "sent.jsonl").open("w", encoding="utf-8") as log:
+        for minutes, count in ((30, 2), (120, 9)):
+            when = (now - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+            record = {"ts": when, "account": "titan", "message_id": f"<{minutes}@x>"}
+            log.write(json.dumps({**record, "recipients": count}) + "\n")
+        log.write('{"cut short\n')
+    two = backend.draft(["a@x.com", "b@x.com"], [], "S", "B", None, False)
+    with pytest.raises(ValueError, match="titan sends to 3 people an hour; 2 so far"):
+        backend.send_draft(two["id"])
+    one = backend.draft(["a@x.com"], [], "S", "B", None, False)
+    backend.send_draft(one["id"])
+    last = Path(".mail", "sent.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+    assert len(fake.sent) == 1 and json.loads(last)["recipients"] == 1
 
 
 def test_gmail_files_its_own_sent_mail() -> None:
@@ -478,9 +612,8 @@ def test_gmail_files_its_own_sent_mail() -> None:
     draft = backend.draft(["dan@example.com"], [], "Quote", "Yes.", None, False)
     assert ("select", "[Gmail]/Drafts", True) in fake.calls
     sent = backend.send_draft(draft["id"])
-    assert len(fake.sent) == 1 and not any(
-        c[:2] == ("append", "[Gmail]/Sent Mail") for c in fake.calls
-    )
+    appended = [call for call in fake.calls if call[:2] == ("append", "[Gmail]/Sent Mail")]
+    assert len(fake.sent) == 1 and not appended
     sent_copy = next(iter(fake.messages("[Gmail]/Sent Mail").values()))
     assert sent == str(sent_copy["msgid"]) and not fake.messages("[Gmail]/Drafts")
 
@@ -488,11 +621,11 @@ def test_gmail_files_its_own_sent_mail() -> None:
 def test_only_drafts_are_sent() -> None:
     fake = FakeIMAP()
     inbox = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))
-    with pytest.raises(LookupError, match="is not a draft"):
+    with pytest.raises(ValueError, match="is not a draft"):
         titan(fake).send_draft(inbox)
-    with pytest.raises(LookupError, match="list again"):  # on Gmail only Drafts is searched
-        fake = FakeIMAP(gmail=True)
-        fake.add("INBOX", fixture("plain"))
+    fake = FakeIMAP(gmail=True)
+    fake.add("INBOX", fixture("plain"))
+    with pytest.raises(ValueError, match=re.escape(GONE)):  # on Gmail only Drafts is searched
         gmail(fake).send_draft("1801234567890123456")
     assert fake.sent == []
 
@@ -531,18 +664,15 @@ def test_doctor_names_the_cause_and_the_fix(monkeypatch: pytest.MonkeyPatch, key
 
     fake_imapclient(monkeypatch)
     ok, detail = imap.Backend("titan", TITAN, Path(".")).doctor()
-    assert (
-        not ok
-        and detail
-        == "no password stored for titan: the owner runs `attache skill mail login titan`"
-    )
+    expected = "no password stored for titan: the owner runs `attache skill mail login titan`"
+    assert not ok and detail == expected
 
     keyring[("attache-mail", "gmail")] = keyring[("attache-mail", "titan")] = "old"
     fake_imapclient(monkeypatch, refuse=True)
     ok, detail = imap.Backend("gmail", GMAIL, Path(".")).doctor()
     assert not ok and "imap.gmail.com:993 refused the password: make a new app password" in detail
     ok, detail = imap.Backend("titan", TITAN, Path(".")).doctor()
-    assert not ok and "'Enable Titan on Other Apps'" in detail and "login again" in detail
+    assert not ok and "'Enable Titan on Other Apps'" in detail and "log in again" in detail
 
     fake_imapclient(monkeypatch, down=True)
     ok, detail = imap.Backend("titan", TITAN, Path(".")).doctor()
@@ -555,27 +685,28 @@ def test_doctor_names_the_cause_and_the_fix(monkeypatch: pytest.MonkeyPatch, key
     assert titan(fake).doctor()[1].startswith("imap.titan.email:993 refused the password")
 
 
-def test_login_checks_the_password_before_keeping_it(
+def test_login_keeps_the_password_in_the_keyring(
     monkeypatch: pytest.MonkeyPatch, keyring: dict
 ) -> None:
     import getpass
 
     prompts: list[str] = []
     monkeypatch.setattr(getpass, "getpass", lambda prompt: prompts.append(prompt) or " abcd efgh ")
-    made = fake_imapclient(monkeypatch)
     imap.Backend("gmail", GMAIL, Path(".")).login()
     assert prompts == ["gmail app password for you@gmail.com (not shown): "]
-    assert made[0].address == ("imap.gmail.com", 993, True, 30)
-    assert made[0].signed_in == ("you@gmail.com", "abcd efgh", False)  # zones kept on dates
-    assert keyring == {("attache-mail", "gmail"): "abcd efgh"}
-
-    fake_imapclient(monkeypatch, refuse=True)
-    with pytest.raises(PermissionError, match="refused the password"):
-        imap.Backend("titan", TITAN, Path(".")).login()
+    assert keyring == {("attache-mail", "gmail"): "abcd efgh"}  # doctor then checks it
     monkeypatch.setattr(getpass, "getpass", lambda prompt: "  ")
     with pytest.raises(ValueError, match="nothing stored"):
         imap.Backend("titan", TITAN, Path(".")).login()
     assert ("attache-mail", "titan") not in keyring
+
+
+def test_imap_signs_in_with_the_stored_password(monkeypatch: pytest.MonkeyPatch, keyring: dict):
+    keyring[("attache-mail", "gmail")] = "abcd efgh"
+    made = fake_imapclient(monkeypatch)
+    imap.Backend("gmail", GMAIL, Path(".")).folders()
+    assert made[0].address == ("imap.gmail.com", 993, True, 30)
+    assert made[0].signed_in == ("you@gmail.com", "abcd efgh", False)  # zones kept on dates
 
 
 def test_smtp_checks_the_servers_certificate(monkeypatch: pytest.MonkeyPatch, keyring: dict):
@@ -599,29 +730,58 @@ def test_smtp_checks_the_servers_certificate(monkeypatch: pytest.MonkeyPatch, ke
 # mail.py and the IMAP backend together
 
 
-def test_draft_approve_and_send_through_mail_py(
-    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
-) -> None:
+def mail_py(home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any, fake: FakeIMAP) -> Any:
+    """A runner for mail.py, with a Titan account on `fake`."""
     mail = load("mail")
     (home / "skills" / "mail").mkdir(parents=True)
     accounts = '[titan]\nbackend = "imap"\nuser = "you@yourdomain.com"\nsent_folder = "Sent"\n'
     (home / "skills" / "mail" / "accounts.toml").write_text(accounts, encoding="utf-8")
-    fake = FakeIMAP()
-    monkeypatch.setattr(
-        mail, "open_backend", lambda name, settings, home: imap.Backend(name, settings, home, fake)
-    )
+    backend = imap.Backend("titan", TITAN, home, fake)
+    monkeypatch.setattr(mail, "open_backend", lambda name, settings, home: backend)
 
     def run(*argv: str) -> dict[str, Any]:
         mail.main(list(argv))
         return json.loads(capsys.readouterr().out)
 
+    return run
+
+
+def test_draft_approve_and_send_through_mail_py(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    fake = FakeIMAP()
+    run = mail_py(home, monkeypatch, capsys, fake)
     args = ["--account", "titan", "--to", "dan@example.com", "--cc", "sam@example.com"]
     draft = run("draft-new", *args, "--subject", "Quote", "--body", "Thursday works.")["draft"]
+    f = draft["fingerprint"]
     assert draft["id"].startswith("titan:") and draft["body"] == "Thursday works.\n"
-    (home / ".approvals").mkdir()
-    (home / ".approvals" / draft["fingerprint"]).touch()  # the owner's Send, as ask writes it
-    sent = run("send-draft", draft["id"], "--fingerprint", draft["fingerprint"])
+    preview = (home / ".approvals" / f"{f}.preview").read_text(encoding="utf-8")
+    assert preview.startswith("Send from titan (imap)\nTo: dan@example.com\nCc: sam@example.com\n")
+    (home / ".approvals" / f).touch()  # the owner's Send, as the core's ask writes it
+    sent = run("send-draft", draft["id"], "--fingerprint", f)
     assert sent == {"ok": True, "sent": True, "id": "titan:" + imap.encode_id("Sent", 7, 1)}
-    assert len(fake.sent) == 1 and not (home / ".approvals" / draft["fingerprint"]).exists()
+    assert len(fake.sent) == 1 and not list((home / ".approvals").iterdir())
     last = json.loads((home / "logs" / "mail.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    assert last["recipients"] == 2 and last["approved"] is True and "Quote" not in json.dumps(last)
+    assert last["approved"] is True and "Quote" not in json.dumps(last)
+
+
+def test_a_titan_send_that_failed_after_smtp_is_not_sent_again(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    fake = FakeIMAP()
+    run = mail_py(home, monkeypatch, capsys, fake)
+    args = ["--account", "titan", "--to", "dan@example.com", "--subject", "Quote", "--body", "Yes."]
+    draft = run("draft-new", *args)["draft"]
+    f = draft["fingerprint"]
+    (home / ".approvals" / f).touch()
+    fake.append_fails = OSError("connection reset by peer")
+    first = run("send-draft", draft["id"], "--fingerprint", f)
+    assert "this may have been sent: check Sent before asking again" in first["error"]
+    fake.append_fails = None
+    (home / ".approvals" / f).touch()  # asked again, and the owner said yes again
+    retry = run("send-draft", draft["id"], "--fingerprint", f)
+    assert retry["error"] == "this may already have been sent; check Sent before asking again"
+    (home / ".approvals" / f"{f}.sending").unlink()  # even with that marker gone by hand
+    third = run("send-draft", draft["id"], "--fingerprint", f)
+    assert third["error"].startswith("already sent at ")
+    assert len(fake.sent) == 1

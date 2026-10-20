@@ -110,17 +110,36 @@ def get_column_letter(index: int) -> str:
     return letters
 
 
+class XlsxCell:
+    """Types its value as openpyxl does: text starting with "=" becomes a formula ("f")."""
+
+    def __init__(self) -> None:
+        self.font, self.number_format, self.quotePrefix = None, "General", False
+        self._value, self.data_type = None, "n"
+
+    @property
+    def value(self) -> Any:
+        return self._value
+
+    @value.setter
+    def value(self, value: Any) -> None:
+        self._value = value
+        if isinstance(value, str):
+            self.data_type = "f" if len(value) > 1 and value.startswith("=") else "s"
+        else:
+            self.data_type = "d" if isinstance(value, date) else "n"
+
+
 class Sheet:
     def __init__(self, title: str) -> None:
-        self.title, self.rows, self.cells, self.freeze_panes = title, [], {}, None
+        self.title, self.cells, self.freeze_panes = title, {}, None
         self.column_dimensions = defaultdict(lambda: SimpleNamespace(width=None))
 
-    def append(self, row: list[Any]) -> None:
-        self.rows.append(row)
+    def cell(self, row: int, column: int) -> XlsxCell:
+        return self.cells.setdefault((row, column), XlsxCell())
 
-    def cell(self, row: int, column: int) -> SimpleNamespace:
-        blank = SimpleNamespace(font=None, number_format="General")
-        return self.cells.setdefault((row, column), blank)
+    def values(self, row: int) -> list[Any]:
+        return [cell.value for (r, _), cell in sorted(self.cells.items()) if r == row]
 
 
 class Workbook:
@@ -290,6 +309,15 @@ def test_links_out_of_the_folder_are_refused(kind: str, chat: Path, tmp_path: Pa
         load(kind).inside(f"out/report.{kind}", f".{kind}")
 
 
+def test_json_values_are_data_never_paths(chat: Path, fakes: None, capsys: Any) -> None:
+    writer = (skills.BUNDLED / "skill-writer" / "SKILL.md").read_text(encoding="utf-8")
+    assert "as data, never as a path" in " ".join(writer.split())  # the rule for member skills
+    spec = {"title": "../../evil.docx", "blocks": [{"paragraph": "C:\\Windows\\win.ini"}]}
+    assert load("docx").main([json.dumps(spec), "plan.docx"]) == 0
+    assert capsys.readouterr().out.strip() == f"files/{CHAT}/plan.docx"
+    assert [p.name for p in chat.parent.parent.rglob("*.docx")] == ["plan.docx"]
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_main_writes_into_the_chat_folder_and_prints_the_path_for_send(
     kind: str, chat: Path, fakes: None, capsys: Any
@@ -407,7 +435,7 @@ def test_xlsx_spec(fakes: None) -> None:
                     ["Item", "Cost", "Paid on"],
                     ["Hotel", 300, "2026-11-02"],
                     ["Train", 84.5, "2026-11-02T09:30"],
-                    ["A rather long description of the total", "=SUM(B2:B3)", None, True],
+                    ["A rather long description", {"formula": "=SUM(B2:B3)"}, None, True],
                 ],
                 "widths": {"a": 12},
                 "formats": {"B": "£#,##0.00", "C": "d mmm yyyy"},
@@ -418,17 +446,29 @@ def test_xlsx_spec(fakes: None) -> None:
     book = load("xlsx").build(spec)
     budget, second = book.sheets  # the default empty sheet is gone
     assert (budget.title, second.title) == ("Budget", "Sheet2")
-    assert budget.rows[1] == ["Hotel", 300, date(2026, 11, 2)]
-    assert budget.rows[2][2] == datetime(2026, 11, 2, 9, 30)
-    assert budget.rows[3] == ["A rather long description of the total", "=SUM(B2:B3)", None, True]
+    assert budget.values(2) == ["Hotel", 300, date(2026, 11, 2)]
+    assert budget.values(3)[2] == datetime(2026, 11, 2, 9, 30)
+    assert budget.values(4) == ["A rather long description", "=SUM(B2:B3)", None, True]
+    assert budget.cells[(4, 2)].data_type == "f"  # the one way to a formula
     assert [budget.cells[(1, c)].font for c in (1, 2, 3)] == [SimpleNamespace(bold=True)] * 3
     assert budget.freeze_panes == "A2"
     widths = {letter: d.width for letter, d in budget.column_dimensions.items()}
-    assert widths == {"A": 12.0, "B": 13.0, "C": 18.0, "D": 8.0}  # A given; others fitted
+    assert widths == {"A": 12.0, "B": 8.0, "C": 18.0, "D": 8.0}  # A given; others fitted
     assert [budget.cells[(r, 2)].number_format for r in (2, 3, 4)] == ["£#,##0.00"] * 3
     assert budget.cells[(2, 3)].number_format == "d mmm yyyy"
-    assert (1, 2) not in budget.cells or budget.cells[(1, 2)].number_format == "General"
-    assert second.freeze_panes is None and second.cells == {}  # no header
+    assert budget.cells[(1, 2)].number_format == "General"  # formats skip the header
+    assert second.freeze_panes is None and second.cells[(1, 1)].font is None  # no header
+
+
+def test_xlsx_text_never_becomes_a_formula(fakes: None) -> None:
+    risky = ['=HYPERLINK("http://example.com","click")', '=WEBSERVICE("http://x")', "+1", "@a"]
+    row = [*risky, "-2", "plain", {"formula": "SUM(A1:A2)"}]
+    sheet = load("xlsx").build({"sheets": [{"rows": [row], "header": False}]}).sheets[0]
+    cells = [sheet.cells[(1, column)] for column in range(1, len(row) + 1)]
+    assert sheet.values(1)[:6] == [*risky, "-2", "plain"]  # shown exactly as written
+    assert [(c.data_type, c.quotePrefix) for c in cells[:5]] == [("s", True)] * 5
+    assert (cells[5].data_type, cells[5].quotePrefix) == ("s", False)
+    assert (cells[6].value, cells[6].data_type, cells[6].quotePrefix) == ("=SUM(A1:A2)", "f", False)
 
 
 def test_xlsx_fitted_widths_stay_between_8_and_60(fakes: None) -> None:
@@ -445,6 +485,10 @@ def test_xlsx_fitted_widths_stay_between_8_and_60(fakes: None) -> None:
         {"sheets": [{"rows": [["x"]], "colour": "red"}]},
         {"sheets": [{"rows": "x"}]},
         {"sheets": [{"rows": [[{"nested": 1}]]}]},
+        {"sheets": [{"rows": [[{"formula": 1}]]}]},
+        {"sheets": [{"rows": [[{"formula": "="}]]}]},
+        {"sheets": [{"rows": [[{"formula": "=A1", "note": "x"}]]}]},
+        {"sheets": [{"rows": [[["a list"]]]}]},
         {"sheets": [{"rows": [["2026-13-45"]]}]},  # not a date
         {"sheets": [{"rows": [["x"]], "widths": {"1": 10}}]},
         {"sheets": [{"rows": [["x"]], "formats": ["0.00"]}]},

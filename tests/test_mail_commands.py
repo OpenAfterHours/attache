@@ -1,15 +1,17 @@
 """The mail skill's shared commands (mail.py), against fake backends: the JSON shapes, ids,
-fingerprints and approvals, caps, the send limit and the audit log. No mail server is touched."""
+previews, fingerprints and approvals, caps and the audit log. No mail server is touched."""
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
+import time
 import tomllib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -27,7 +29,6 @@ user = "you@gmail.com"
 [titan]
 backend = "imap"
 user = "you@yourdomain.com"
-send_limit_hour = 3
 [outlook]
 backend = "com"
 """
@@ -50,14 +51,16 @@ def summary(native: str, received: str, **fields: Any) -> dict[str, Any]:
 
 
 class FakeBackend:
-    """Backend stand-in that records what mail.py asks of it."""
+    """Backend stand-in that records what mail.py asks of it. An id "gone" isn't there."""
 
     def __init__(self, account: str, settings: dict[str, Any], home: Path) -> None:
         self.account, self.settings, self.calls = account, settings, []
         self.items: list[dict[str, Any]] = []
         self.drafts: dict[str, dict[str, Any]] = {}
         self.sent: list[str] = []
-        self.fails: Exception | None = None
+        self.fails: Exception | None = None  # for list
+        self.send_fails: Exception | None = None  # for send_draft, respond and create_event
+        self.during_send: Any = None  # called while sending, to look at the approval files
 
     def doctor(self) -> tuple[bool, str]:
         return True, f"{self.account} is fine"
@@ -78,12 +81,20 @@ class FakeBackend:
         self.calls.append(("read", native, max_chars))
         return summary(native, "2026-10-18T16:42:00Z") | {"to": [], "cc": [], "body": "x" * 9000}
 
+    def _there(self, native: str) -> None:
+        if native == "gone":
+            raise LookupError("no such message (it may have moved)")
+
     def move(self, natives: list[str], folder: str) -> list[str]:
         self.calls.append(("move", natives, folder))
+        for native in natives:
+            self._there(native)
         return [f"moved-{native}" for native in natives]
 
     def flag(self, natives: list[str], on: bool) -> list[str]:
         self.calls.append(("flag", natives, on))
+        for native in natives:
+            self._there(native)
         return natives
 
     def mark_read(self, natives: list[str], on: bool) -> list[str]:
@@ -97,16 +108,25 @@ class FakeBackend:
             "id": native,
             "to": to or ["dan@example.com"],
             "cc": cc or [],
+            "bcc": [],
             "subject": subject or f"Re: {SECRET_SUBJECT}",
             "body": body,
+            "attachments": [],
         }
-        return dict(self.drafts[native])
+        return json.loads(json.dumps(self.drafts[native]))
 
     def get_draft(self, native: str) -> dict[str, Any]:
-        return dict(self.drafts[native])
+        return json.loads(json.dumps(self.drafts[native]))
+
+    def _send(self, what: str) -> None:
+        if self.during_send:
+            self.during_send()
+        if self.send_fails:
+            raise self.send_fails
+        self.sent.append(what)
 
     def send_draft(self, native: str) -> str:
-        self.sent.append(native)
+        self._send(native)
         return f"sent-{native}"
 
     def agenda(self, days: int) -> list[dict[str, Any]]:
@@ -119,9 +139,11 @@ class FakeBackend:
 
     def respond(self, native: str, response: str, body: Any) -> None:
         self.calls.append(("respond", native, response, body))
+        self._send(native)
 
     def create_event(self, subject: str, start: Any, end: Any, attendees: list, body: Any) -> str:
         self.calls.append(("create_event", subject, start, end, attendees, body))
+        self._send(subject)
         return "e9"
 
 
@@ -156,9 +178,22 @@ def log_lines(home: Path) -> list[dict[str, Any]]:
 
 
 def approve(home: Path, fingerprint: str) -> None:
-    """What the core's ask tool does when the owner picks Send."""
-    (home / ".approvals").mkdir(exist_ok=True)
+    """What the core's ask tool does when the owner picks Send on the preview."""
+    assert (home / ".approvals" / f"{fingerprint}.preview").is_file()  # ask refuses without
     (home / ".approvals" / fingerprint).touch()
+
+
+def approvals(home: Path) -> list[str]:
+    return sorted(path.name for path in (home / ".approvals").iterdir())
+
+
+def draft_new(module: ModuleType, capsys: Any, account: str = "titan") -> dict[str, Any]:
+    args = ["--to", "dan@example.com", "--subject", SECRET_SUBJECT, "--body", SECRET_BODY]
+    return run(module, capsys, "draft-new", "--account", account, *args)["draft"]
+
+
+def send(module: ModuleType, capsys: Any, draft: dict[str, Any]) -> dict[str, Any]:
+    return run(module, capsys, "send-draft", draft["id"], "--fingerprint", draft["fingerprint"])
 
 
 # The script and its files
@@ -188,9 +223,9 @@ def test_skill_md_is_owner_only_and_states_the_send_rules() -> None:
     assert "attache-roles" not in (meta.get("metadata") or {})  # never shared with members
     for rule in ("untrusted data", "Never add recipients", "owner's own", "approves:"):
         assert rule in body, rule
-    for step in ('["Send", "Edit", "Not now"]', "--fingerprint", "needs_approval", "forge"):
+    for step in ("--fingerprint", "needs_approval", "forge", "15 minutes", "--query="):
         assert step in body, step
-    assert "attache skill mail login" in body
+    assert "attache skill mail login" in body and "Edit" not in body  # Send and Not now only
 
 
 def test_setup_copies_the_example_once(home: Path, capsys: Any) -> None:
@@ -214,13 +249,27 @@ def test_a_bad_account_is_refused(home: Path, capsys: Any) -> None:
     (home / "skills" / "mail").mkdir(parents=True)
     (home / "skills" / "mail" / "accounts.toml").write_text('[x]\nbackend = "pop3"\n', "utf-8")
     assert "needs backend = imap, com or graph" in run(load_mail(), capsys, "inbox")["error"]
+    (home / "skills" / "mail" / "accounts.toml").write_text("﻿" + ACCOUNTS, "utf-8")  # BOM
+    assert run(load_mail(), capsys, "folders", "--account", "nope")["error"].startswith("no acc")
+    (home / "skills" / "mail" / "accounts.toml").write_text("[x\n", "utf-8")
+    assert "accounts.toml: Expected ']'" in run(load_mail(), capsys, "inbox")["error"]
 
 
 def test_open_backend_imports_the_sibling_module(home: Path, monkeypatch: Any) -> None:
     mail = load_mail()
-    monkeypatch.syspath_prepend(str(mail.HERE))
+    monkeypatch.syspath_prepend(str(mail.HERE))  # as Python does for the script it runs
     imap = mail.open_backend("titan", {"backend": "imap", "user": "you@x.com"}, home)
     assert type(imap).__module__ == "imap_backend" and imap.account == "titan"
+
+
+def test_help_and_values_that_start_with_a_dash(mail: ModuleType, capsys: Any) -> None:
+    usage = run(mail, capsys, "send-draft", "-h")  # inside the one JSON object
+    assert usage["ok"] is False and "usage: mail.py send-draft" in usage["error"]
+    assert "--fingerprint" in usage["error"]
+    run(mail, capsys, "search", "--account", "gmail", "--query=-in:chats from:dan")
+    assert backend(mail, "gmail").calls[-1][-1] == "-in:chats from:dan"
+    args = ["--account", "titan", "--to", "a@x.com", "--subject", "S", "--body=- Thu\n- Fri"]
+    assert run(mail, capsys, "draft-new", *args)["draft"]["body"] == "- Thu\n- Fri"
 
 
 # Reading
@@ -229,7 +278,7 @@ def test_open_backend_imports_the_sibling_module(home: Path, monkeypatch: Any) -
 def test_inbox_merges_the_accounts_newest_first(mail: ModuleType, capsys: Any) -> None:
     gmail, titan = backend(mail, "gmail"), backend(mail, "titan")
     gmail.items = [summary("101", "2026-10-18T16:42:00Z", preview="  Hi,\n\n  quote " + "x" * 300)]
-    titan.items = [summary("t1", "2026-10-19T08:00:00Z"), summary("t0", "2026-10-17T08:00:00Z")]
+    titan.items = [summary("t0", "2026-10-17T08:00:00Z"), summary("t1", "2026-10-19T08:00:00Z")]
     result = run(mail, capsys, "inbox", "--limit", "2")
     assert [item["id"] for item in result["items"]] == ["titan:t1", "gmail:101"]
     first, second = result["items"]
@@ -239,11 +288,10 @@ def test_inbox_merges_the_accounts_newest_first(mail: ModuleType, capsys: Any) -
 
 
 def test_inbox_and_search_pass_their_filters(mail: ModuleType, capsys: Any) -> None:
-    run(
-        mail, capsys, "inbox", "--account", "gmail", "--unread", "--since", "2026-10-20T07:00+01:00"
-    )
-    since = datetime(2026, 10, 20, 6, 0, tzinfo=UTC)
-    assert backend(mail, "gmail").calls == [("list", None, True, 25, since, None)]
+    since = ["--since", "2026-10-20T07:00+01:00"]
+    run(mail, capsys, "inbox", "--account", "gmail", "--unread", *since)
+    when = datetime(2026, 10, 20, 6, 0, tzinfo=UTC)
+    assert backend(mail, "gmail").calls == [("list", None, True, 25, when, None)]
     run(mail, capsys, "search", "--query", "from:dan", "--folder", "Work", "--limit", "500")
     assert backend(mail, "titan").calls[-1] == ("list", "Work", False, 100, None, "from:dan")
 
@@ -322,133 +370,215 @@ def test_moving_more_than_20_needs_many(mail: ModuleType, capsys: Any) -> None:
     assert moved[0] == "gmail:moved-0" and moved[-1] == "titan:moved-t1" and len(moved) == 22
 
 
+def test_one_missing_message_doesnt_hide_the_rest(mail: ModuleType, capsys: Any) -> None:
+    result = run(mail, capsys, "move", "gmail:1", "gmail:gone", "nobody:2", "--to", "Receipts")
+    assert result["ok"] and result["moved"] == ["gmail:moved-1"]  # the new ids
+    assert result["errors"] == [
+        {"id": "gmail:gone", "error": "no such message (it may have moved)"},
+        {
+            "id": "nobody:2",
+            "error": "'nobody:2' is not a mail id: use the ids inbox and search give",
+        },
+    ]
+    flagged = run(mail, capsys, "flag", "titan:gone", "titan:t1")
+    assert flagged["changed"] == ["titan:t1"] and flagged["errors"][0]["id"] == "titan:gone"
+    alone = run(mail, capsys, "flag", "titan:gone")
+    assert alone == {"ok": False, "error": "titan:gone: no such message (it may have moved)"}
+
+
 def test_flag_and_mark_read(mail: ModuleType, capsys: Any) -> None:
     assert run(mail, capsys, "flag", "gmail:1", "titan:t1")["changed"] == ["gmail:1", "titan:t1"]
     run(mail, capsys, "mark-read", "gmail:1", "--off")
     assert backend(mail, "gmail").calls == [("flag", ["1"], True), ("mark_read", ["1"], False)]
 
 
-# Drafts, fingerprints and approvals
+# Drafts, previews, fingerprints and approvals
 
 
-def plan_fingerprint(to: list, cc: list, subject: str, body: str) -> str:
-    """The fingerprint exactly as the plan defines it."""
-    fields = {"to": sorted(to), "cc": sorted(cc), "subject": subject, "body": body}
+def fingerprint(account: str, native: str, preview: str) -> str:
+    """The fingerprint as the contract defines it: what the owner sees, for this item."""
+    fields = {"account": account, "id": native, "preview": preview}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def test_drafts_carry_the_fingerprint(mail: ModuleType, capsys: Any) -> None:
+def test_a_draft_comes_with_the_preview_the_owner_approves(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
     args = ["--to", "b@x.com", "a@x.com", "--cc", "c@x.com", "--subject", "Hi", "--body", "Yo"]
     draft = run(mail, capsys, "draft-new", "--account", "titan", *args)["draft"]
+    preview = "\n".join(
+        [
+            "Send from titan (imap)",
+            "To: b@x.com, a@x.com",
+            "Cc: c@x.com",
+            "Bcc: none",
+            "Subject: Hi",
+            "Attachments: none",
+            "",
+            "Yo",
+        ]
+    )
     assert draft == {
         "id": "titan:d1",
         "account": "titan",
         "to": ["b@x.com", "a@x.com"],
         "cc": ["c@x.com"],
+        "bcc": [],
         "subject": "Hi",
         "body": "Yo",
-        "fingerprint": plan_fingerprint(["a@x.com", "b@x.com"], ["c@x.com"], "Hi", "Yo"),
+        "attachments": [],
+        "fingerprint": fingerprint("titan", "d1", preview),
     }
+    assert re.fullmatch(r"[0-9a-f]{16}", draft["fingerprint"])  # what ask's approves takes
+    saved = home / ".approvals" / f"{draft['fingerprint']}.preview"
+    assert saved.read_text(encoding="utf-8") == preview
+    elsewhere = run(mail, capsys, "draft-new", "--account", "gmail", *args)["draft"]
+    assert elsewhere["fingerprint"] != draft["fingerprint"]  # one account's yes isn't another's
     reply = run(mail, capsys, "draft-reply", "gmail:101", "--body", SECRET_BODY, "--all")["draft"]
-    assert reply["id"] == "gmail:d1" and reply["subject"] == f"Re: {SECRET_SUBJECT}"
-    assert backend(mail, "gmail").calls == [("draft", None, None, None, "101", True)]
+    assert reply["id"] == "gmail:d2" and reply["subject"] == f"Re: {SECRET_SUBJECT}"
+    assert backend(mail, "gmail").calls[-1] == ("draft", None, None, None, "101", True)
 
 
-def test_sending_needs_the_fingerprint_and_the_owners_approval(
+def test_bcc_and_attachments_are_in_the_preview_and_the_fingerprint(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    draft = draft_new(mail, capsys)
+    approve(home, draft["fingerprint"])
+    held = backend(mail, "titan").drafts["d1"]
+    held["bcc"] = ["spy@example.com"]  # added in the mail app after the yes
+    changed = send(mail, capsys, draft)
+    assert "the draft changed since it was approved" in changed["error"]
+    held["bcc"], held["attachments"] = [], [{"name": "invoice.exe", "size": 4}]
+    assert "changed since it was approved" in send(mail, capsys, draft)["error"]
+    asked = run(mail, capsys, "send-draft", draft["id"])
+    assert "Attachments: invoice.exe (4 bytes)" in asked["preview"]
+    held["bcc"] = ["spy@example.com"]
+    assert "Bcc: spy@example.com" in run(mail, capsys, "send-draft", draft["id"])["preview"]
+    assert backend(mail, "titan").sent == []
+
+
+def test_sending_needs_the_owners_approval_of_the_preview(
     mail: ModuleType, capsys: Any, home: Path
 ) -> None:
     draft = run(mail, capsys, "draft-reply", "gmail:101", "--body", SECRET_BODY)["draft"]
-    fingerprint, gmail = draft["fingerprint"], backend(mail, "gmail")
+    f, gmail = draft["fingerprint"], backend(mail, "gmail")
     asked = run(mail, capsys, "send-draft", draft["id"])
-    assert asked == {"ok": True, "needs_approval": fingerprint, "preview": draft}
+    preview = (home / ".approvals" / f"{f}.preview").read_text(encoding="utf-8")
+    assert asked == {"ok": True, "needs_approval": f, "preview": preview}
+    assert preview.startswith("Send from gmail (imap)\nTo: dan@example.com\n")
     wrong = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", "0123456789abcdef")
     assert "the draft changed since it was approved" in wrong["error"]
-    unapproved = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", fingerprint)
-    assert unapproved["ok"] is False
-    assert unapproved["error"].startswith(
-        f"not approved: show it to the owner with ask (approves: {fingerprint})"
+    unapproved = send(mail, capsys, draft)
+    assert unapproved["error"] == (
+        f"not approved: show it to the owner with the ask tool (approves: {f}) first"
     )
-    assert gmail.sent == []
-    approve(home, fingerprint)
-    sent = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", fingerprint)
-    assert sent == {"ok": True, "sent": True, "id": "gmail:sent-d1"} and gmail.sent == ["d1"]
-    assert not (home / ".approvals" / fingerprint).exists()  # used once
-    again = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", fingerprint)
+    approve(home, f)
+
+    def claimed() -> None:  # while it sends, the approval is taken, so a second call has none
+        assert approvals(home) == [f"{f}.preview", f"{f}.sending"]
+
+    gmail.during_send = claimed
+    assert send(mail, capsys, draft) == {"ok": True, "sent": True, "id": "gmail:sent-d1"}
+    assert gmail.sent == ["d1"] and approvals(home) == []  # used once, and tidied
+    again = send(mail, capsys, draft)
     assert again["error"].startswith("not approved") and gmail.sent == ["d1"]
     assert log_lines(home)[-2]["approved"] is True and "approved" not in log_lines(home)[-1]
 
 
-def test_a_draft_changed_after_the_yes_is_refused(
-    mail: ModuleType, capsys: Any, home: Path
-) -> None:
-    draft = run(mail, capsys, "draft-reply", "gmail:101", "--body", SECRET_BODY)["draft"]
+def test_an_approval_lasts_15_minutes(mail: ModuleType, capsys: Any, home: Path) -> None:
+    draft = draft_new(mail, capsys)
     approve(home, draft["fingerprint"])
-    backend(mail, "gmail").drafts["d1"]["to"].append("evil@example.com")  # changed in between
-    result = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", draft["fingerprint"])
-    assert "the draft changed since it was approved" in result["error"]
-    assert backend(mail, "gmail").sent == []
-
-
-def test_the_send_limit_counts_recipients_in_the_last_hour(
-    mail: ModuleType, capsys: Any, home: Path
-) -> None:
-    (home / "logs").mkdir()
-    now = datetime.now(UTC)
-    earlier = [
-        {"ts": (now - timedelta(minutes=30)).isoformat(timespec="seconds"), "recipients": 2},
-        {"ts": (now - timedelta(hours=2)).isoformat(timespec="seconds"), "recipients": 9},
+    old = time.time() - 16 * 60
+    os.utime(home / ".approvals" / draft["fingerprint"], (old, old))
+    result = send(mail, capsys, draft)
+    assert result["error"].startswith("the approval is over 15 minutes old: ask again")
+    assert backend(mail, "titan").sent == [] and approvals(home) == [
+        f"{draft['fingerprint']}.preview"
     ]
-    with (home / "logs" / "mail.jsonl").open("w", encoding="utf-8") as log:
-        for line in earlier:
-            log.write(json.dumps({"command": "send-draft", "account": "titan", "ok": True} | line))
-            log.write("\n")
-        log.write('{"cut short\n')
-    args = ["--account", "titan", "--to", "a@x.com", "b@x.com", "--subject", "S", "--body", "B"]
-    draft = run(mail, capsys, "draft-new", *args)["draft"]
+
+
+def test_a_send_that_certainly_failed_keeps_the_owners_yes(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    draft, titan = draft_new(mail, capsys), backend(mail, "titan")
     approve(home, draft["fingerprint"])
-    result = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", draft["fingerprint"])
-    assert result["ok"] is False and "titan sends to 3 people an hour; 2 so far" in result["error"]
-    assert (
-        backend(mail, "titan").sent == [] and (home / ".approvals" / draft["fingerprint"]).exists()
+    titan.send_fails = ValueError("smtp.titan.email refused the password")
+    assert send(mail, capsys, draft)["error"] == "smtp.titan.email refused the password"
+    assert draft["fingerprint"] in approvals(home)  # put back: nothing left the machine
+    titan.send_fails = None
+    assert send(mail, capsys, draft)["sent"] and titan.sent == ["d1"]
+
+
+def test_a_send_that_may_have_gone_is_never_retried(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    draft, titan = draft_new(mail, capsys), backend(mail, "titan")
+    approve(home, draft["fingerprint"])
+    titan.send_fails = OSError("connection reset by peer")
+    failed = send(mail, capsys, draft)
+    assert failed["error"] == (
+        "connection reset by peer; this may have been sent: check Sent before asking again"
     )
-    one = run(mail, capsys, "draft-new", *args[:4], "--subject", "S", "--body", "B")["draft"]
-    approve(home, one["fingerprint"])
-    assert run(mail, capsys, "send-draft", one["id"], "--fingerprint", one["fingerprint"])["sent"]
-    last = (home / "logs" / "mail.jsonl").read_text(encoding="utf-8").splitlines()[-1]
-    assert json.loads(last)["recipients"] == 1
+    assert f"{draft['fingerprint']}.sending" in approvals(home)
+    titan.send_fails = None
+    approve(home, draft["fingerprint"])  # even with a fresh yes
+    retry = send(mail, capsys, draft)
+    assert retry["error"] == "this may already have been sent; check Sent before asking again"
+    assert titan.sent == []
 
 
 def test_respond_and_create_event_need_approval(mail: ModuleType, capsys: Any, home: Path) -> None:
-    asked = run(mail, capsys, "respond", "outlook:m1", "accept", "--body", "See you there")
-    preview = {"id": "outlook:m1", "response": "accept", "body": "See you there"}
-    assert asked == {"ok": True, "needs_approval": asked["needs_approval"], "preview": preview}
-    approve(home, asked["needs_approval"])
-    other = run(
-        mail, capsys, "respond", "outlook:m1", "decline", "--fingerprint", asked["needs_approval"]
+    asked = run(mail, capsys, "respond", "outlook:m1", "tentative", "--body", "Running late")
+    preview = "\n".join(
+        [
+            "Tentatively accept an invitation in outlook",
+            f"Invitation: {SECRET_SUBJECT} from dan@example.com",
+            "",
+            "Running late",
+        ]
     )
-    assert "changed since it was approved" in other["error"]
-    args = ["respond", "outlook:m1", "accept", "--body", "See you there"]
-    sent = run(mail, capsys, *args, "--fingerprint", asked["needs_approval"])
-    assert sent == {"ok": True, "sent": True, "id": "outlook:m1"}
-    assert backend(mail, "outlook").calls == [("respond", "m1", "accept", "See you there")]
+    assert asked == {"ok": True, "needs_approval": asked["needs_approval"], "preview": preview}
+    f = asked["needs_approval"]
+    assert f == fingerprint("outlook", "m1", preview)
+    approve(home, f)
+    other = run(mail, capsys, "respond", "outlook:m1", "decline", "--fingerprint", f)
+    assert "the reply changed since it was approved" in other["error"]
+    args = ["respond", "outlook:m1", "tentative", "--body", "Running late", "--fingerprint", f]
+    assert run(mail, capsys, *args) == {"ok": True, "sent": True, "id": "outlook:m1"}
+    assert backend(mail, "outlook").calls[-1] == ("respond", "m1", "tentative", "Running late")
 
     event = ["create-event", "--account", "outlook", "--subject", "Boiler service"]
-    event += [
-        "--start",
-        "2026-10-23T09:00",
-        "--end",
-        "2026-10-23T10:00",
-        "--attendees",
-        "dan@x.com",
-    ]
+    event += ["--start", "2026-10-23T09:00", "--end", "2026-10-23T10:00"]
+    event += ["--attendees", "dan@x.com", "ann@x.com"]
     asked = run(mail, capsys, *event)
-    assert asked["preview"]["attendees"] == ["dan@x.com"] and "created" not in asked
+    assert asked["preview"] == "\n".join(
+        [
+            "Create an event in outlook",
+            "Subject: Boiler service",
+            "Start: 2026-10-23 09:00",
+            "End: 2026-10-23 10:00",
+            "Invite: ann@x.com, dan@x.com",
+            "",
+            "",
+        ]
+    )
     approve(home, asked["needs_approval"])
     created = run(mail, capsys, *event, "--fingerprint", asked["needs_approval"])
     assert created == {"ok": True, "created": True, "id": "outlook:e9"}
     _, _, start, end, attendees, body = backend(mail, "outlook").calls[-1]
     assert (start, end) == (datetime(2026, 10, 23, 9), datetime(2026, 10, 23, 10))
-    assert attendees == ["dan@x.com"] and body is None and not list((home / ".approvals").iterdir())
+    assert attendees == ["ann@x.com", "dan@x.com"] and body is None and approvals(home) == []
+
+
+def test_imap_accounts_give_the_approval_back_for_meetings(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    asked = run(mail, capsys, "respond", "titan:m1", "accept")
+    approve(home, asked["needs_approval"])
+    backend(mail, "titan").send_fails = NotImplementedError("not in v1 for IMAP accounts")
+    args = ["respond", "titan:m1", "accept", "--fingerprint", asked["needs_approval"]]
+    assert run(mail, capsys, *args)["error"] == "not in v1 for IMAP accounts"
+    assert asked["needs_approval"] in approvals(home)  # nothing went
 
 
 def test_login_is_only_for_the_owners_terminal(
@@ -485,14 +615,8 @@ def test_every_call_is_logged_without_subjects_or_bodies(
     run(mail, capsys, "draft-new", "--account", "gmail", "--body", SECRET_BODY, "--bogus")
     run(mail, capsys, "read", "nobody:1")
     lines = log_lines(home)
-    assert [line["command"] for line in lines] == [
-        "inbox",
-        "read",
-        "draft-reply",
-        "move",
-        None,
-        "read",
-    ]
+    commands = [line["command"] for line in lines]
+    assert commands == ["inbox", "read", "draft-reply", "move", None, "read"]
     assert lines[0]["ids"] == ["gmail:101"] and lines[0]["account"] == "gmail"
     assert lines[2]["ids"] == ["gmail:101", draft["id"]] and lines[2]["account"] == "gmail"
     assert lines[3]["ids"] == ["gmail:101", "gmail:moved-101"]

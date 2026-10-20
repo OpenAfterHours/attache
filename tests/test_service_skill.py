@@ -10,9 +10,11 @@ import importlib.util
 import plistlib
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
+from xml.etree import ElementTree
 
 import pytest
 
@@ -20,6 +22,7 @@ from attache import skills
 
 SCRIPT = skills.BUNDLED / "service" / "scripts" / "service.py"
 SYSTEMS = ["win32", "darwin", "linux"]
+TASK_NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 
 
 def load(path: Path = SCRIPT) -> ModuleType:
@@ -40,8 +43,12 @@ class Fakes:
         self.cache = tmp_path / "AppData" / "Local" / "uv" / "cache" / "archive-v0" / "x" / "bin"
         self.on_path = {self.tool: self.tool / "attache.exe"}
 
+        self.task_xml = b""  # the file `schtasks /Create /XML` was given, as it was then
+
     def run(self, argv: list[str], **options: Any) -> SimpleNamespace:
         self.calls.append(argv)
+        if "/XML" in argv:
+            self.task_xml = Path(argv[argv.index("/XML") + 1]).read_bytes()
         return SimpleNamespace(returncode=self.codes.get(argv[1] if len(argv) > 1 else "", 0))
 
     def which(self, name: str, path: str | None = None) -> str | None:
@@ -57,6 +64,9 @@ def fakes(tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch) -> Fakes:
     monkeypatch.delenv("UV_CACHE_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "user"))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)  # macOS's, on any system
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "temp"))
+    monkeypatch.setenv("USERDOMAIN", "PC")
+    monkeypatch.setenv("USERNAME", "alex")
     return fake
 
 
@@ -90,55 +100,76 @@ def test_dry_run_does_nothing(
         out = capsys.readouterr().out
         assert out.startswith("would ") and "Attaché" not in out.splitlines()[-1]
     assert fakes.calls == []
-    assert not (tmp_path / "user").exists() and not (tmp_path / "config").exists()
+    for folder in ("user", "config", "temp"):
+        assert not (tmp_path / folder).exists(), folder
 
 
-def test_windows_task(service: ModuleType, fakes: Fakes, home: Path, capsys: Any) -> None:
-    install, start = service.plan("install", "win32")
-    exe = fakes.tool / "attache.exe"
-    command = subprocess.list2cmdline([str(exe), "run", "--home", str(home.resolve())])
-    assert install.run == [
-        "schtasks",
-        "/Create",
-        "/SC",
-        "ONLOGON",  # at logon,
-        "/RL",
-        "LIMITED",  # not elevated,
-        "/IT",  # only while logged on: what Outlook's COM automation needs
-        "/TN",
-        "Attache",
-        "/TR",
-        command,
-        "/F",
-    ]
+def task_settings(xml: bytes) -> dict[str, str]:
+    """The task XML's values that matter, by element path."""
+    task = ElementTree.fromstring(xml)
+    paths = {
+        "trigger user": "t:Triggers/t:LogonTrigger/t:UserId",
+        "user": "t:Principals/t:Principal/t:UserId",
+        "logon": "t:Principals/t:Principal/t:LogonType",
+        "rights": "t:Principals/t:Principal/t:RunLevel",
+        "time limit": "t:Settings/t:ExecutionTimeLimit",
+        "on battery": "t:Settings/t:DisallowStartIfOnBatteries",
+        "command": "t:Actions/t:Exec/t:Command",
+        "arguments": "t:Actions/t:Exec/t:Arguments",
+    }
+    return {name: task.find(path, TASK_NS).text for name, path in paths.items()}
+
+
+def test_windows_task_from_xml(
+    service: ModuleType, fakes: Fakes, home: Path, tmp_path: Path, capsys: Any
+) -> None:
+    write, create, delete, start = service.plan("install", "win32")
+    xml = tmp_path / "temp" / "attache-task.xml"
+    assert (write.file, write.encoding) == (xml, "utf-16")
+    # from XML, not /SC ONLOGON: that is any user's logon, which needs an administrator
+    assert create.run == ["schtasks", "/Create", "/XML", str(xml), "/TN", "Attache", "/F"]
+    assert (delete.file, delete.text) == (xml, None)
     assert start.run == ["schtasks", "/Run", "/TN", "Attache"]
-    stop, delete = service.plan("uninstall", "win32")
-    assert stop.may_fail and delete.run == ["schtasks", "/Delete", "/TN", "Attache", "/F"]
+    assert task_settings(write.text.encode("utf-16")) == {
+        "trigger user": "PC\\alex",  # this user's logon only, which a standard user may set
+        "user": "PC\\alex",
+        "logon": "InteractiveToken",  # only while logged on, as /IT: what Outlook COM needs
+        "rights": "LeastPrivilege",  # not elevated, as /RL LIMITED
+        "time limit": "PT0S",  # never stopped (Task Scheduler's default is 72 hours)
+        "on battery": "false",  # laptops on battery start it too
+        "command": str(fakes.tool / "attache.exe"),
+        "arguments": subprocess.list2cmdline(["run", "--home", str(home.resolve())]),
+    }
+    stop, remove = service.plan("uninstall", "win32")
+    assert stop.may_fail and remove.run == ["schtasks", "/Delete", "/TN", "Attache", "/F"]
     assert service.plan("status", "win32")[0].run[:4] == ["schtasks", "/Query", "/TN", "Attache"]
 
     assert service.main(["install"], system="win32") == 0
-    assert fakes.calls == [install.run, start.run]
+    assert fakes.calls == [create.run, start.run]
+    assert fakes.task_xml.startswith(b"\xff\xfe")  # UTF-16, as its declaration says
+    assert task_settings(fakes.task_xml)["logon"] == "InteractiveToken"
+    assert not xml.exists()  # removed once registered
     assert "Attaché is running, and starts at login." in capsys.readouterr().out
 
 
-def test_windows_quotes_a_path_with_spaces(
-    service: ModuleType, fakes: Fakes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_windows_task_escapes_and_quotes(
+    service: ModuleType,
+    fakes: Fakes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     folder = tmp_path / "Program Files" / "uv tools"
     fakes.on_path = {folder: folder / "attache.exe"}
     monkeypatch.setenv("PATH", str(folder))
-    install, _ = service.plan("install", "win32")
-    line = install.run[install.run.index("/TR") + 1]
-    assert line.startswith(f'"{folder / "attache.exe"}" run --home ')
-    shown = service.describe(install, "win32")  # what --dry-run prints: \" inside the quotes
-    assert f'/TR "\\"{folder / "attache.exe"}\\" run --home ' in shown
-
-
-def test_windows_refuses_a_command_schtasks_cannot_hold(
-    service: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("ATTACHE_HOME", str(tmp_path / ("very-long-folder-name-" * 12)))
-    with pytest.raises(SystemExit, match="longer than schtasks allows"):
+    monkeypatch.setenv("USERDOMAIN", "<R&D>")  # XML-escaped in the file
+    monkeypatch.setenv("ATTACHE_HOME", str(tmp_path / "my home"))
+    write, *_ = service.plan("install", "win32")
+    settings = task_settings(write.text.encode("utf-16"))
+    assert settings["user"] == "<R&D>\\alex"
+    assert settings["command"] == str(folder / "attache.exe")  # its own element: no quotes
+    assert settings["arguments"] == f'run --home "{(tmp_path / "my home").resolve()}"'
+    monkeypatch.delenv("USERNAME")
+    with pytest.raises(SystemExit, match="USERNAME"):
         service.plan("install", "win32")
 
 
@@ -189,7 +220,18 @@ def test_linux_user_unit(service: ModuleType, fakes: Fakes, tmp_path: Path, home
 
 
 def test_unit_file_quoting(service: ModuleType) -> None:
-    assert service.quoted('C:\\a "b" 100%') == '"C:\\\\a \\"b\\" 100%%"'
+    assert service.quoted('C:\\a "b" 100% $HOME') == '"C:\\\\a \\"b\\" 100%% $HOME"'
+    # ExecStart= expands $NAME, Environment= does not
+    assert service.quoted("$HOME/x", command=True) == '"$$HOME/x"'
+
+
+def test_a_dollar_in_the_home_stays_literal(
+    service: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATTACHE_HOME", str(tmp_path / "pay$day"))
+    write, *_ = service.plan("install", "linux")
+    exec_start = next(line for line in write.text.splitlines() if line.startswith("ExecStart="))
+    assert "pay$$day" in exec_start and "pay$day" not in exec_start
 
 
 def test_the_uvx_copy_is_refused(

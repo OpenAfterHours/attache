@@ -18,30 +18,40 @@ Titan (IMAP). Each command prints exactly one JSON object, {"ok": true, ...} or
 
 The accounts are in <home>/skills/mail/accounts.toml (no secrets; `setup` copies the example).
 Ids are "<account>:<native>", where the native part is whatever the backend needs to find the
-item again. This file adds the prefix, the fingerprints and approvals, the caps, `untrusted`,
-and the audit log <home>/logs/mail.jsonl: one line per call, never a subject or a body. The
-backends are sibling modules (imap_backend, com_backend, graph_backend), imported only when an
-account uses one, each with `Backend(account, settings, home)`.
+item again. This file adds the prefix, the previews and approvals, the caps, `untrusted`, and
+the audit log <home>/logs/mail.jsonl: one line per call, never a subject or a body.
 
-Sending, answering an invitation and creating an event need the owner's approval. The core's
-`ask` tool, given `approves: <fingerprint>`, writes <home>/.approvals/<fingerprint> when the
-owner picks Send. The fingerprint hashes what the owner was shown, so a draft that changed
-after the yes is refused, and each approval is used once.
+Approvals. Sending a draft, answering an invitation and creating an event need the owner's
+yes for exactly what will happen:
+1. The command, without --fingerprint, writes <home>/.approvals/<F>.preview: plain text of
+   what will be sent. F, the fingerprint, hashes the account, the item and that preview.
+   A draft's preview and F come back with the draft itself.
+2. The core's `ask {approves: F}` shows that file to the owner, verbatim, with Send and Not
+   now. Send writes <home>/.approvals/<F>.
+3. The command with --fingerprint F checks that F is still the item's fingerprint, then claims
+   the approval by renaming it to <F>.sending (atomic, so it is used once). Approvals older
+   than 15 minutes are refused. After the action <F>.sending and <F>.preview are deleted.
+
+The backends are sibling modules (imap_backend, com_backend, graph_backend), imported only when
+an account uses one, each with `Backend(account, settings, home)` and plain-dict results. A
+ValueError (or NotImplementedError) from send_draft, respond or create_event means that nothing
+left this machine, so the approval is put back. Any other exception means it may have gone:
+<F>.sending stays, and a retry is refused until the owner checks Sent.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import importlib
 import json
 import os
 import shutil
 import sys
+import time
 import tomllib
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +59,8 @@ HERE = Path(__file__).resolve().parent  # <home>/skills/mail/scripts
 BACKENDS = ("imap", "com", "graph")
 MANY = 20  # moving more messages than this at once needs --many, after the owner's yes
 PREVIEW = 200  # characters of a summary's preview
+FRESH = 15 * 60  # seconds an approval stays good
+RESPONSES = {"accept": "Accept", "tentative": "Tentatively accept", "decline": "Decline"}
 Json = dict[str, Any]
 
 
@@ -60,21 +72,13 @@ class Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:  # one JSON object, not usage text and exit 2
         raise MailError(f"{self.prog}: {message}")
 
-
-def fingerprint(fields: Json) -> str:
-    """16 hex digits of the sha256 of what the owner is shown and approves."""
-    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-
-
-def draft_fingerprint(draft: Json) -> str:
-    to, cc = sorted(draft["to"]), sorted(draft["cc"])
-    return fingerprint({"to": to, "cc": cc, "subject": draft["subject"], "body": draft["body"]})
+    def print_help(self, file: Any = None) -> None:  # -h: the usage, as the JSON's error
+        raise MailError(self.format_help())
 
 
 def open_backend(name: str, settings: Json, home: Path) -> Any:
-    """The account's backend object. Tests replace this with fakes."""
-    if str(HERE) not in sys.path:
-        sys.path.insert(0, str(HERE))
+    """The account's backend object, from a sibling module: Python puts a script's folder on
+    sys.path. Tests replace this with fakes."""
     module = importlib.import_module(f"{settings['backend']}_backend")
     return module.Backend(name, settings, home)
 
@@ -127,10 +131,6 @@ class Mail:
             raise MailError(f"{item_id!r} is not a mail id: use the ids inbox and search give")
         return name, self.backend(name), native
 
-    def approval(self, approved: str) -> Path:
-        """The file the core's ask tool writes when the owner approves this fingerprint."""
-        return self.home / ".approvals" / approved
-
 
 def between(value: int, most: int) -> int:
     """A count from the agent, kept between 1 and `most`."""
@@ -162,44 +162,82 @@ def each_account(mail: Mail, which: str, call: Callable[[Any], list[Json]]) -> J
     return {"items": items, "errors": errors} if errors else {"items": items}
 
 
-def by_account(mail: Mail, ids: list[str], call: Callable[[Any, list[str]], list]) -> list[str]:
-    """call(backend, natives) once for each account among `ids`; the ids it acted on."""
-    groups: dict[str, list[str]] = {}
+def each_id(mail: Mail, ids: list[str], key: str, call: Callable[[Any, str], list]) -> Json:
+    """call(backend, native) for each id on its own, so one that fails doesn't hide the rest:
+    the ids it gives back under `key`, and each failure under `errors`."""
+    done, errors = [], []
     for item_id in ids:
-        name, _, native = mail.find(item_id)
-        groups.setdefault(name, []).append(native)
-    done = []
-    for name, natives in groups.items():
-        done += [f"{name}:{native}" for native in call(mail.backend(name), natives)]
+        try:
+            name, backend, native = mail.find(item_id)
+            done += [f"{name}:{new}" for new in call(backend, native)]
+        except Exception as error:
+            errors.append({"id": item_id, "error": str(error) or type(error).__name__})
+    if errors and not done:
+        raise MailError("; ".join(f"{each['id']}: {each['error']}" for each in errors))
+    return {key: done, "errors": errors} if errors else {key: done}
+
+
+# Approvals: see the module docstring.
+
+
+def fingerprint(account: str, native: str, preview: str) -> str:
+    """16 hex digits of the sha256 of the account, the item and the preview the owner sees."""
+    fields = {"account": account, "id": native, "preview": preview}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def offer(mail: Mail, account: str, native: str, preview: str) -> str:
+    """Write the preview for the core's ask to show; its fingerprint."""
+    folder = mail.home / ".approvals"
+    folder.mkdir(exist_ok=True)
+    approves = fingerprint(account, native, preview)
+    (folder / f"{approves}.preview").write_text(preview, encoding="utf-8")
+    return approves
+
+
+def claim(mail: Mail, expected: str, given: str, what: str) -> Path:
+    """Take the owner's approval of `expected` for this call: its <F>.sending file."""
+    if given != expected:
+        raise MailError(f"the {what} changed since it was approved: show it to the owner again")
+    approval = mail.home / ".approvals" / expected
+    sending = approval.with_suffix(".sending")
+    if sending.exists():
+        raise MailError("this may already have been sent; check Sent before asking again")
+    try:
+        os.replace(approval, sending)  # atomic: a second call finds no approval
+    except FileNotFoundError:
+        hint = f"show it to the owner with the ask tool (approves: {expected}) first"
+        raise MailError(f"not approved: {hint}") from None
+    if time.time() - sending.stat().st_mtime > FRESH:
+        sending.unlink()
+        raise MailError(f"the approval is over 15 minutes old: ask again (approves: {expected})")
+    mail.log["approved"] = True
+    return sending
+
+
+def act(sending: Path, action: Callable[[], Any]) -> Any:
+    """Do the approved action; see the module docstring for what a failure leaves behind."""
+    try:
+        done = action()
+    except (ValueError, NotImplementedError):
+        os.replace(sending, sending.with_suffix(""))  # nothing went: the owner's yes stands
+        raise
+    except Exception as error:
+        maybe = "this may have been sent: check Sent before asking again"
+        raise MailError(f"{error}; {maybe}") from error
+    sending.unlink(missing_ok=True)
+    sending.with_suffix(".preview").unlink(missing_ok=True)
     return done
 
 
-def approved(mail: Mail, expected: str, given: str | None, what: str) -> Json | None:
-    """None when `given` is the current fingerprint and the owner approved it; else what the
-    agent must do first."""
-    if given is None:
-        return {"needs_approval": expected}
-    if given != expected:
-        raise MailError(f"the {what} changed since it was approved: show it to the owner again")
-    if not mail.approval(expected).is_file():
-        raise MailError(f"not approved: show it to the owner with ask (approves: {expected})")
-    mail.log["approved"] = True
-    return None
-
-
-def check_send_limit(mail: Mail, account: str, recipients: int) -> None:
-    """Refuse a send that would pass the account's send_limit_hour, counted in the log."""
-    if not (limit := mail.settings(account).get("send_limit_hour")):
-        return
-    since = (datetime.now(UTC) - timedelta(hours=1)).isoformat(timespec="seconds")
-    path, count = mail.home / "logs" / "mail.jsonl", 0
-    for text in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
-        with contextlib.suppress(ValueError):  # a line cut short by a crash
-            line = json.loads(text)
-            if line["account"] == account and line["ok"] and line["ts"] >= since:
-                count += line.get("recipients", 0)
-    if count + recipients > limit:
-        raise MailError(f"{account} sends to {limit} people an hour; {count} so far: try later")
+def draft_preview(account: str, backend: str, draft: Json) -> str:
+    """Exactly what send-draft will send, as the owner sees it."""
+    files = [f"{each['name']} ({each['size']} bytes)" for each in draft.get("attachments") or []]
+    lines = [f"Send from {account} ({backend})"]
+    for key in ("to", "cc", "bcc"):
+        lines.append(f"{key.title()}: {', '.join(draft.get(key) or []) or 'none'}")
+    lines += [f"Subject: {draft['subject']}", f"Attachments: {', '.join(files) or 'none'}"]
+    return "\n".join([*lines, "", draft["body"]])
 
 
 # The commands: each takes (mail, args) and returns the result's fields.
@@ -239,13 +277,16 @@ def folders(mail: Mail, args: argparse.Namespace) -> Json:
 
 
 def newest(mail: Mail, args: argparse.Namespace, folder: str | None, query: str | None) -> Json:
-    """inbox and search: the newest messages across the accounts."""
-    limit, after = between(args.limit, 100), args.since and args.since.astimezone(UTC)
-    result = each_account(
-        mail, args.account, lambda b: b.list(folder, args.unread, limit, after, query)
-    )
-    result["items"].sort(key=lambda summary: summary.get("received_utc") or "", reverse=True)
-    result["items"] = result["items"][:limit]
+    """inbox and search: the newest messages across the accounts, at most --limit."""
+    limit = between(args.limit, 100)
+    since = args.since.astimezone(UTC) if args.since else None
+
+    def call(backend: Any) -> list[Json]:
+        return backend.list(folder, args.unread, limit, since, query)
+
+    result = each_account(mail, args.account, call)
+    result["items"].sort(key=lambda item: item.get("received_utc") or "", reverse=True)
+    del result["items"][limit:]
     return result
 
 
@@ -267,9 +308,8 @@ def read(mail: Mail, args: argparse.Namespace) -> Json:
 
 
 def agenda(mail: Mail, args: argparse.Namespace) -> Json:
-    result = each_account(
-        mail, args.account, lambda backend: backend.agenda(between(args.days, 31))
-    )
+    days = between(args.days, 31)
+    result = each_account(mail, args.account, lambda backend: backend.agenda(days))
     result["items"].sort(key=lambda event: str(event.get("start") or ""))
     return result
 
@@ -281,66 +321,73 @@ def tasks(mail: Mail, args: argparse.Namespace) -> Json:
 def move(mail: Mail, args: argparse.Namespace) -> Json:
     if len(args.ids) > MANY and not args.many:
         raise MailError(f"moving {len(args.ids)} needs the owner's yes: ask, then add --many")
-    return {"moved": by_account(mail, args.ids, lambda b, natives: b.move(natives, args.to))}
+    return each_id(mail, args.ids, "moved", lambda b, native: b.move([native], args.to))
 
 
 def flag(mail: Mail, args: argparse.Namespace) -> Json:
-    return {"changed": by_account(mail, args.ids, lambda b, n: b.flag(n, not args.off))}
+    return each_id(mail, args.ids, "changed", lambda b, native: b.flag([native], not args.off))
 
 
 def mark_read(mail: Mail, args: argparse.Namespace) -> Json:
-    return {"changed": by_account(mail, args.ids, lambda b, n: b.mark_read(n, not args.off))}
+    return each_id(mail, args.ids, "changed", lambda b, n: b.mark_read([n], not args.off))
 
 
-def shown(account: str, draft: Json) -> Json:
-    """A backend's draft as the agent sees it, with the fingerprint the owner approves."""
-    fields = {key: draft[key] for key in ("to", "cc", "subject", "body")}
-    fields["fingerprint"] = draft_fingerprint(draft)
-    return {"id": f"{account}:{draft['id']}", "account": account, **fields}
+def shown(mail: Mail, account: str, draft: Json) -> Json:
+    """A backend's draft (to, cc, bcc, subject, body, attachments) as the agent sees it, its
+    preview written for the owner to approve."""
+    preview = draft_preview(account, mail.settings(account)["backend"], draft)
+    approves = offer(mail, account, draft["id"], preview)
+    return {**draft, "id": f"{account}:{draft['id']}", "account": account, "fingerprint": approves}
 
 
 def draft_reply(mail: Mail, args: argparse.Namespace) -> Json:
     name, backend, native = mail.find(args.id)
-    return {"draft": shown(name, backend.draft(None, None, None, args.body, native, args.all))}
+    draft = backend.draft(None, None, None, args.body, native, args.all)
+    return {"draft": shown(mail, name, draft)}
 
 
 def draft_new(mail: Mail, args: argparse.Namespace) -> Json:
     draft = mail.backend(args.account).draft(args.to, args.cc, args.subject, args.body, None, False)
-    return {"draft": shown(args.account, draft)}
+    return {"draft": shown(mail, args.account, draft)}
 
 
 def send_draft(mail: Mail, args: argparse.Namespace) -> Json:
     name, backend, native = mail.find(args.draft_id)
-    draft = shown(name, backend.get_draft(native))  # as it is now, not as it was shown
-    if ask := approved(mail, draft["fingerprint"], args.fingerprint, "draft"):
-        return {**ask, "preview": draft}
-    mail.log["recipients"] = len(draft["to"]) + len(draft["cc"])
-    check_send_limit(mail, name, mail.log["recipients"])
-    sent = backend.send_draft(native)
-    mail.approval(draft["fingerprint"]).unlink(missing_ok=True)  # each approval is used once
+    draft = backend.get_draft(native)  # as it is now, not as it was shown
+    preview = draft_preview(name, mail.settings(name)["backend"], draft)
+    if args.fingerprint is None:
+        return {"needs_approval": offer(mail, name, native, preview), "preview": preview}
+    sending = claim(mail, fingerprint(name, native, preview), args.fingerprint, "draft")
+    sent = act(sending, lambda: backend.send_draft(native))
     return {"sent": True, "id": f"{name}:{sent}" if sent else None}
 
 
 def respond(mail: Mail, args: argparse.Namespace) -> Json:
-    _, backend, native = mail.find(args.id)
-    preview = {"id": args.id, "response": args.response, "body": args.body or ""}
-    if ask := approved(mail, fingerprint(preview), args.fingerprint, "reply"):
-        return {**ask, "preview": preview}
-    backend.respond(native, args.response, args.body)
-    mail.approval(fingerprint(preview)).unlink(missing_ok=True)
+    name, backend, native = mail.find(args.id)
+    invitation = backend.read(native, 200)
+    sender = (invitation.get("from") or {}).get("smtp", "")
+    lines = [f"{RESPONSES[args.response]} an invitation in {name}"]
+    lines.append(f"Invitation: {invitation.get('subject', '')} from {sender}")
+    preview = "\n".join([*lines, "", args.body or "(no message)"])
+    if args.fingerprint is None:
+        return {"needs_approval": offer(mail, name, native, preview), "preview": preview}
+    sending = claim(mail, fingerprint(name, native, preview), args.fingerprint, "reply")
+    act(sending, lambda: backend.respond(native, args.response, args.body))
     return {"sent": True, "id": args.id}
 
 
 def create_event(mail: Mail, args: argparse.Namespace) -> Json:
-    attendees = sorted(args.attendees)
-    shown_fields = ("account", "subject", "start", "end", "body")
-    preview = {key: str(getattr(args, key) or "") for key in shown_fields}
-    preview["attendees"] = attendees
-    if ask := approved(mail, fingerprint(preview), args.fingerprint, "event"):
-        return {**ask, "preview": preview}
-    backend = mail.backend(args.account)
-    native = backend.create_event(args.subject, args.start, args.end, attendees, args.body)
-    mail.approval(fingerprint(preview)).unlink(missing_ok=True)
+    backend, attendees = mail.backend(args.account), sorted(args.attendees)
+    lines = [f"Create an event in {args.account}", f"Subject: {args.subject}"]
+    lines.append(f"Start: {args.start.isoformat(' ', 'minutes')}")
+    lines.append(f"End: {args.end.isoformat(' ', 'minutes')}")
+    lines.append(f"Invite: {', '.join(attendees) or 'nobody'}")
+    preview = "\n".join([*lines, "", args.body or ""])
+    if args.fingerprint is None:
+        return {"needs_approval": offer(mail, args.account, "event", preview), "preview": preview}
+    sending = claim(mail, fingerprint(args.account, "event", preview), args.fingerprint, "event")
+    event = (args.subject, args.start, args.end, attendees, args.body)
+    native = act(sending, lambda: backend.create_event(*event))
     return {"created": True, "id": f"{args.account}:{native}"}
 
 
@@ -350,7 +397,8 @@ COMMANDS = {handler.__name__.replace("_", "-"): handler for handler in HANDLERS}
 
 
 def parser() -> Parser:
-    """The commands and their arguments. Times are ISO; without a zone they are local time."""
+    """The commands and their arguments. Times are ISO; without a zone they are local time. A
+    value starting with "-" goes after "=": --query=-in:chats."""
     top = Parser(prog="mail.py", description="Mail commands; each prints one JSON object.")
     sub = top.add_subparsers(dest="command", required=True)
     commands = {name: sub.add_parser(name) for name in COMMANDS}
@@ -375,15 +423,14 @@ def parser() -> Parser:
     commands["agenda"].add_argument("--days", type=int, default=7)
     commands["move"].add_argument("--to", required=True)
     commands["move"].add_argument("--many", action="store_true")
-    commands["draft-reply"].add_argument("--body", required=True)
     commands["draft-reply"].add_argument("--all", action="store_true")
     commands["send-draft"].add_argument("draft_id")
-    commands["respond"].add_argument("response", choices=["accept", "tentative", "decline"])
-    commands["respond"].add_argument("--body")
-    for name, required in (("draft-new", True), ("create-event", False)):
+    commands["respond"].add_argument("response", choices=list(RESPONSES))
+    for name in ("draft-new", "draft-reply", "respond", "create-event"):
+        commands[name].add_argument("--body", required=name.startswith("draft"))
+    for name in ("draft-new", "create-event"):
         commands[name].add_argument("--account", required=True)
         commands[name].add_argument("--subject", required=True)
-        commands[name].add_argument("--body", required=required)
     commands["draft-new"].add_argument("--to", nargs="+", required=True)
     commands["draft-new"].add_argument("--cc", nargs="*", default=[])
     commands["create-event"].add_argument("--start", type=datetime.fromisoformat, required=True)
@@ -392,17 +439,23 @@ def parser() -> Parser:
     return top
 
 
+def touched(args: argparse.Namespace | None, result: Json) -> list[str]:
+    """The ids a call was given and the ids it gave back, each once."""
+    given = [getattr(args, key, None) for key in ("id", "draft_id")] + getattr(args, "ids", [])
+    items = [result, result.get("draft") or {}, *result.get("items", [])]
+    returned = [item.get("id") for item in items] + result.get("moved", [])  # COM ids change
+    return [item_id for item_id in dict.fromkeys(given + returned) if isinstance(item_id, str)]
+
+
 def audit(mail: Mail, args: argparse.Namespace | None, result: Json) -> None:
-    """Append the call's line to <home>/logs/mail.jsonl: the command and the ids it touched.
-    Never a subject or a body, so a call whose arguments didn't parse logs no error text."""
-    ids = [getattr(args, key, None) for key in ("id", "draft_id")] + getattr(args, "ids", [])
-    found = [result, result.get("draft") or {}, *result.get("items", [])]
-    ids += [item.get("id") for item in found] + result.get("moved", [])  # COM ids change
-    ids = [item_id for item_id in dict.fromkeys(ids) if isinstance(item_id, str)]
+    """Append the call's line to <home>/logs/mail.jsonl. Never a subject or a body, so a call
+    whose arguments didn't parse logs no error text: they might hold either."""
+    ids = touched(args, result)
+    account = getattr(args, "account", None) or (ids[0].partition(":")[0] if ids else None)
     line = {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "command": getattr(args, "command", None),
-        "account": getattr(args, "account", None) or (ids[0].partition(":")[0] if ids else None),
+        "account": account,
         "ids": ids,
         "ok": result["ok"],
         **mail.log,

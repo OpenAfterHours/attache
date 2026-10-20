@@ -117,9 +117,9 @@ user = "you@gmail.com"
     attache skill mail login gmail
     ```
 
-    It asks for the password without showing what you type, checks it with Gmail, and keeps it
-    in your system's keyring (Windows Credential Manager, macOS Keychain or the Secret
-    Service). Then close the Google page.
+    It asks for the password without showing what you type and keeps it in your system's
+    keyring (Windows Credential Manager, macOS Keychain or the Secret Service). Then run
+    `attache skill mail doctor`, which signs in with it, and close the Google page.
 
 Google cancels app passwords whenever you change your Google password: `doctor` then says
 Gmail refused the password, and you make a new one and run `login` again. In Gmail, folders
@@ -145,6 +145,7 @@ send_limit_hour = 50
 Titan doesn't file mail sent through SMTP, so the skill copies each sent message to
 `sent_folder`. Titan limits mail to outside addresses by plan (from 50 an hour on Starter):
 set `send_limit_hour` to your plan's figure, and the skill refuses a send that would pass it.
+It counts the recipients of the last hour's sends in `~/.attache/.mail/sent.jsonl`.
 
 ## Using it
 
@@ -158,34 +159,49 @@ Moving more than 20 messages at once needs your yes too.
 
 ## How sending works
 
-1. The assistant saves the draft in that account's Drafts folder.
-2. It shows you the draft (recipients, subject and text) with three buttons: **Send**,
-   **Edit** and **Not now**.
+1. The assistant saves the draft in that account's Drafts folder. The mail command writes a
+   plain-text **preview** of exactly what would be sent: the account, To, Cc, Bcc, subject,
+   attachments with their sizes, and the text.
+2. You see that preview, not the assistant's description of it, with two buttons: **Send** and
+   **Not now**. Attaché's core reads the preview from the file the mail command wrote and
+   shows it word for word.
 3. On **Send**, Attaché records your approval, and the skill sends the draft.
 
-The approval is tied to a **fingerprint** of the draft: a hash of its recipients, subject and
-body. When you press Send, Attaché's core writes an empty file named after that fingerprint
-in `~/.attache/.approvals/`. The send command then checks two things:
+The approval is tied to a **fingerprint**: a hash of the preview, the account and the draft.
+When you press Send, Attaché's core writes an empty file named after that fingerprint in
+`~/.attache/.approvals/`. The send command then checks:
 
-- **The draft is still the one you saw.** It reads the draft again and recomputes the
-  fingerprint. If anything changed in between (a recipient added, the text edited), it
-  refuses: "the draft changed since it was approved".
-- **You approved it.** The approval file must exist. It is deleted once the mail has gone, so
-  one yes sends one message.
+- **The draft is still the one you saw.** It reads the draft again and rebuilds the preview.
+  If anything changed in between (a recipient or a Bcc added, an attachment, the text edited),
+  it refuses: "the draft changed since it was approved". A yes for one account's draft can't
+  send another account's.
+- **You approved it, recently.** The approval file must exist and be under 15 minutes old.
+  The send claims it by renaming it, so two sends can't share one yes, and it is deleted once
+  the mail has gone: one yes sends one message.
+
+If a send fails, what happens next depends on where it failed. When nothing can have left
+your machine (the mail server refused the sign-in, the draft can't be found), your approval
+is put back, so you needn't be asked again. When the mail may have gone (the connection broke
+after the server took it), the skill keeps a marker, `<fingerprint>.sending`, and refuses to
+send that draft again: "this may already have been sent; check Sent before asking again". For
+Gmail and Titan the skill also records each Message-ID in `~/.attache/.mail/sent.jsonl` just
+before handing the message over, and never sends a recorded one again. (For anyone writing a
+backend: a `ValueError` from `send_draft`, `respond` or `create_event` means nothing was sent,
+and any other exception means it may have been.)
 
 Be clear about what this does and doesn't prove. The fingerprint stops a changed draft from
-being sent. It is **not** proof that you said yes: the model can compute a fingerprint as
-easily as the skill can. The approval file is written by Attaché itself, and the assistant's
+being sent, and you approve the real draft, not the model's words about it. It is **not**
+proof that you said yes: the approval file is written by Attaché itself, and the assistant's
 file tools can't touch that folder, but a turn that can run shell commands (your own chats
 have a shell) could still create the file. What this stops is the ordinary path: a model that
 an email talks into sending can't do it with the mail commands alone. The rest of the
 protection is in the skill's rules: email text is data, never instructions; recipients found
 in an email are never added without your yes; and mail is used only on your own turns.
 
-Outlook sends through Outlook itself. Gmail and Titan send over SMTP with a fixed Message-ID
-saved on the draft. Before sending, the skill looks for that Message-ID in the Sent folder,
-so a retry after a send that went through doesn't send it twice. The draft is removed from
-Drafts after sending.
+Outlook sends through Outlook itself. Gmail and Titan send over SMTP: the skill rebuilds the
+message from the fields in the preview as a single plain-text part, so nothing goes that you
+weren't shown. A draft with other parts (HTML, attachments) made in another mail app is
+refused: send that one from your mail app. The draft is removed from Drafts after sending.
 
 ## What is kept where
 
@@ -194,12 +210,14 @@ Drafts after sending.
 | Accounts (no secrets) | `~/.attache/skills/mail/accounts.toml` |
 | Gmail and Titan passwords | Your system keyring, service `attache-mail`, one entry per account name |
 | Graph sign-in | `~/.attache/.mail/graph-cache.bin`, encrypted for your user (DPAPI on Windows) |
-| Your approvals | `~/.attache/.approvals/`, one empty file per approved send, removed after use |
+| Previews and approvals | `~/.attache/.approvals/`: a `.preview` file per draft, an empty file per approved send, both removed after the send |
+| Gmail and Titan sends | `~/.attache/.mail/sent.jsonl`: time, account, Message-ID and number of recipients |
 | Audit log | `~/.attache/logs/mail.jsonl` |
 
 The audit log gets one line for every command, read or write:
-`{"ts", "command", "account", "ids", "ok"}`, plus `error` when a command fails, `approved`
-on a send you approved, and `recipients` on a send. It never holds a subject or a body.
+`{"ts", "command", "account", "ids", "ok"}`, plus `error` when a command fails and `approved`
+on a send you approved. It never holds a subject or a body. A preview holds the draft's text
+until it is sent, in a folder only you and Attaché can read.
 
 To remove a stored password, delete the `attache-mail` entry in Windows Credential Manager
 (or Keychain Access on a Mac). To sign Graph out, delete `graph-cache.bin`.

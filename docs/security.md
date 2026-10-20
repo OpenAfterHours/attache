@@ -110,7 +110,12 @@ When `[web] public_url` is set, a page made in a chat gets a share link,
 
 - **Never your access.** Only pages tied to a chat can be shared. A link reaches the
   documents shared with that chat, in the collections the page declared when the link was
-  made, under the member rules (add and edit, no delete). It can't use `attache.ask`.
+  made, under the member rules (add and edit, no delete). It can't use `attache.ask`, and
+  no page, shared or not, reaches `_shares` or `_requests` (members' requests to you).
+- **Capped writes.** Anyone with the link can write, so each link may make at most 60
+  changes an hour (refused tries count too), each at most 64 KB, and adds no document once
+  the chat has 500 in that collection; it can still edit the ones there. Over a cap, the
+  answer is 429, 413 or 403. Pages in the Attaché window have no such caps.
 - **Short-lived.** A link lasts 7 days, and dies at once if the page changes or is deleted.
 - **Kept as a hash.** The token is 24 random bytes, and Attaché stores only its SHA-256 (in
   the read-only `_shares` collection), so the database holds no working links.
@@ -129,9 +134,12 @@ address or `Host` header. Instead, share links get a web server of their own:
   when `public_url` is set. Funnel forwards to that port; the web page's own port is never
   exposed.
 - It serves only share links (`/s/<token>`), the bridge script, the fonts, and the
-  document and live-event routes for share links. The chat page, other pages, chat, answers,
-  `attache.ask` and the MCP endpoint don't exist there.
-- It answers only requests whose `Host` is the host of `public_url`.
+  document and live-event routes for share links, which take share tokens and nothing else.
+  The chat page, other pages, chat, answers, `attache.ask` and the MCP endpoint don't exist
+  there.
+- It answers requests whose `Host` is the host of `public_url` or a loopback name
+  (`127.0.0.1`, `localhost`, `[::1]`), since Funnel may pass either on. Any other name is
+  refused. A loopback `Host` gets nothing more: the port has only the share routes.
 - On the local web server, share tokens are refused, and `/s/` doesn't exist.
 
 ## Tokens
@@ -164,7 +172,7 @@ too):
   other address, including `0.0.0.0`. The public port is always on `127.0.0.1`.
 - Requests whose `Host` header isn't a loopback name are refused, so a web site can't reach
   the server by pointing its own domain name at `127.0.0.1` (DNS rebinding). The public
-  port takes only the host of `public_url`.
+  port also takes the host of `public_url`, and serves share routes only.
 - Only the bridge routes answer cross-origin requests, for the sandboxed pages. The MCP
   endpoint refuses any request that comes with an `Origin` header, so a web page can't post
   to it.

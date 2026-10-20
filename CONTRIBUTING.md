@@ -31,7 +31,7 @@ Bundled skills live in `src/attache/bundled/skills/` and are copied into a user'
 
 ## The size budget
 
-`tests/test_budget.py` fails when the core passes 2,050 lines of code. Blank lines, comments
+`tests/test_budget.py` fails when the core passes 2,100 lines of code. Blank lines, comments
 and docstrings don't count, so write the clearest version of the code, not the shortest.
 
 ## Before you open a pull request

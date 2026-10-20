@@ -74,8 +74,10 @@ def test_the_morning_routine() -> None:
 
 def test_triage_steps() -> None:
     commands = [args[0] for args in mail_args(TRIAGE)]
-    assert commands == ["doctor", "folders", "inbox", "move", "flag", "draft-reply"]
+    # flag and draft before filing: a move can change a message's id (IMAP: folder and UID)
+    assert commands == ["doctor", "folders", "inbox", "flag", "draft-reply", "move"]
     assert 'script {skill: "mail", script: "mail.py"' in TRIAGE
+    assert "attache skill mail login" in TRIAGE and "mail.py login" not in TRIAGE
     inbox = next(args for args in mail_args(TRIAGE) if args[0] == "inbox")
     assert "--unread" in inbox
     for word in ("rules.md", "learned.md", "vip.md", "summary"):

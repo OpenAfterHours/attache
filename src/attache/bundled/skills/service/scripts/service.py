@@ -6,9 +6,12 @@
 
     service.py install|uninstall|status [--dry-run]
 
-- Windows: a Task Scheduler task "Attache" that runs at logon, only while you are logged on
-  (/IT) and without elevated rights (/RL LIMITED), which Outlook's COM automation needs.
-  Install also starts it now (/Run), and uninstall ends it (/End).
+- Windows: a Task Scheduler task "Attache", registered from XML (`schtasks /Create /XML`) with
+  a logon trigger for you alone, which a standard user may create (`/SC ONLOGON` means any
+  user's logon, and needs an administrator). It runs only while you are logged on
+  (InteractiveToken, as /IT) and without elevated rights (LeastPrivilege, as /RL LIMITED),
+  which Outlook's COM automation needs; also on battery, and with no time limit. Install also
+  starts it now (/Run), and uninstall ends it (/End).
 - macOS: a LaunchAgent, ~/Library/LaunchAgents/ai.attache.plist, with RunAtLoad and KeepAlive.
 - Linux: a systemd user unit, ~/.config/systemd/user/attache.service, enabled with
   `systemctl --user enable --now attache`.
@@ -28,14 +31,53 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 TASK = "Attache"  # the Task Scheduler task
 LABEL = "ai.attache"  # the LaunchAgent
 UNIT = "attache"  # the systemd user unit
-TR_LIMIT = 261  # the longest command schtasks accepts in /TR
 INSTALL = "install it with `uv tool install attache` first"
+# Settings left out keep Task Scheduler's defaults. The ones given differ from them: start on
+# battery, keep running on battery, no 72-hour time limit, and restart after a failure.
+TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Attaché, your personal assistant</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{command}</Command>
+      <Arguments>{arguments}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"""
 UNIT_FILE = """[Unit]
 Description=Attaché, your personal assistant
 
@@ -57,6 +99,7 @@ class Step:
     run: list[str] | None = None
     file: Path | None = None
     text: str | None = None
+    encoding: str = "utf-8"
     may_fail: bool = False  # such as unloading an agent that was never loaded
 
 
@@ -91,10 +134,21 @@ def find_attache() -> Path:
     raise SystemExit(f"error: attache is not on PATH; {INSTALL}")
 
 
-def quoted(text: str) -> str:
-    """One argument for a systemd unit file: in double quotes, with "%" doubled."""
+def quoted(text: str, command: bool = False) -> str:
+    """One value for a systemd unit file: in double quotes, with "%" doubled. In a command
+    "$" is doubled too, because ExecStart= expands $NAME (Environment= does not)."""
     escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    if command:
+        escaped = escaped.replace("$", "$$")
     return f'"{escaped}"'
+
+
+def windows_user() -> str:
+    """DOMAIN\\name: the account the task runs as, and whose logon starts it."""
+    name, domain = os.environ.get("USERNAME"), os.environ.get("USERDOMAIN")
+    if not name:
+        raise SystemExit("error: USERNAME is not set, so the task has no user")
+    return f"{domain}\\{name}" if domain else name
 
 
 def windows(action: str, command: list[str], _home: Path) -> list[Step]:
@@ -103,12 +157,18 @@ def windows(action: str, command: list[str], _home: Path) -> list[Step]:
     if action == "uninstall":
         stop = Step(["schtasks", "/End", "/TN", TASK], may_fail=True)  # when it is running
         return [stop, Step(["schtasks", "/Delete", "/TN", TASK, "/F"])]
-    line = subprocess.list2cmdline(command)  # quoted the way schtasks reads /TR
-    if len(line) > TR_LIMIT:
-        raise SystemExit(f"error: the command is longer than schtasks allows: {line}")
-    task = ["/SC", "ONLOGON", "/RL", "LIMITED", "/IT", "/TN", TASK, "/TR", line, "/F"]
-    # /Run starts it now, as launchctl bootstrap and systemctl --now do
-    return [Step(["schtasks", "/Create", *task]), Step(["schtasks", "/Run", "/TN", TASK])]
+    task = TASK_XML.format(
+        user=escape(windows_user()),
+        command=escape(command[0]),
+        arguments=escape(subprocess.list2cmdline(command[1:])),  # quoted as Windows reads them
+    )
+    xml = Path(tempfile.gettempdir()) / "attache-task.xml"
+    return [
+        Step(file=xml, text=task, encoding="utf-16"),  # what the declaration says, as exported
+        Step(["schtasks", "/Create", "/XML", str(xml), "/TN", TASK, "/F"]),
+        Step(file=xml),  # deleted once registered
+        Step(["schtasks", "/Run", "/TN", TASK]),  # now, as launchctl bootstrap and --now do
+    ]
 
 
 def macos(action: str, command: list[str], home: Path) -> list[Step]:
@@ -145,7 +205,8 @@ def linux(action: str, command: list[str], _home: Path) -> list[Step]:
         return [disable, Step(file=unit), Step([*systemctl, "daemon-reload"])]
     # systemd's user PATH lacks ~/.local/bin, where uv tool and uv's installer put uv
     path = quoted(f"PATH={os.environ.get('PATH', '')}")
-    text = UNIT_FILE.format(command=" ".join(map(quoted, command)), path=path)
+    exec_start = " ".join(quoted(part, command=True) for part in command)
+    text = UNIT_FILE.format(command=exec_start, path=path)
     reload, start = [*systemctl, "daemon-reload"], [*systemctl, "enable", "--now", UNIT]
     return [Step(file=unit, text=text), Step(reload), Step(start)]
 
@@ -181,7 +242,7 @@ def do(step: Step) -> int:
         step.file.unlink(missing_ok=True)
     else:
         step.file.parent.mkdir(parents=True, exist_ok=True)
-        step.file.write_text(step.text, encoding="utf-8")
+        step.file.write_text(step.text, encoding=step.encoding)
     return 0
 
 

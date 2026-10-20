@@ -634,7 +634,17 @@ def test_page_turns_are_limited_like_guests(world: World) -> None:
     assert len(world.backend.turns) == 3
 
 
-def test_files_of_messages_that_get_no_turn_are_deleted(world: World, tmp_path: Path) -> None:
+def test_a_busy_page_never_silences_its_chat(world: World) -> None:
+    world.services.config.limits = {**world.services.config.limits, "per_chat_hour": 2}
+    scope = web.Scope("trip", frozenset({"lists"}), "slack:CFAM")
+    for _ in range(5):  # a page that refreshes itself
+        assert asyncio.run(world.router.page_turn(scope, "anything new?")).startswith("reply")
+    world.say("@Attaché hi", name="Sam")  # the chat's hour is still all its own
+    world.say("@Attaché again", name="Sam")
+    assert len(world.backend.turns) == 7 and world.slack.sent[-1].text == "reply 7"
+
+
+def test_files_are_deleted_only_from_messages_not_kept(world: World, tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
 
@@ -648,7 +658,8 @@ def test_files_of_messages_that_get_no_turn_are_deleted(world: World, tmp_path: 
     world.services.config.limits = {**world.services.config.limits, "per_sender_hour": 1}
     world.say("@Attaché one", name="Sam", files=[received("answered.pdf")])
     world.say("@Attaché two", name="Sam", files=[received("limited.pdf")])  # over the limit
-    assert [p.name for p in inbox.iterdir()] == ["answered.pdf"]  # the turn may read it
+    kept = sorted(p.name for p in inbox.iterdir())  # still in the chat's context: they stay
+    assert kept == ["answered.pdf", "limited.pdf", "unmentioned.pdf"]
     assert "[attached file: " in world.backend.turns[0].text
 
 

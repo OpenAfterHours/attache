@@ -30,6 +30,7 @@ from typing import Any
 SHEET = {"name", "rows", "header", "widths", "formats"}
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?")  # becomes a real date
 FIT = (8, 60)  # the narrowest and widest fitted column, in characters
+LIVE = ("=", "+", "-", "@")  # text a spreadsheet may take for a formula when it is typed
 
 
 def inside(name: str, suffix: str) -> Path:
@@ -73,15 +74,26 @@ def check_keys(found: dict[str, Any], allowed: set[str], where: str) -> None:
         raise ValueError(f"{where}: unknown key {', '.join(unknown)}; known: {sorted(allowed)}")
 
 
-def cell(value: Any) -> Any:
-    """A JSON value as a cell value: ISO dates become dates, and text starting with "=" is
-    a formula (openpyxl reads it so); numbers, true/false, text and null stay as they are."""
-    if isinstance(value, str) and DATE.fullmatch(value):
+def write(target: Any, value: Any) -> None:
+    """Put one JSON value in a cell. Only {"formula": "=SUM(B2:B4)"} makes a formula: text is
+    always text, even when it starts with "=", because it may come from someone's message
+    (=HYPERLINK or =WEBSERVICE would run in Excel). ISO dates become dates; numbers,
+    true/false and null stay as they are."""
+    if isinstance(value, dict):
+        formula = value.get("formula")
+        if set(value) != {"formula"} or not isinstance(formula, str) or not formula.strip("= "):
+            raise ValueError(f'cell {value!r}: a formula is {{"formula": "=SUM(B2:B4)"}}')
+        target.value = formula if formula.startswith("=") else f"={formula}"
+    elif isinstance(value, str) and DATE.fullmatch(value):
         moment = datetime.fromisoformat(value)
-        return moment if "T" in value else moment.date()
-    if value is None or isinstance(value, str | int | float):
-        return value
-    raise ValueError(f"cell {value!r}: use text, a number, true/false or null")
+        target.value = moment if "T" in value else moment.date()
+    elif value is None or isinstance(value, str | int | float):
+        target.value = value
+        if isinstance(value, str) and value.startswith(LIVE):
+            target.data_type = "s"  # openpyxl took "=..." for a formula: keep it text
+            target.quotePrefix = True  # Excel's leading ', so editing the cell keeps it text
+    else:
+        raise ValueError(f"cell {value!r}: use text, a number, true/false, null or a formula")
 
 
 def by_column(table: Any, what: str) -> dict[int, Any]:
@@ -101,8 +113,9 @@ def fill(sheet: Any, spec: dict[str, Any]) -> None:
     rows = spec.get("rows", [])
     if not isinstance(rows, list) or not all(isinstance(row, list) for row in rows):
         raise ValueError(f"sheet {sheet.title!r}: rows is a list of rows, each a list of cells")
-    for row in rows:
-        sheet.append([cell(value) for value in row])
+    for number, row in enumerate(rows, 1):
+        for column, value in enumerate(row, 1):
+            write(sheet.cell(row=number, column=column), value)
     header = bool(spec.get("header", True)) and bool(rows)
     if header:
         for column in range(1, len(rows[0]) + 1):
@@ -111,7 +124,8 @@ def fill(sheet: Any, spec: dict[str, Any]) -> None:
     widths = by_column(spec.get("widths", {}), "widths")
     for column in range(1, max(map(len, rows), default=0) + 1):
         values = [row[column - 1] for row in rows if len(row) >= column]
-        longest = max((len(str(value)) for value in values if value is not None), default=0)
+        texts = [str(value) for value in values if not isinstance(value, dict | None)]
+        longest = max(map(len, texts), default=0)  # a formula's text is not what it shows
         fitted = min(max(longest + 2, FIT[0]), FIT[1])
         width = widths.get(column, fitted)  # "widths" wins
         sheet.column_dimensions[get_column_letter(column)].width = float(width)

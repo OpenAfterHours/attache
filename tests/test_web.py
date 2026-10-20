@@ -929,6 +929,95 @@ def test_one_store_listener_feeds_both_apps(env: Any, public: TestClient) -> Non
     assert len(env.sv.store.on_change) == 1
 
 
+# what a share link may write: anyone who has it can, so it is capped (the local app is not)
+
+
+def test_share_link_bodies_are_at_most_64_kb(env: Any, public: TestClient) -> None:
+    _, header = share(env)
+    big = public.post("/api/db/todos", headers=header, json={"title": "x" * 5_000_000})
+    assert big.status_code == 413 and "64 KB" in big.text
+    edge = public.post("/api/db/todos", headers=header, json={"title": "x" * 65_000})
+    assert edge.status_code == 200
+    assert [len(d["title"]) for d in env.sv.store.doc_list("todos")] == [65_000]
+    r = env.client.post("/api/db/todos", headers=auth("family"), json={"title": "x" * 100_000})
+    assert r.status_code == 200  # a page in the Attaché window isn't capped
+
+
+def test_share_link_writes_at_most_60_an_hour(
+    env: Any, public: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token, header = share(env)
+    codes = [
+        public.post("/api/db/todos", headers=header, json={"n": n}).status_code for n in range(61)
+    ]
+    assert codes == [200] * 60 + [429] and len(env.sv.store.doc_list("todos")) == 60
+    assert "60 changes this hour" in public.post("/api/db/todos", headers=header, json={}).text
+    assert public.get("/api/db/todos", headers=header).status_code == 200  # reads go on
+    other = {"X-Attache-Share": share(env)[0]}  # another link has its own count
+    assert public.post("/api/db/todos", headers=other, json={"n": 61}).status_code == 200
+    for n in range(70):  # the Attaché window has no such limit
+        assert env.client.post("/api/db/todos", headers=auth("family"), json={"n": n}).is_success
+    later = time.time() + 3600
+    monkeypatch.setattr(web, "time", SimpleNamespace(time=lambda: later))  # the next hour
+    assert public.post("/api/db/todos", headers=header, json={"n": 62}).status_code == 200
+    assert token not in str(env.sv.store.doc_list("todos"))
+
+
+def test_share_link_adds_no_doc_past_500(env: Any, public: TestClient) -> None:
+    _, header = share(env)
+    st = env.sv.store
+    for n in range(499):
+        st.doc_put("todos", f"d{n}", {"n": n, "_shared": ["slack:C1"]})
+    for n in range(20):
+        st.doc_put("todos", f"p{n}", {"n": n})  # not the chat's: these don't count
+    assert public.post("/api/db/todos", headers=header, json={"n": 499}).status_code == 200
+    full = public.post("/api/db/todos", headers=header, json={"n": 500})
+    assert full.status_code == 403 and "500" in full.json()["error"]
+    assert public.put("/api/db/todos/new-id", headers=header, json={}).status_code == 403
+    assert public.put("/api/db/todos/d1", headers=header, json={"n": 1, "done": True}).is_success
+    assert len(st.doc_list("todos", shared_with="slack:C1")) == 500
+    r = env.client.post("/api/db/todos", headers=auth("family"), json={"n": 501})
+    assert r.status_code == 200  # the Attaché window isn't capped
+
+
+# collections no page reaches
+
+
+@pytest.mark.parametrize("chat_key", [None, "slack:C1"])
+def test_no_page_reaches_shares_or_requests(env: Any, chat_key: str | None) -> None:
+    st = env.sv.store
+    st.doc_put(
+        "_requests", "r1", {"summary": "Sam asks to change a skill", "_shared": ["slack:C1"]}
+    )
+    st.doc_put("_shares", "h1", {"name": "trip", "_shared": ["slack:C1"]})
+    page(env.sv, "spy", "todos, _shares, _requests")
+    if chat_key:
+        st.doc_put("_artifacts", "spy", {"chat_key": chat_key})
+    scope = web.page_scope(env.sv, "spy")
+    assert scope.collections == frozenset({"todos"})
+    for collection in ("_shares", "_requests"):
+        r = env.client.get(f"/api/db/{collection}", headers=auth("spy"))
+        assert r.status_code == 403 and collection in r.json()["error"]
+        assert env.client.get(f"/api/db/{collection}/h1", headers=auth("spy")).status_code == 403
+    assert env.client.get("/api/db/_requests", headers=UI).json()[0]["id"] == "r1"  # the owner's
+
+
+def test_share_links_never_reach_shares_or_requests(env: Any, public: TestClient) -> None:
+    _, header = share(env, collections="todos, _shares, _requests")
+    [record] = env.sv.store.doc_list("_shares")
+    assert record["collections"] == ["todos"]
+    for collection in ("_shares", "_requests"):
+        assert public.get(f"/api/db/{collection}", headers=header).status_code == 403
+
+
+def test_snapshot_url_drops_expired_snapshots(env: Any) -> None:
+    page(env.sv, "home")
+    env.sv.snapshots.update({"old": ("home", time.time() - 1), "live": ("home", time.time() + 60)})
+    web.snapshot_url(env.sv, "home")
+    assert "old" not in env.sv.snapshots and "live" in env.sv.snapshots
+    assert len(env.sv.snapshots) == 2
+
+
 def test_stream_pings_when_idle(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(web, "PING_SECONDS", 0.01)
     channel = web.WebChannel()

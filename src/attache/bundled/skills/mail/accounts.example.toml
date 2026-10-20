@@ -23,4 +23,4 @@ imap = "imap.titan.email:993"
 smtp = "smtp.titan.email:465"
 user = "you@yourdomain.com"
 sent_folder = "Sent"  # Titan doesn't file sent mail, so the skill copies it here
-send_limit_hour = 50  # recipients an hour, counted in logs/mail.jsonl; your plan's limit
+send_limit_hour = 50  # recipients an hour, counted in <home>/.mail/sent.jsonl; your plan's

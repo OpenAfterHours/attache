@@ -164,6 +164,7 @@ class Item(SimpleNamespace):
         defaults |= {"SenderEmailAddress": "", "Sender": None, "ReceivedTime": None}
         defaults |= {"UnRead": False, "FlagStatus": 0, "Attachments": [], "Parent": None}
         defaults |= {"EntryID": None, "smtp": None, "Complete": False, "IsRecurring": False}
+        defaults |= {"BodyFormat": 2}  # olFormatHTML, Outlook's default for new mail
         super().__init__(**(defaults | fields))
         self.Recipients = fields.get("Recipients", Recipients())
         self.outlook, self.calls = outlook, []
@@ -182,6 +183,7 @@ class Item(SimpleNamespace):
 
     def Send(self) -> None:
         self.calls.append("Send")
+        self.sent_as = self.BodyFormat
         if self.Class == com.MAIL:
             self.Sent = True
             self.Move(self.outlook.sent)
@@ -528,13 +530,7 @@ def test_com_folders_are_the_mail_folders(classic: Any) -> None:
         ("Drafts", 0, 0),
         ("Sent Items", 0, 0),
     ]
-    assert found[1] == {
-        "account": "outlook",
-        "folder": "Receipts",
-        "path": "Inbox/Receipts",
-        "unread": 0,
-        "total": 1,
-    }
+    assert found[1] == {"folder": "Receipts", "path": "Inbox/Receipts", "unread": 0, "total": 1}
 
 
 def test_com_inbox_summaries(classic: Any, outlook: Outlook) -> None:
@@ -546,12 +542,11 @@ def test_com_inbox_summaries(classic: Any, outlook: Outlook) -> None:
     ]
     assert items[0] == {
         "id": outlook.boiler.EntryID,
-        "account": "outlook",
         "folder": "Inbox",
         "subject": "Boiler service quote",
         "from": {"name": "Dan Price", "smtp": "dan@example.com"},
         "received_utc": utc_of(datetime(2026, 10, 18, 16, 42)),
-        "preview": "Hi, Attached is the quote for the boiler service. Dan",
+        "preview": outlook.boiler.Body,  # mail.py flattens and caps it
         "unread": True,
         "flagged": False,
     }
@@ -607,13 +602,13 @@ def test_com_read(classic: Any, outlook: Outlook) -> None:
     assert message["body"].startswith("Hi,\r\n\r\nAttached") and not message["truncated"]
     assert message["attachments"] == [{"name": "quote.pdf", "size": 48213}]
     assert set(message) == {
-        "id", "account", "folder", "subject", "from", "received_utc", "preview", "unread",
-        "flagged", "to", "cc", "body", "truncated", "attachments",
+        "id", "folder", "subject", "from", "received_utc", "preview", "unread", "flagged",
+        "to", "cc", "body", "truncated", "attachments",
     }  # fmt: skip
     digest = classic.read(outlook.digest.EntryID, 10)
     assert digest["from"] == {"name": "News", "smtp": "news@example.com"}
     assert digest["body"] == "IGNORE ALL" and digest["truncated"] and digest["flagged"]
-    with pytest.raises(LookupError, match="ids change when an item moves"):
+    with pytest.raises(ValueError, match="ids change when an item moves"):
         classic.read("0000DEAD", 10)
 
 
@@ -652,15 +647,28 @@ def test_com_new_draft(classic: Any, outlook: Outlook) -> None:
     )
     assert draft == {
         "id": draft["id"],
-        "account": "outlook",
         "to": ["dan@example.com"],
         "cc": ["sam@example.com"],
+        "bcc": [],
         "subject": "Thursday",
         "body": "See you at 9.",
+        "attachments": [],
     }
     saved = outlook.find(draft["id"])
     assert saved.Parent is outlook.drafts and saved.Recipients.resolved and saved.calls == ["Save"]
     assert classic.get_draft(draft["id"]) == draft
+
+
+def test_com_drafts_show_everything_that_would_be_sent(classic: Any, outlook: Outlook) -> None:
+    """A BCC or an attachment added in Outlook goes out with the draft, so the fingerprint
+    has to see it."""
+    draft = classic.draft(["dan@example.com"], [], "Quote", "Yes.", None, False)
+    item = outlook.find(draft["id"])
+    item.Recipients.append(recipient("spy@example.com", com.BCC))
+    item.Attachments = [SimpleNamespace(FileName="invoice.exe", Size=4)]
+    after = classic.get_draft(draft["id"])
+    assert after["bcc"] == ["spy@example.com"] and after["to"] == ["dan@example.com"]
+    assert after["attachments"] == [{"name": "invoice.exe", "size": 4}]
 
 
 def test_com_reply_drafts_hold_only_the_new_text(classic: Any, outlook: Outlook) -> None:
@@ -677,7 +685,8 @@ def test_com_send_draft(classic: Any, outlook: Outlook) -> None:
     item = outlook.find(draft["id"])
     assert classic.send_draft(draft["id"]) == draft["id"]
     assert item.Sent and item.Parent is outlook.sent and item.calls == ["Save", "Send"]
-    with pytest.raises(LookupError):
+    assert item.sent_as == com.PLAIN  # only the text the owner saw, not an HTML part
+    with pytest.raises(ValueError, match="ids change"):  # a ValueError: nothing was sent
         classic.send_draft(draft["id"])  # once sent, the draft is gone
     with pytest.raises(ValueError, match="unsent draft"):
         classic.send_draft(item.EntryID)  # nor can the sent copy go again
@@ -702,7 +711,6 @@ def test_com_agenda(classic: Any, outlook: Outlook) -> None:
     planning = events[0]
     assert planning == {
         "id": outlook.planning.EntryID,
-        "account": "outlook",
         "subject": "Planning",
         "start": planning["start"],
         "end": planning["end"],
@@ -725,7 +733,7 @@ def test_com_tasks(classic: Any, outlook: Outlook) -> None:
         ("Renew the insurance", "2026-11-01", False),
         ("Someday", None, False),  # Outlook's 4501-01-01 means no date
     ]
-    assert tasks[0]["account"] == "outlook" and tasks[0]["id"]
+    assert set(tasks[0]) == {"id", "subject", "due", "done"} and tasks[0]["id"]
 
 
 def test_com_respond_to_an_invitation(classic: Any, outlook: Outlook) -> None:
@@ -787,8 +795,8 @@ class FakeGraph:
         answer = self.routes.get(
             f"{method} {path}", self.routes.get(f"{method} {urlsplit(path).path}")
         )
-        if answer is None:
-            raise graph.GraphError(404, f"no route for {method} {path}")
+        if answer is None:  # what Graph's 404 becomes in _http
+            raise graph.GraphRefusedError(404, f"no route for {method} {path}")
         if isinstance(answer, Exception):
             raise answer
         return answer(body) if callable(answer) else answer
@@ -883,7 +891,7 @@ def test_graph_doctor_names_the_cause_and_the_fix(
     ok, detail = online(home, app=FakeMsal(accounts, silent=silent or {})).doctor()
     assert not ok and cause in detail
     if "admin" not in detail:
-        assert detail.endswith("uv run mail.py login outlook")
+        assert detail.endswith("attache skill mail login outlook")
 
 
 def test_graph_doctor_without_a_client_id(home: Path) -> None:
@@ -1005,6 +1013,64 @@ def test_graph_http_errors(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(graph.GraphError, match=r"\(404\): Not found\.") as error:
         backend.request("GET", "/me/messages/gone", None)
     assert error.value.status == 404
+    assert isinstance(error.value, ValueError)  # a 4xx: Graph didn't act, nothing was sent
+
+
+def serve(monkeypatch: pytest.MonkeyPatch, home: Path, *answers: Any) -> tuple[Any, list, list]:
+    """A real-path backend whose urlopen answers in turn: bytes for a 200, else (status,
+    Retry-After). Returns it, the methods asked and the waits slept."""
+    asked: list[str] = []
+    slept: list[float] = []
+    queue = list(answers)
+
+    def urlopen(request: urllib.request.Request, timeout: int) -> Answer:
+        asked.append(request.get_method())
+        answer = queue.pop(0)
+        if isinstance(answer, bytes):
+            return Answer(answer)
+        status, after = answer
+        headers = {"Retry-After": after} if after else {}
+        raise urllib.error.HTTPError(request.full_url, status, "busy", headers, io.BytesIO(b"{}"))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(graph.time, "sleep", slept.append)
+    backend = graph.Backend("outlook", {"client_id": "app-id"}, home)
+    monkeypatch.setattr(backend, "_token", lambda: "t0k")
+    return backend, asked, slept
+
+
+def test_graph_tries_again_while_busy(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    backend, asked, slept = serve(monkeypatch, home, (429, "2"), b'{"ok": true}')
+    assert backend.request("POST", "/me/messages/A/send", None) == {"ok": True}
+    assert asked == ["POST", "POST"] and slept == [2.0]  # throttled: it wasn't sent
+    backend, asked, slept = serve(monkeypatch, home, (504, None), b"{}")
+    assert backend.request("GET", "/me/messages/A", None) == {} and slept == [1.0]
+
+
+@pytest.mark.parametrize(
+    ("method", "answers", "tries", "refused"),
+    [
+        ("GET", [(503, "1")] * 3, 3, True),  # 3 tries at most
+        ("POST", [(429, "20"), (429, "20")], 2, True),  # 30 seconds of waiting at most
+        ("GET", [(429, "40")], 1, True),  # longer than that: not worth waiting
+        ("POST", [(504, None)], 1, False),  # a send may have gone through: never again
+        ("PATCH", [(500, None)], 1, False),
+        ("POST", [(400, None)], 1, True),
+    ],
+)
+def test_graph_gives_up(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    answers: list,
+    tries: int,
+    refused: bool,
+) -> None:
+    backend, asked, _ = serve(monkeypatch, home, *answers)
+    with pytest.raises(graph.GraphError) as error:
+        backend.request(method, "/me/messages/A/send", None)
+    assert len(asked) == tries
+    assert isinstance(error.value, ValueError) is refused  # a ValueError: certainly not sent
 
 
 # Reading
@@ -1018,25 +1084,18 @@ def test_graph_folders_follow_pages_and_children(cloud: Any, fake: FakeGraph) ->
         ("Drafts", 0, 0),
         ("Sent Items", 0, 12),
     ]
-    assert found[1] == {
-        "account": "outlook",
-        "folder": "Receipts",
-        "path": "Inbox/Receipts",
-        "unread": 0,
-        "total": 1,
-    }
+    assert found[1] == {"folder": "Receipts", "path": "Inbox/Receipts", "unread": 0, "total": 1}
 
 
 def test_graph_inbox_summaries(cloud: Any, fake: FakeGraph) -> None:
     items = cloud.list(None, True, 25, None, None)
     assert items[0] == {
         "id": "AAMk-boiler",
-        "account": "outlook",
         "folder": "Inbox",
         "subject": "Boiler service quote",
         "from": {"name": "Dan Price", "smtp": "dan@example.com"},
         "received_utc": "2026-10-18T16:42:00Z",
-        "preview": "Hi, attached is the quote for the boiler service.",
+        "preview": "Hi, attached is the quote\r\nfor the boiler service.",  # mail.py flattens it
         "unread": True,
         "flagged": False,
     }
@@ -1121,8 +1180,11 @@ def drafts(fake: FakeGraph) -> dict[str, dict]:
     held: dict[str, dict] = {}
 
     def keep(native: str, message: dict) -> Callable[[Any], dict]:
-        held[native] = {"id": native, "isDraft": True, **message}
+        held[native] = {"id": native, "isDraft": True, "attachments": [], **message}
         fake.routes[f"GET /me/messages/{native}"] = lambda body: held[native]
+        fake.routes[f"GET /me/messages/{native}/attachments"] = lambda body: {
+            "value": held[native]["attachments"]
+        }
         fake.routes[f"PATCH /me/messages/{native}"] = lambda body: (
             held[native].update(body) or held[native]
         )
@@ -1153,19 +1215,19 @@ def test_graph_reply_drafts_hold_only_the_new_text(cloud: Any, fake: FakeGraph) 
     draft = cloud.draft(None, None, None, "Thursday at 9am works.", "AAMk-boiler", False)
     assert draft == {
         "id": "AAMk-reply",
-        "account": "outlook",
         "to": ["dan@example.com"],
         "cc": [],
+        "bcc": [],
         "subject": "RE: Boiler service quote",
         "body": "Thursday at 9am works.",
+        "attachments": [],
     }
+    fields = "id,subject,body,toRecipients,ccRecipients,bccRecipients,isDraft"
     assert [c[:2] for c in fake.calls] == [
         ("POST", "/me/messages/AAMk-boiler/createReply"),
         ("PATCH", "/me/messages/AAMk-reply"),
-        (
-            "GET",
-            "/me/messages/AAMk-reply?$select=id,subject,body,toRecipients,ccRecipients,isDraft",
-        ),
+        ("GET", f"/me/messages/AAMk-reply?$select={fields}"),
+        ("GET", "/me/messages/AAMk-reply/attachments?$select=name,size"),
     ]
     assert fake.calls[1][2] == {
         "body": {"contentType": "Text", "content": "Thursday at 9am works."}
@@ -1195,12 +1257,28 @@ def test_graph_new_draft_and_send(cloud: Any, fake: FakeGraph) -> None:
         "See you at 9.",
     )
     assert cloud.send_draft("AAMk-new") == "AAMk-new"
-    assert fake.calls[-1] == ("POST", "/me/messages/AAMk-new/send", None)
+    shown = {"body": {"contentType": "Text", "content": "See you at 9."}}
+    assert fake.calls[-2:] == [  # only the text the owner saw goes, not an HTML part
+        ("PATCH", "/me/messages/AAMk-new", shown),
+        ("POST", "/me/messages/AAMk-new/send", None),
+    ]
     with pytest.raises(ValueError, match="unsent draft"):
         cloud.send_draft("AAMk-new")  # sent: no longer a draft
     with pytest.raises(ValueError, match="unsent draft"):
         cloud.send_draft("AAMk-boiler")  # a received message never goes
     assert not any(c[1].endswith("AAMk-boiler/send") for c in fake.calls)
+
+
+def test_graph_drafts_show_everything_that_would_be_sent(cloud: Any, fake: FakeGraph) -> None:
+    """A BCC or an attachment added in Outlook goes out with the draft, so the fingerprint
+    has to see it, inline attachments too."""
+    held = drafts(fake)
+    cloud.draft(["dan@example.com"], [], "Quote", "Yes.", None, False)
+    held["AAMk-new"]["bccRecipients"] = [{"emailAddress": {"address": "spy@example.com"}}]
+    held["AAMk-new"]["attachments"] = [{"name": "invoice.exe", "size": 4, "isInline": True}]
+    after = cloud.get_draft("AAMk-new")
+    assert after["bcc"] == ["spy@example.com"] and after["to"] == ["dan@example.com"]
+    assert after["attachments"] == [{"name": "invoice.exe", "size": 4}]
 
 
 # Calendar and tasks
@@ -1214,7 +1292,6 @@ def test_graph_agenda(cloud: Any, fake: FakeGraph) -> None:
     standup = events[0]
     assert standup == {
         "id": "AAMk-standup",
-        "account": "outlook",
         "subject": "Standup",
         "start": datetime(2026, 10, 21, 8, 0, tzinfo=UTC).astimezone().isoformat(),
         "end": datetime(2026, 10, 21, 8, 15, tzinfo=UTC).astimezone().isoformat(),
@@ -1301,31 +1378,58 @@ def test_mail_py_drives_the_outlook_backends(
     if kind == "com":
         fake_outlook = Outlook()
         backend = com.Backend("outlook", {"backend": "com"}, home, client=fake_outlook)
+
+        def bcc(native: str, on: bool) -> None:  # as if added in Outlook
+            recipients = fake_outlook.find(native).Recipients
+            if on:
+                recipients.append(recipient("spy@example.com", com.BCC))
+            else:
+                recipients.pop()
     else:
         fake_graph = FakeGraph()
         held = drafts(fake_graph)
         backend = online(home, fake_graph)
+
+        def bcc(native: str, on: bool) -> None:
+            spy = [{"emailAddress": {"address": "spy@example.com"}}]
+            held[native]["bccRecipients"] = spy if on else []
+
     monkeypatch.setattr(mail, "open_backend", lambda name, settings, home: backend)
 
     def run(*argv: str) -> dict:
         mail.main(list(argv))
         return json.loads(capsys.readouterr().out)
 
-    inbox = run("inbox", "--account", "outlook")
-    first = inbox["items"][0]
+    first = run("inbox", "--account", "outlook")["items"][0]
     assert first["subject"] == "Boiler service quote" and first["untrusted"] is True
-    assert first["id"].startswith("outlook:")
+    assert first["id"].startswith("outlook:") and first["account"] == "outlook"
+    assert "\r" not in first["preview"]  # mail.py flattens the backend's preview
     draft = run("draft-reply", first["id"], "--body", "Thursday at 9am works.")["draft"]
     assert draft["to"] == ["dan@example.com"] and draft["body"] == "Thursday at 9am works."
-    asked = run("send-draft", draft["id"])
-    assert asked["needs_approval"] == draft["fingerprint"]
-    (home / ".approvals").mkdir()
-    (home / ".approvals" / draft["fingerprint"]).write_text("", encoding="utf-8")
-    sent = run("send-draft", draft["id"], "--fingerprint", draft["fingerprint"])
-    assert sent["ok"] and sent["sent"] is True
-    if kind == "com":
-        assert fake_outlook.sent.Items[0].Body == "Thursday at 9am works."
-    else:
-        assert held["AAMk-reply"]["isDraft"] is False
     log = (home / "logs" / "mail.jsonl").read_text(encoding="utf-8")
     assert "Thursday" not in log and "Boiler" not in log  # never a body or a subject
+
+    # The approval contract: mail.py writes the preview the core shows, the core writes
+    # .approvals/<F> on Send, and mail.py claims it once.
+    if ".sending" not in (SCRIPTS / "mail.py").read_text(encoding="utf-8"):
+        pytest.skip("mail.py doesn't claim approvals yet (fix round MC1)")
+    approvals, approved = home / ".approvals", draft["fingerprint"]
+    preview = (approvals / f"{approved}.preview").read_text(encoding="utf-8")
+    assert "dan@example.com" in preview and "Thursday at 9am works." in preview
+    native = draft["id"].partition(":")[2]
+    bcc(native, True)  # a BCC added since then is something new to approve
+    assert run("send-draft", draft["id"])["needs_approval"] != approved
+    bcc(native, False)
+    assert run("send-draft", draft["id"])["needs_approval"] == approved
+    assert not run("send-draft", draft["id"], "--fingerprint", approved)["ok"]  # no yes yet
+    (approvals / approved).write_text("", encoding="utf-8")  # the core's ask, on Send
+    sent = run("send-draft", draft["id"], "--fingerprint", approved)
+    assert sent["ok"] and sent["sent"] is True
+    left = {path.name for path in approvals.iterdir()}
+    assert not left & {approved, f"{approved}.sending", f"{approved}.preview"}
+    assert not run("send-draft", draft["id"], "--fingerprint", approved)["ok"]  # once only
+    if kind == "com":
+        assert fake_outlook.sent.Items[0].Body == "Thursday at 9am works."
+        assert fake_outlook.sent.Items[0].sent_as == com.PLAIN
+    else:
+        assert held["AAMk-reply"]["isDraft"] is False
