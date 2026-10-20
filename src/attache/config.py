@@ -112,7 +112,8 @@ def load(home: Path | None = None) -> Config:
             raise ValueError(f"{path}: [limits] {key} must be a whole number of at least 1")
     approvals = str(own.get("approvals", "local:me"))
     channel, _, chat_id = approvals.partition(":")
-    direct = approvals == "local:me" or (channels.get(channel, {}).get("enabled") and chat_id)
+    enabled = channels.get(channel, {}).get("enabled", False)
+    direct = approvals == "local:me" or (enabled and chat_id != "")
     if not direct or approvals in chats:  # questions go to your own direct chat, never a group
         raise ValueError(f'{path}: [owner] approvals must be "local:me" or "<channel>:<your DM>"')
     settings: dict[str, Any] = {"channels": channels, "limits": limits, "approvals": approvals}

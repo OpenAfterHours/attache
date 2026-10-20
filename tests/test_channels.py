@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from attache import channels, config
+from attache import channels, config, skills
 from attache.channels import ChannelManager, SidecarChannel, TerminalChannel, choose
 from attache.types import Inbound, OnMessage, Outbound
 
@@ -124,12 +124,17 @@ def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
     hub.add(plain)
     hub.add(native)
 
+    shown: list[str] = []
+
     async def main() -> None:
-        task = asyncio.create_task(hub.ask("slack:D0ALEX", "owner", "Send it?", OPTIONS))
+        ask = hub.ask("slack:D0ALEX", "owner", "Send it?", OPTIONS, shown=lambda: shown.append(1))
+        task = asyncio.create_task(ask)
         await until(lambda: native.asked)
         ((chat_id, ask_id, text, options),) = native.asked
         assert (chat_id, text, options) == ("D0ALEX", "Send it?", OPTIONS)
         assert len(ask_id) == 16 and list(hub.pending) == [ask_id]  # 64 random bits
+        assert hub.pending[ask_id].text == "Send it?"  # for the page to rebuild after a reload
+        assert shown == [1]  # once, although two surfaces showed it
         assert [(m.chat_key, m.text) for m in plain.sent] == [
             ("slack:D0ALEX", "Send it?\nReply 1 for Approve, 2 for Decline.")
         ]
@@ -144,19 +149,23 @@ def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
     asyncio.run(main())
 
 
-def test_ask_fails_fast_when_nobody_can_see_it() -> None:
-    hub = ChannelManager()
+def test_ask_raises_lookup_error_at_once_when_nobody_can_see_it() -> None:
+    hub, shown = ChannelManager(), []
     began = time.monotonic()
-    assert asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS)) is None  # no channel
+    with pytest.raises(LookupError):  # no channel at all
+        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS, shown=lambda: shown.append(1)))
     hub.add(AskingChannel("slack", sees=False))  # e.g. its sidecar is down
-    assert asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS)) is None
-    assert time.monotonic() - began < 2 and hub.pending == {}  # not the 600 s timeout
+    with pytest.raises(LookupError):
+        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS, shown=lambda: shown.append(1)))
+    assert time.monotonic() - began < 2  # not the 600 s timeout
+    assert hub.pending == {} and shown == []  # never shown, so the caller stores nothing
 
 
 def test_ask_gives_none_on_timeout() -> None:
     hub = ChannelManager()
     hub.add(Channel("local"))
-    assert asyncio.run(hub.ask("local:me", "owner", "Hello?", ["Yes"], timeout=0.05)) is None
+    hub.ask_seconds = 0.05
+    assert asyncio.run(hub.ask("local:me", "owner", "Hello?", ["Yes"])) is None
     assert hub.pending == {}
 
 
@@ -168,28 +177,70 @@ def test_a_failing_channel_leaves_nothing_pending() -> None:
     assert hub.pending == {}
 
 
-def test_typed_replies_answer_the_newest_question_first() -> None:
+def test_a_typed_reply_answers_only_the_one_question_waiting_for_its_sender() -> None:
     hub = ChannelManager()
     hub.add(Channel("local"))
     hub.add(Channel("slack"))
 
     async def main() -> None:
         tea = asyncio.create_task(hub.ask("local:me", "owner", "Tea?", ["Yes", "No"]))
-        await until(lambda: len(hub.pending) == 1)
-        coffee = asyncio.create_task(hub.ask("local:me", "owner", "Coffee?", ["Yes", "No"]))
         colour = asyncio.create_task(hub.ask("slack:C1", "sam", "Which?", ["Red", "Blue"]))
+        theirs = asyncio.create_task(hub.ask("local:me", "sam", "Sam's?", ["Yes", "No"]))
         await until(lambda: len(hub.pending) == 3)
-        assert not hub.match("local:me", "sam", "yes")  # not asked of sam
         assert not hub.match("slack:C1", "sam", "green")  # not an option
         assert not hub.match("slack:C2", "sam", "red")  # another chat
         assert hub.match("slack:C1", "sam", " 2 ")
-        assert hub.match("local:me", "owner", "YES.")
-        assert await coffee == "Yes" and not tea.done()  # the newest first
-        assert hub.match("local:me", "owner", "2")
-        assert await tea == "No" and await colour == "Blue"
-        assert not hub.match("local:me", "owner", "yes")  # nothing waits any more
+        assert hub.match("local:me", "owner", "YES.")  # sam's question here is not the owner's
+        assert await tea == "Yes" and await colour == "Blue"
+        assert not hub.match("local:me", "owner", "yes")  # nothing waits for the owner now
+        theirs.cancel()
 
     asyncio.run(main())
+
+
+def test_with_two_questions_open_a_typed_reply_is_just_a_message() -> None:
+    hub = ChannelManager()
+    hub.add(Channel("local"))
+
+    async def main() -> None:
+        # A member's request and the owner's own question, both waiting for the owner: a
+        # typed "Approve" must not be taken for either, or a member could aim it at theirs.
+        mine = asyncio.create_task(hub.ask("local:me", "owner", "Send it?", OPTIONS))
+        request = asyncio.create_task(hub.ask("local:me", "owner", "Sam asks…", OPTIONS))
+        await until(lambda: len(hub.pending) == 2)
+        assert not hub.match("local:me", "owner", "Approve")
+        assert not mine.done() and not request.done()
+        ask_id = next(i for i, p in hub.pending.items() if p.text == "Sam asks…")
+        assert hub.answer(ask_id, "owner", "Decline")  # a button still answers
+        assert await request == "Decline"
+        assert hub.match("local:me", "owner", "1")  # now only one is open
+        assert await mine == "Approve"
+
+    asyncio.run(main())
+
+
+def test_spawn_refuses_work_once_stop_has_begun() -> None:
+    hub, ran = ChannelManager(), []
+
+    async def follow_up() -> None:
+        ran.append("follow-up")
+
+    async def turn() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:  # cancelled by stop(), it tries to start more work
+            assert hub.spawn(follow_up()) is None
+
+    async def main() -> None:
+        hub.spawn(turn())
+        await asyncio.sleep(0)
+        await hub.stop()
+        late = follow_up()
+        assert hub.spawn(late) is None and late.cr_frame is None  # closed, never run
+        await asyncio.sleep(0.05)
+
+    asyncio.run(main())
+    assert ran == [] and hub.tasks == set()
 
 
 def test_terminal_channel(
@@ -511,6 +562,22 @@ def channel_skill(home: Path, name: str, script: str | None, file: str | None = 
     (folder / "SKILL.md").write_text(SKILL.format(name=name, metadata=metadata), encoding="utf-8")
     if file:
         (folder / file).write_text("", encoding="utf-8")
+
+
+def test_channel_script_is_a_plain_file_name_in_the_skill_folder(home: Path) -> None:
+    channel_skill(home, "good", "channel.py", file="channel.py")
+    for name, script in [("dots", ".."), ("up", "../channel.py"), ("deep", "sub/channel.py")]:
+        channel_skill(home, name, script, file="channel.py")
+    channel_skill(home, "gone", "channel.py")  # names a file that is not there
+    channel_skill(home, "none", None)
+    (home / "skills" / "odd").mkdir()
+    (home / "skills" / "odd" / "SKILL.md").write_text(
+        "---\nname: odd\ndescription: d\nmetadata: just text\n---\n", encoding="utf-8"
+    )
+    found = {skill.name: channels.channel_script(skill) for skill in skills.discover(home)}
+    assert found.pop("good") == home / "skills" / "good" / "channel.py"
+    assert set(found.values()) == {None}
+    assert set(found) == {"dots", "up", "deep", "gone", "none", "odd"}
 
 
 def test_sidecars_from_config(

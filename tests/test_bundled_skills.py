@@ -195,6 +195,11 @@ def test_render_builds_an_offline_headless_command(
         "--headless=new",
         "--user-data-dir=C:/tmp/profile",
         "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
+        # everything through a dead proxy but Attaché's own origin; "<-loopback>" drops the
+        # browser's loopback exemption (checked with real Edge: a page that navigated itself
+        # to another local port got ERR_PROXY_CONNECTION_FAILED, and that server saw nothing)
+        "--proxy-server=127.0.0.1:9",
+        "--proxy-bypass-list=<-loopback>;127.0.0.1:8765",
         "--timeout=4000",
         f"--screenshot={tmp_path / 'page.png'}",
         "--window-size=1280,900",

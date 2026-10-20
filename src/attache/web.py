@@ -13,7 +13,9 @@ Routes
                                it (Sec-Fetch-Dest: iframe), except that snapshot_url's extra
                                &r=<render token> lets the render skill's browser open it top-level
   GET  /api/artifacts          [{name, src}], src = "/a/<name>?t=<token>", sorted   UI token
-  GET  /api/messages           the last 50 of local:me, as store.history gives them    UI token
+  GET  /api/messages           {messages: the last 50 of local:me, as store.history gives
+                               them; asks: [{ask_id, text, options}] still waiting for the
+                               owner there, so a reload keeps their buttons}          UI token
   POST /api/chat {text}        an owner Inbound in local:me (origin "web"); the reply arrives
                                over SSE                                                UI token
   POST /api/answer {ask_id, choice}  the owner's answer to an ask: {"ok": accepted}   UI token
@@ -232,12 +234,14 @@ def create_app(services: Services, channel: WebChannel) -> Starlette:
         page = home / "artifacts" / f"{name}.html"
         if not SLUG.fullmatch(name) or not page.is_file():
             raise KeyError(f"no artifact {name!r}")
-        token, render = page_token(services, name), page_token(services, f"render:{name}")
-        given, rendering = request.query_params.get("t", ""), request.query_params.get("r", "")
-        dest = request.headers.get("sec-fetch-dest", "iframe")
-        top = dest == "document" and hmac.compare_digest(rendering.encode(), render.encode())
-        if not (dest == "iframe" or top) or not hmac.compare_digest(given.encode(), token.encode()):
+        token, render = page_token(services, name), page_token(services, f"render:{name}").encode()
+        query, dest = request.query_params, request.headers.get("sec-fetch-dest", "iframe")
+        framed = dest == "iframe"  # inside the Attaché window
+        rendering = dest == "document" and hmac.compare_digest(query.get("r", "").encode(), render)
+        if not (framed or rendering):
             raise PermissionError("pages open inside the Attaché window only")
+        if not hmac.compare_digest(query.get("t", "").encode(), token.encode()):
+            raise PermissionError("bad or missing page token")
         text = page.read_text(encoding="utf-8")
         tag = f'<script src="/bridge.js" data-token="{token}" data-artifact="{name}"></script>'
         html, found = re.subn(r"</head\s*>", lambda end: tag + end[0], text, count=1, flags=re.I)
@@ -251,8 +255,15 @@ def create_app(services: Services, channel: WebChannel) -> Starlette:
         return JSONResponse(listing)
 
     async def messages(request: Request) -> Response:
+        """The chat (reminders come from "Reminder") and the questions still waiting for the
+        owner's answer there, so a reloaded page can show their buttons again."""
         ui_only(request)
-        return JSONResponse(store.history("local:me", 50))  # reminders come from "Reminder"
+        asks = [
+            {"ask_id": ask_id, "text": ask.text, "options": ask.options}
+            for ask_id, ask in services.channels.pending.items()
+            if ask.chat_key == "local:me" and ask.person_id == "owner" and not ask.future.done()
+        ]
+        return JSONResponse({"messages": store.history("local:me", 50), "asks": asks})
 
     async def chat(request: Request) -> Response:
         ui_only(request)
@@ -294,16 +305,17 @@ def create_app(services: Services, channel: WebChannel) -> Starlette:
         if "id" not in message:  # a notification: nothing to answer
             return Response(status_code=202)
         method, params = message.get("method"), message.get("params") or {}
-        result: dict[str, Any] = {}  # what "ping" gets
         if method == "initialize":
             result = {**SERVER, "protocolVersion": params.get("protocolVersion")}
+        elif method == "ping":
+            result = {}
         elif method == "tools/list":
             result = {"tools": [tool_spec(tool, key="inputSchema") for tool in turn.tools]}
         elif method == "tools/call":
             args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             out = await run_tool(ToolCall(str(message["id"]), str(params.get("name")), args), turn)
             result = {"content": [{"type": "text", "text": out}], "isError": out[:6] == "error:"}
-        elif method != "ping":
+        else:
             error = {"code": -32601, "message": f"no method {method}"}
             return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "error": error})
         return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "result": result})

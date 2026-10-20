@@ -133,6 +133,12 @@ def test_send_params() -> None:
         "quoteTimestamp": 17,
         "quoteAuthor": SAM,
     }
+    to_number = channel.send_params(
+        {"chat_id": NUMBER, "text": "Approve?"}
+    )  # approvals = "signal:+44…"
+    assert to_number == {"recipient": [NUMBER], "message": "Approve?"}
+    plus_group = "+bRmD3k2L0pQ9vX7cY1aZ5tW8uE6sN4hJ0gF2iK1oM="  # base64 can start with "+"
+    assert channel.send_params({"chat_id": plus_group, "text": "hi"})["groupId"] == plus_group
 
 
 def test_ask_text() -> None:
@@ -163,6 +169,7 @@ def test_attachments_are_copied_under_safe_names_up_to_25_mb(
 ) -> None:
     store, inbox = tmp_path / "attachments", tmp_path / "inbox"
     store.mkdir()
+    inbox.mkdir()
     (store / "abc123.pdf").write_bytes(b"%PDF")
     (store / "big.mp4").write_bytes(b"12345")
     monkeypatch.setattr(channel, "MAX_FILE", 4)
@@ -189,10 +196,11 @@ def receive(bridge: Any, envelope: dict[str, Any]) -> None:
 def test_attachments_come_only_from_direct_messages_and_mentions(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    store = tmp_path / "attachments"
+    store, inbox = tmp_path / "attachments", tmp_path / "inbox"
     store.mkdir()
+    inbox.mkdir()
     (store / "a.txt").write_text("x", encoding="utf-8")
-    bridge = channel.Bridge(None, BOT, store, tmp_path / "inbox")
+    bridge = channel.Bridge(None, BOT, store, inbox)
     files = [{"id": "a.txt", "filename": "a.txt"}]
     receive(bridge, dm("direct", attachments=files))
     receive(bridge, in_group("to the group", attachments=files))
@@ -222,6 +230,34 @@ def launcher(folder: Path) -> str:
     return str(path)
 
 
+def test_signal_cli_is_an_absolute_path_never_in_the_skill_or_working_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed, work, skill = tmp_path / "installed", tmp_path / "work", tmp_path / "skill"
+    for folder in (installed, work, skill):
+        folder.mkdir()
+    real = str(Path(launcher(installed)).resolve())
+    monkeypatch.delenv("ATTACHE_SIGNAL_CLI", raising=False)
+    monkeypatch.setenv("PATH", str(installed))
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(channel, "HERE", skill.resolve())
+    assert channel.signal_cli() == real and Path(real).is_absolute()
+
+    planted = str(Path(launcher(work)).resolve())  # where shutil.which looks first on Windows
+    assert channel.signal_cli() != planted
+    monkeypatch.setenv("NODEFAULTCURRENTDIRECTORYINEXEPATH", "1")  # as main() sets it
+    if os.name != "nt" or sys.version_info >= (3, 12):  # 3.11's which ignores it
+        assert channel.signal_cli() == real
+
+    monkeypatch.setenv("PATH", os.pathsep.join([str(skill), str(installed)]))
+    launcher(skill)
+    assert channel.signal_cli() is None  # never the skill folder's, even first on PATH
+    monkeypatch.setenv("ATTACHE_SIGNAL_CLI", str(skill / Path(real).name))
+    assert channel.signal_cli() is None
+    monkeypatch.setenv("ATTACHE_SIGNAL_CLI", real)
+    assert channel.signal_cli() == real
+
+
 class Sidecar:
     """channel.py running as Attaché runs it, with its stdout read on a thread."""
 
@@ -230,6 +266,7 @@ class Sidecar:
         store.mkdir(parents=True)
         (store / "abc123.txt").write_text("passport, charger", encoding="utf-8")
         self.inbox, self.requests = tmp_path / "inbox", tmp_path / "requests.jsonl"
+        self.inbox.mkdir()  # as Attaché does
         full_env = {
             **{k: v for k, v in os.environ.items() if k != "ATTACHE_UUID"},
             "ATTACHE_NUMBER": NUMBER,
@@ -241,7 +278,9 @@ class Sidecar:
         }
         pipe = subprocess.PIPE
         argv = [sys.executable, str(SKILL / "channel.py")]
-        self.proc = subprocess.Popen(argv, stdin=pipe, stdout=pipe, stderr=pipe, env=full_env)
+        self.proc = subprocess.Popen(  # from the skill folder, as Attaché runs it
+            argv, cwd=SKILL, stdin=pipe, stdout=pipe, stderr=pipe, env=full_env
+        )
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -280,7 +319,7 @@ class Sidecar:
 
 
 def test_the_sidecar_speaks_the_protocol(tmp_path: Path) -> None:
-    side = Sidecar(tmp_path)
+    side = Sidecar(tmp_path, JAVA_TOOL_OPTIONS="-Xmx64m")
     assert side.next("ready") == {"type": "ready", "self_id": BOT, "name": "Attaché"}
 
     direct = side.next("message")
@@ -308,8 +347,11 @@ def test_the_sidecar_speaks_the_protocol(tmp_path: Path) -> None:
     assert code == 0, stderr
     assert side.rest() == []  # `answered` needs nothing, and is not logged as unknown
 
-    argvs = [entry["argv"] for entry in side.recorded() if "argv" in entry]
-    assert argvs == [["-o", "json", "listAccounts"], ["-a", NUMBER, "jsonRpc"]]
+    runs = [(entry["argv"], entry["java"]) for entry in side.recorded() if "argv" in entry]
+    assert runs == [
+        (["-o", "json", "listAccounts"], "-Xmx64m"),
+        (["-a", NUMBER, "jsonRpc"], "-Xmx64m -Dstdout.encoding=UTF-8"),  # Java's output: UTF-8
+    ]
     requests = [entry for entry in side.recorded() if "method" in entry]
     assert [r["method"] for r in requests] == ["version", "send", "send"]
     asked, replied = requests[1]["params"], requests[2]["params"]
@@ -369,11 +411,13 @@ def test_when_signal_cli_dies_the_sidecar_exits_non_zero(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("env", "why"),
     [
-        ({"ATTACHE_NUMBER": ""}, "no number"),
+        ({"ATTACHE_NUMBER": ""}, "number must look like +447700900123"),
+        ({"ATTACHE_NUMBER": "+44 7700 900123"}, "number must look like"),
+        ({"ATTACHE_NUMBER": "+447700900123 & calc"}, "number must look like"),  # cmd.exe parses it
         ({"ATTACHE_SIGNAL_CLI": "no-such-signal-cli"}, "signal-cli not found"),
         ({"FAKE_SIGNAL_REFUSE": "1"}, "could not start the account"),  # signal-cli exits 1
     ],
-    ids=["no-number", "no-signal-cli", "not-registered"],
+    ids=["no-number", "spaces", "injection", "no-signal-cli", "not-registered"],
 )
 def test_a_setup_problem_is_explained_and_then_it_waits(
     tmp_path: Path, env: dict[str, str], why: str
@@ -384,6 +428,8 @@ def test_a_setup_problem_is_explained_and_then_it_waits(
     code, stderr = side.stop()
     assert code == 0 and why in stderr and "run doctor" in stderr
     assert not [e for e in side.rest() if e["type"] in ("ready", "message")]
+    if "ATTACHE_NUMBER" in env:
+        assert not side.requests.exists()  # signal-cli never ran
     if env.get("FAKE_SIGNAL_REFUSE"):
         assert "is not registered" in stderr  # signal-cli's own words come first
 
@@ -417,6 +463,9 @@ def test_doctor_checks_version_age_and_account(
     out = capsys.readouterr().out
     assert "WARN  signal-cli 0.14.9" in out and "120 days old" in out
     assert f"ok    account {NUMBER} is registered; the bot's Signal id is {BOT}" in out
+
+    assert channel.doctor(["07700 900123"]) == 1
+    assert "'07700 900123' is not a number like +447700900123" in capsys.readouterr().out
 
     monkeypatch.setattr(channel, "release_date", lambda version: None)  # offline
     assert channel.doctor(["+447700900999"]) == 1

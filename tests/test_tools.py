@@ -27,21 +27,28 @@ Body.
 
 
 class Channels:
-    """Records what is sent. ask() takes the next scripted answer (None: no answer). spawn()
-    keeps the coroutine unstarted, so a test sees the tool return first and runs it after."""
+    """Records what is sent. ask() takes the next scripted answer: an option, None (no answer
+    in time) or LookupError (no surface showed it, so shown() is never called). spawn() keeps
+    the coroutine unstarted, so a test sees the tool return first and runs it after."""
 
     def __init__(self) -> None:
         self.sent: list[Outbound] = []
         self.asked: list[tuple[str, str, str, list[str]]] = []
-        self.answers: list[str | None] = []
+        self.answers: list[Any] = []
         self.spawned: list[Coroutine[Any, Any, Any]] = []
 
     async def send(self, msg: Outbound) -> None:
         self.sent.append(msg)
 
-    async def ask(self, chat_key: str, person_id: str, text: str, options: list[str]) -> Any:
+    async def ask(
+        self, chat_key: str, person_id: str, text: str, options: list[str], shown: Any = None
+    ) -> Any:
         self.asked.append((chat_key, person_id, text, options))
-        return self.answers.pop(0)
+        answer = self.answers.pop(0)
+        if answer is LookupError:
+            raise LookupError(f"no surface showed the question in {chat_key}")
+        shown()
+        return answer
 
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         self.spawned.append(coro)
@@ -373,19 +380,28 @@ def test_build_filters_by_rights(services: app.Services) -> None:
     }
 
 
+# Line breaks, a C1 control, DEL, and format characters: zero-width space and joiner, bidi
+# override and isolate, the BOM, and a tag character (beyond U+FFFF, so a surrogate pair).
+HIDDEN = [0x85, 0x2028, 0x2029, 0x7F, 0x200B, 0x200D, 0x202E, 0x2066, 0xFEFF, 0xE0041]
+
+
 def test_quote() -> None:
-    text = 'a "quote"\nand' + chr(0x85) + chr(0x2028) + chr(0x2029) + " Noël"
+    text = 'a "quote"\nand ' + "".join(map(chr, HIDDEN)) + " Noël"
     quoted = tools.quote(text)
     assert json.loads(quoted) == text and "Noël" in quoted  # readable, yet the same text
-    assert len(quoted.splitlines()) == 1 and quoted.isprintable()
+    assert len(quoted.splitlines()) == 1 and quoted.isprintable()  # each one as its escape
+    assert not any(chr(c) in quoted for c in HIDDEN)
+    backslash = chr(92)
+    assert f"{backslash}u202e" in quoted and f"{backslash}udb40{backslash}udc41" in quoted
 
 
 def test_ask(services: app.Services) -> None:
     hub = services.channels
-    hub.answers = ["Yes", "Later", None]
+    hub.answers = ["Yes", "Later", None, LookupError]
     assert call(ctx(services), "ask", question="Send the email?") == "Yes"
     assert call(ctx(services), "ask", question="When?", options=["Now", "Later"]) == "Later"
     assert call(ctx(services), "ask", question="Still there?") == "no answer"
+    assert call(ctx(services), "ask", question="Anyone?") == "couldn't reach the owner just now"
     assert hub.asked[:2] == [
         ("local:me", "owner", "Send the email?", ["Yes", "No"]),
         ("local:me", "owner", "When?", ["Now", "Later"]),
@@ -394,8 +410,8 @@ def test_ask(services: app.Services) -> None:
     assert [(m["role"], m["text"]) for m in asked] == [
         ("assistant", "Send the email?"),
         ("assistant", "When?"),
-        ("assistant", "Still there?"),
-    ]
+        ("assistant", "Still there?"),  # shown, though never answered
+    ]  # but not "Anyone?", which no surface showed
 
 
 def test_request(services: app.Services) -> None:
@@ -405,7 +421,7 @@ def test_request(services: app.Services) -> None:
         "Asked Alex; the answer will come to this chat."  # at once
     )
     assert hub.asked == [] and len(hub.spawned) == 1  # the wait runs apart from the turn
-    hub.answers = ["Approve", "Decline", None]
+    hub.answers = ["Approve", "Decline", None, LookupError]
     asyncio.run(hub.spawned.pop())
     question = f"Sam in {GROUP} asks: {tools.quote(summary)}"  # verbatim, as one JSON string
     owner_chat = services.config.approvals  # "local:me" unless [owner] approvals says otherwise
@@ -420,18 +436,22 @@ def test_request(services: app.Services) -> None:
         == f"You approved this request from Sam (member) in {GROUP}. Do it, within your rules:"
     )
     assert lines[1:] == ["<<<", f"[Sam (member)]: {tools.quote(summary)}", ">>>"]  # one line
-    for _ in range(2):  # Decline, then None: no answer in time, or nobody to ask
-        call(member, "request", summary="x")
+    for what in ("x", "y", "z"):  # Decline; None (no answer in time); no surface showed it
+        call(member, "request", summary=what)
         asyncio.run(hub.spawned.pop())
     notices = [(m.chat_key, m.text) for m in hub.sent]
     assert notices == [
         (GROUP, "Alex approved the request from Sam."),
         (GROUP, "Alex declined the request from Sam."),
         (GROUP, "Alex did not answer the request from Sam."),
+        (GROUP, "Couldn't reach Alex just now; try again later."),
     ]
     stored = [(m["role"], m["text"]) for m in store.history(GROUP)]
     assert stored == [("assistant", text) for _, text in notices]  # kept in the member's chat
     assert len(store.task_list()) == 1  # only the approved one
+    # A question nobody saw is not kept, so a later typed "Approve" there is just a message.
+    kept = [m["text"] for m in store.history(owner_chat)]
+    assert len(kept) == 3 and not any(text.endswith('"z"') for text in kept)
     with pytest.raises(ValueError, match="under 300 characters"):
         call(member, "request", summary="x" * 301)
     assert call(member, "request", summary="x" * 300).startswith("Asked")

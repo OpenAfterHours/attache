@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -47,11 +47,15 @@ SPAWN: dict[str, Any] = {"stdin": PIPE, "stdout": PIPE, "limit": 2**24, "start_n
 SPAWN["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
+Shown = Callable[[], object] | None  # ask()'s callback for "a surface has shown it"
+
+
 class Pending(NamedTuple):
     """A question waiting for one person's answer."""
 
     chat_key: str
     person_id: str
+    text: str
     options: list[str]
     future: asyncio.Future[str]
 
@@ -82,12 +86,18 @@ class ChannelManager:
         self.channels: dict[str, list[Channel]] = {}
         self.pending: dict[str, Pending] = {}  # open questions by ask_id, oldest first
         self.tasks: set[asyncio.Task[Any]] = set()
+        self.closing = False  # set by stop(): no new work, so nothing outlives the store
+        self.ask_seconds = 600.0  # how long ask() waits for an answer
 
     def add(self, channel: Channel) -> None:
         self.channels.setdefault(channel.name, []).append(channel)
 
-    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
-        """Run coro in a task that is kept until it is done; stop() cancels it."""
+    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any] | None:
+        """Run coro in a task that is kept until it is done; stop() cancels it. Once stop()
+        has begun, coro is closed unrun and None returned."""
+        if self.closing:
+            coro.close()
+            return None
         task = asyncio.create_task(coro)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
@@ -105,24 +115,31 @@ class ChannelManager:
             await channel.send(msg)
 
     async def ask(
-        self, chat_key: str, person_id: str, text: str, options: list[str], timeout: float = 600
+        self, chat_key: str, person_id: str, text: str, options: list[str], shown: Shown = None
     ) -> str | None:
         """Show the question, with native buttons where a channel has ask() and as numbered
-        text elsewhere, and wait for person_id's choice. None at once when no surface showed
-        it, and None on timeout. person_id is a config person id ("owner", "sam")."""
-        ask_id, chat_id = secrets.token_hex(8), chat_key.split(":", 1)[1]
+        text elsewhere, and wait for person_id's choice; None after ask_seconds. `shown` is
+        called once, as soon as a surface has shown it; LookupError when none could.
+        person_id is a config person id ("owner", "sam")."""
+        ask_id = secrets.token_hex(8)
+        chat_id = chat_key.split(":", 1)[1]
         future = asyncio.get_running_loop().create_future()
-        self.pending[ask_id] = Pending(chat_key, person_id, options, future)
+        self.pending[ask_id] = Pending(chat_key, person_id, text, options, future)
         numbered = ", ".join(f"{n} for {option}" for n, option in enumerate(options, 1))
         try:
             seen = False
             for channel in self._targets(chat_key):
                 if hasattr(channel, "ask"):
-                    seen = await channel.ask(chat_id, ask_id, text, options) or seen
+                    reached = await channel.ask(chat_id, ask_id, text, options)
                 else:
                     await channel.send(Outbound(chat_key, f"{text}\nReply {numbered}."))
-                    seen = True
-            return await asyncio.wait_for(future, timeout) if seen else None
+                    reached = True
+                if reached and not seen and shown:
+                    shown()  # once, at the first surface that showed it
+                seen = seen or reached
+            if not seen:
+                raise LookupError(f"nothing in {chat_key} could show the question")
+            return await asyncio.wait_for(future, self.ask_seconds)
         except TimeoutError:
             return None
         finally:
@@ -139,13 +156,13 @@ class ChannelManager:
         return option is not None
 
     def match(self, chat_key: str, person_id: str, text: str) -> bool:
-        """Typed-reply fallback: when a question in chat_key waits for person_id and text names
-        one of its options, answer it (the newest question first) and return True. The router
-        then treats the message as an answer, not a request."""
-        for ask_id, pending in reversed(list(self.pending.items())):
-            if pending.chat_key == chat_key and self.answer(ask_id, person_id, text):
-                return True
-        return False
+        """Typed-reply fallback: when exactly one open question in chat_key waits for
+        person_id and text names one of its options, answer it and return True; the router
+        then treats the message as an answer, not a request. With two or more open, a typed
+        reply could mean either, so it is an ordinary message; buttons still answer."""
+        key = (chat_key, person_id)
+        waiting = [i for i, p in self.pending.items() if (p.chat_key, p.person_id) == key]
+        return len(waiting) == 1 and self.answer(waiting[0], person_id, text)
 
     async def start(self, handler: OnMessage) -> list[asyncio.Task[None]]:
         """Start every channel. Each gets a callback that runs handler in a task of its own
@@ -158,6 +175,7 @@ class ChannelManager:
 
     async def stop(self) -> None:
         """Cancel the turns still running and wait for them, then stop every channel at once."""
+        self.closing = True
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -293,27 +311,34 @@ class SidecarChannel:
             await kill_tree(self.proc)
 
 
+def channel_script(skill: skills.Skill) -> Path | None:
+    """The sidecar script a skill names in metadata["attache-channel"]: a plain file name
+    (not a path) of a file in the skill's folder. None for anything else."""
+    metadata = skill.meta.get("metadata")
+    name = str(metadata.get("attache-channel", "")) if isinstance(metadata, dict) else ""
+    script = skill.path / name
+    return script if PLAIN_NAME.fullmatch(name) and script.is_file() else None
+
+
 def sidecars(config: Config, on_answer: OnAnswer) -> list[SidecarChannel]:
-    """A SidecarChannel for each enabled [channels.<name>] whose skill names its script, a file
-    in the skill's folder, in metadata["attache-channel"]. Others are logged and skipped. A
-    sidecar's environment has no model API keys."""
+    """A SidecarChannel for each enabled [channels.<name>] whose skill has a channel_script().
+    Others are logged and skipped. A sidecar's environment has no model API keys."""
     found = {skill.name: skill for skill in skills.discover(config.home)}
     secret = {e.key_env.upper() for e in config.endpoints.values() if e.key_env} | SDK_KEYS
     clean = {k: v for k, v in os.environ.items() if k.upper() not in secret}
     uv, made = shutil.which("uv"), []
     for name, settings in config.channels.items():
-        skill = found.get(name)
-        script = str((skill.meta.get("metadata") or {}).get("attache-channel", "")) if skill else ""
         if not settings["enabled"]:
             continue
-        if not (PLAIN_NAME.fullmatch(script) and (skill.path / script).is_file()) or not uv:
-            why = "uv is not installed" if not uv else f"no attache-channel file in skills/{name}"
+        skill = found.get(name)
+        script = channel_script(skill) if skill else None
+        if script is None or not uv:
+            why = "uv is not installed" if script else f"no attache-channel file in skills/{name}"
             logger.warning("channel %s skipped: %s", name, why)
             continue
         inbox = config.home / "files" / "inbox" / name
         inbox.mkdir(parents=True, exist_ok=True)
         env = {**clean, **{f"ATTACHE_{k.upper()}": str(v) for k, v in settings.items()}}
         env.update(ATTACHE_HOME=str(config.home), ATTACHE_CHANNEL=name, ATTACHE_FILES=str(inbox))
-        argv = [uv, "run", str(skill.path / script)]
-        made.append(SidecarChannel(name, argv, skill.path, env, on_answer))
+        made.append(SidecarChannel(name, [uv, "run", str(script)], script.parent, env, on_answer))
     return made

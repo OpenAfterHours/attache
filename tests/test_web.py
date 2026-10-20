@@ -49,10 +49,12 @@ class FakeRouter:
 
 
 class FakeChannels:
-    """Stands in for ChannelManager's answer(): accepts "Approve" for the ask "a1" only."""
+    """Stands in for ChannelManager's answer() and its open questions (`pending`, ask_id ->
+    Pending): accepts "Approve" for the ask "a1" only."""
 
     def __init__(self) -> None:
         self.answers: list[tuple[str, str, str]] = []
+        self.pending: dict[str, Any] = {}
 
     def answer(self, ask_id: str, person_id: str, choice: str) -> bool:
         self.answers.append((ask_id, person_id, choice))
@@ -119,6 +121,8 @@ def test_index_holds_no_token(env: Any) -> None:
     assert r.status_code == 200 and UI_TOKEN not in r.text
     assert "Open Attaché from the link printed in your terminal." in r.text
     assert 'params.get("t")' in r.text and 'params.get("page")' in r.text  # #t=...&page=...
+    assert "if (asks.size !== 1) return null;" in r.text  # typed answers: one open question
+    assert "chat.asks.forEach(showAsk)" in r.text  # open questions come back after a reload
     assert "history.replaceState" in r.text and "localStorage" in r.text
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert "access-control-allow-origin" not in r.headers
@@ -356,7 +360,8 @@ def test_messages_are_the_last_fifty_of_the_owner_chat(env: Any) -> None:
     st.add_message("local:me", "user", "Reminder: call Sam", "", "Reminder")
     st.add_message("slack:C1", "user", "elsewhere", "sam", "Sam")
     r = env.client.get("/api/messages", headers=UI)
-    got = r.json()
+    assert r.json()["asks"] == []
+    got = r.json()["messages"]
     assert [m["text"] for m in got] == [f"m{n}" for n in range(11, 60)] + ["Reminder: call Sam"]
     assert {"role", "text", "ts", "sender_name"} <= set(got[0]) and got[0]["sender_name"] == "Alex"
     assert got[-1]["sender_name"] == "Reminder"  # the page shows these as Attaché's, not yours
@@ -364,6 +369,26 @@ def test_messages_are_the_last_fifty_of_the_owner_chat(env: Any) -> None:
     page(env.sv, "home")
     assert env.client.get("/api/messages", headers=auth("home")).status_code == 403
     assert env.client.get("/api/messages").status_code == 401
+
+
+def test_messages_bring_back_the_owners_open_questions(env: Any) -> None:
+    """After a reload the page rebuilds these, buttons and all, instead of a plain copy."""
+
+    def pending(chat_key: str, person_id: str, text: str, done: bool = False) -> Any:
+        future, options = SimpleNamespace(done=lambda: done), ["Approve", "Decline"]
+        return SimpleNamespace(
+            chat_key=chat_key, person_id=person_id, text=text, options=options, future=future
+        )
+
+    env.sv.channels.pending = {
+        "a1": pending("local:me", "owner", "Sam asked: share the packing list?"),
+        "a2": pending("local:me", "owner", "Answered a moment ago", done=True),
+        "a3": pending("local:me", "sam", "For Sam, not for you"),
+        "a4": pending("slack:D0ALEX", "owner", "In another chat"),
+    }
+    asks = env.client.get("/api/messages", headers=UI).json()["asks"]
+    question = {"ask_id": "a1", "text": "Sam asked: share the packing list?"}
+    assert asks == [{**question, "options": ["Approve", "Decline"]}]
 
 
 @pytest.mark.parametrize("body", [b"[1, 2]", b'"text"', b"42", b"null", b"not json"])

@@ -481,19 +481,33 @@ def test_the_busy_notice_comes_after_the_replies_queued_before_it(world: World) 
     assert first == "reply 1" and second.startswith("I've had a lot of requests here")
 
 
-def test_a_request_waits_without_holding_up_the_chat(world: World) -> None:
-    async def run(turn: Turn) -> Reply:  # the first turn asks for approval; the next just answers
+def requesting(world: World, summary: str) -> None:
+    """The world's first turn calls the real request tool for `summary`; later turns answer."""
+
+    async def run(turn: Turn) -> Reply:
         world.backend.turns.append(turn)
         if len(world.backend.turns) == 1:
-            call = ToolCall("1", "request", {"summary": "a chores list for the family"})
+            call = ToolCall("1", "request", {"summary": summary})
             return Reply(await agent.run_tool(call, turn))
         return Reply("The ferry is at nine.")
 
     world.backend.run = run
-    question = 'Sam in Family asks: "a chores list for the family"'
 
-    def said(text: str) -> Inbound:
-        return Inbound("slack", "CFAM", "USAM", "Sam", text, True)
+
+async def until(condition: Any) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+
+
+def said(text: str) -> Inbound:
+    return Inbound("slack", "CFAM", "USAM", "Sam", text, True)
+
+
+def test_a_request_waits_without_holding_up_the_chat(world: World) -> None:
+    requesting(world, "a chores list for the family")
+    question = 'Sam in Family asks: "a chores list for the family"'
 
     async def main() -> None:
         asking = world.router.handle(said("@Attaché can we have a chores list?"))
@@ -505,10 +519,7 @@ def test_a_request_waits_without_holding_up_the_chat(world: World) -> None:
         assert reply is not None and reply.text == "The ferry is at nine."  # not held up
         approve = Inbound("local", "me", "owner", "Alex", "Approve", origin="web")
         assert await world.router.handle(approve) is None
-        for _ in range(200):
-            if len(world.slack.sent) == 3:
-                break
-            await asyncio.sleep(0.01)
+        await until(lambda: len(world.slack.sent) == 3)
 
     asyncio.run(main())
     assert [m.text for m in world.slack.sent][1:] == [
@@ -519,6 +530,22 @@ def test_a_request_waits_without_holding_up_the_chat(world: World) -> None:
     assert [m["text"] for m in world.store.history("local:me")] == [question, "Approve"]
     (task,) = world.store.task_list()
     assert (task["chat_key"], task["kind"], task["by"]) == ("local:me", "turn", "owner")
+
+
+def test_a_request_nobody_can_see_is_reported_and_not_kept(world: World) -> None:
+    owner_chat = world.services.config.approvals = "signal:+447700900123"  # no signal channel
+    requesting(world, "a chores list for the family")
+
+    async def main() -> None:
+        reply = await world.router.handle(said("@Attaché can we have a chores list?"))
+        assert reply is not None and reply.text.startswith("Asked Alex;")
+        await until(lambda: len(world.slack.sent) == 2)
+
+    asyncio.run(main())
+    assert world.slack.sent[-1].text == "Couldn't reach Alex just now; try again later."
+    assert world.store.history("slack:CFAM")[-1]["role"] == "assistant"  # kept in Sam's chat
+    assert world.store.history(owner_chat) == []  # so a typed "Approve" there has no question
+    assert world.store.task_list() == []
 
 
 class Clock:

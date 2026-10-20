@@ -15,8 +15,8 @@ metadata:
 public URL is needed. Through it Attaché:
 
 - answers direct messages, and messages in channels it has been invited to;
-- receives files shared in a direct message or with a mention of the bot, up to 25 MB each
-  (saved under `files/inbox/slack/`), and sends files back;
+- receives files shared in a direct message or with a mention of the bot (saved under
+  `files/inbox/slack/`), and sends files back;
 - replies in a thread in channels, and inline in direct messages;
 - shows approval requests as buttons. Once Attaché takes an answer, the buttons give way to
   the choice and who made it. Anyone else who presses one, or a press after the question has
@@ -90,8 +90,8 @@ members = ["sam"]
 - On the free plan Slack shows only 90 days of history. Attaché keeps its own history, so its
   memory is not limited by that.
 - The bot cannot read channels it is not in, or other people's direct messages.
-- Files in channels are downloaded only when the message mentions the bot, and never above
-  25 MB.
+- Files in channels are downloaded only when the message mentions the bot. A message brings
+  at most 10 files and 50 MB, and no file over 25 MB; the rest are skipped and logged.
 
 ## Troubleshooting
 

@@ -178,15 +178,23 @@ class FakeSession:
         self.requests.append((url, kwargs))
         return self.response
 
+    async def __aenter__(self) -> FakeSession:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
 
 PDF = {"id": "F1", "name": "menu.pdf", "mimetype": "application/pdf", "size": 8}
 URL = "https://files.slack.com/files-pri/T0-F1/download/menu.pdf"
 
 
-def fetch(tmp_path: Path, response: FakeResponse, **file: Any) -> tuple[Any, FakeSession]:
+def fetch(
+    tmp_path: Path, response: FakeResponse, limit: int = 25 * 2**20, **file: Any
+) -> tuple[Any, FakeSession]:
     session = FakeSession(response)
     found = asyncio.run(
-        channel.fetch(session, {**PDF, "url_private_download": URL, **file}, tmp_path)
+        channel.fetch(session, {**PDF, "url_private_download": URL, **file}, tmp_path, limit)
     )
     return found, session
 
@@ -216,17 +224,50 @@ def test_an_html_file_is_still_a_file(tmp_path: Path) -> None:
     assert found and Path(found).read_bytes() == b"<p>hi</p>"
 
 
-def test_big_files_stop_at_the_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(channel, "MAX_FILE", 10)
-    found, session = fetch(tmp_path, FakeResponse(), size=11)  # Slack says it's too big
+def test_big_files_stop_at_the_limit(tmp_path: Path) -> None:
+    found, session = fetch(tmp_path, FakeResponse(), limit=10, size=11)  # Slack says too big
     assert found is None and session.requests == []
-    found, _ = fetch(tmp_path, FakeResponse(chunks=[b"x" * 8, b"x" * 8]), size=None)
+    found, _ = fetch(tmp_path, FakeResponse(chunks=[b"x" * 8, b"x" * 8]), limit=10, size=None)
     assert found is None and not list(tmp_path.iterdir())  # the part already written is gone
 
 
 def test_files_without_a_slack_link_are_skipped(tmp_path: Path) -> None:
     found, session = fetch(tmp_path, FakeResponse(), url_private_download="https://evil.example/")
     assert found is None and session.requests == []
+
+
+def download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, files: list[dict[str, Any]], chunks: Any
+) -> tuple[list[str], FakeSession]:
+    """channel.download() with a stand-in aiohttp, whose session serves `chunks` for any file."""
+    session = FakeSession(FakeResponse(chunks=chunks))
+    monkeypatch.setitem(
+        sys.modules, "aiohttp", types.SimpleNamespace(ClientSession=lambda **kw: session)
+    )
+    monkeypatch.setenv("ATTACHE_FILES", str(tmp_path / "inbox"))
+    files = [{**PDF, "id": f"F{i}", "url_private_download": URL, **f} for i, f in enumerate(files)]
+    return asyncio.run(channel.download(files, "xoxb-test")), session
+
+
+def test_a_message_brings_ten_files_at_most(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths, session = download(monkeypatch, tmp_path, [{}] * 12, [b"%PDF-1.7"])
+    assert len(paths) == len(session.requests) == 10
+    assert all(Path(p).is_absolute() and Path(p).parent == tmp_path / "inbox" for p in paths)
+    assert "first 10 of 12 files" in json.loads(capsys.readouterr().out)["text"]
+
+
+def test_a_message_brings_fifty_mb_at_most(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(channel, "MAX_FILE", 10)
+    monkeypatch.setattr(channel, "MAX_TOTAL", 20)
+    # Each file is 8 bytes. Two fit, leaving 4 bytes: the third declares its 8 bytes and is
+    # never fetched; the fourth declares nothing and is stopped while streaming.
+    files = [{}, {"size": None}, {}, {"size": None}]
+    paths, session = download(monkeypatch, tmp_path, files, [b"x" * 8])
+    assert [Path(p).name for p in paths] == ["F0-menu.pdf", "F1-menu.pdf"]
+    assert len(session.requests) == 3  # the third declared its size, so it was never fetched
+    assert sorted(p.name for p in (tmp_path / "inbox").iterdir()) == ["F0-menu.pdf", "F1-menu.pdf"]
 
 
 # Threads
@@ -371,6 +412,11 @@ def test_broadcast_mentions_never_ping() -> None:
     assert channel.quiet(text) == expected
     assert channel.quiet("@everyone look, @here!") == "@\u200deveryone look, @\u200dhere!"
     assert channel.quiet("mail me@here.com or @channels") == "mail me@here.com or @channels"
+    zwj = "\N{ZERO WIDTH JOINER}"
+    assert (
+        channel.quiet("@Here, @CHANNEL, @EveryOne") == f"@{zwj}Here, @{zwj}CHANNEL, @{zwj}EveryOne"
+    )
+    assert channel.quiet("<!Here>") == f"@{zwj}Here"
 
 
 class FakeClient:

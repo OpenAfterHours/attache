@@ -13,10 +13,11 @@ carry the page's t= and r= tokens. So the script cannot take pictures of other l
 and height are at most 4000 pixels, and the wait at most 30 seconds.
 
 The browser runs headless with a throwaway profile and cannot reach the internet: every host
-name but localhost and 127.0.0.1 fails to resolve, and anything else goes to a proxy that is
-not there. The file is written into the current folder (the chat's files folder when the
-script tool runs this), and its path, relative to the Attaché home when it is in one, is
-printed.
+name but localhost and 127.0.0.1 fails to resolve, and every request except those to
+Attaché's own host:port goes to a proxy that is not there, so the page cannot reach other
+local services either. The file is written into the current folder (the chat's files folder
+when the script tool runs this), and its path, relative to the Attaché home when it is in
+one, is printed.
 """
 
 from __future__ import annotations
@@ -61,8 +62,15 @@ PATHS = [
 PAGE = re.compile(r"/a/[a-z0-9-]+")  # an Attaché page, as web.py serves it
 OFFLINE = [
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
-    "--proxy-server=127.0.0.1:9",  # nothing listens: IP literals fail too (loopback is exempt)
+    "--proxy-server=127.0.0.1:9",  # nothing listens there, so whatever is sent to it fails
 ]
+
+
+def only_attache(netloc: str) -> str:
+    """The proxy bypass list: Attaché's own host:port goes direct, and nothing else does.
+    "<-loopback>" removes the browser's own bypass for loopback, so a page that navigates
+    itself to another local port (an admin page, say) goes to the dead proxy too."""
+    return f"--proxy-bypass-list=<-loopback>;{netloc}"
 
 
 def find_browser() -> str | None:
@@ -153,6 +161,7 @@ def command(browser: str, args: argparse.Namespace, profile: str) -> list[str]:
         "--mute-audio",
         f"--user-data-dir={profile}",
         *OFFLINE,
+        only_attache(urlsplit(args.url).netloc),  # parse() checked it is $ATTACHE_WEB_URL's
         f"--window-size={args.width},{args.height}",
         f"--timeout={int(args.wait * 1000)}",
         *output,

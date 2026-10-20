@@ -10,7 +10,6 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from socket import AF_INET, AF_INET6, create_server, socket
-from typing import Any
 
 from attache import channels, config, router, scheduler, store, web
 from attache.types import Turn
@@ -49,15 +48,6 @@ def build(home: Path) -> Services:
     return Services(cfg, db, scheduler.Scheduler(db), hub, {}, url)
 
 
-async def _cancel(tasks: list[asyncio.Task[Any]]) -> None:
-    """Cancel tasks and wait for them to finish; one that had failed is logged."""
-    for task in tasks:
-        task.cancel()
-    for result in await asyncio.gather(*tasks, return_exceptions=True):
-        if isinstance(result, Exception):
-            logging.getLogger(__name__).error("a task failed", exc_info=result)
-
-
 async def run(home: Path, *, terminal: bool) -> None:
     """Start the web server, scheduler and channels (plus the terminal chat when asked).
 
@@ -87,14 +77,24 @@ async def run(home: Path, *, terminal: bool) -> None:
     beat = asyncio.create_task(services.scheduler.run())
     sdks = {SDKS[e.api] for e in cfg.endpoints.values() if e.api in SDKS}  # so turn 1 won't wait
     warmups = [asyncio.create_task(asyncio.to_thread(importlib.import_module, m)) for m in sdks]
-    rest = [beat, *warmups, *await services.channels.start(rt.handle)]
+    channel_loops = await services.channels.start(rt.handle)
+    rest = [beat, *warmups, *channel_loops]
     quitting = [asyncio.create_task(term.done.wait())] if terminal else []
     try:
         done, _ = await asyncio.wait([server, beat, *quitting], return_when=asyncio.FIRST_COMPLETED)
         if server in done or beat in done:
             raise SystemExit("The web server or the scheduler stopped; see the log above.")
+        if services.channels.tasks:  # the terminal quit, maybe at the end of piped input:
+            # let its turns reply first, for as long as the slowest endpoint may take
+            timeouts = [float(e.options.get("timeout", 900)) for e in cfg.endpoints.values()]
+            await asyncio.wait(services.channels.tasks, timeout=max(timeouts, default=900))
     finally:  # in this order:
         await services.channels.stop()  # the turns still running, then every channel, which
         # ends the page's event streams, so the web server's own shutdown is quick and quiet
-        await _cancel([server, *rest, *quitting, *rt.background.values()])
+        everything = [server, *rest, *quitting, *rt.background.values()]
+        for task in everything:
+            task.cancel()
+        for result in await asyncio.gather(*everything, return_exceptions=True):
+            if isinstance(result, Exception):  # it had failed: say so
+                logging.getLogger(__name__).error("a task failed", exc_info=result)
         services.store.close()  # last, once nothing can write to it

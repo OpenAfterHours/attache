@@ -22,7 +22,7 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from attache import __version__, config, skills
+from attache import __version__, channels, config, skills
 
 NEXT = """Next:
   1. Tell Attaché about yourself in {home}/memory/USER.md.
@@ -97,10 +97,12 @@ def _doctor(home: Path) -> int:
         checks.append((mark, f"endpoint {name}" + ("" if ok else f" needs {need}")))
     checks += [("✓" if shutil.which(tool) else "✗", f"{tool} installed") for tool in ("git", "uv")]
     if cfg:
-        found = {s.name: s.meta.get("metadata") or {} for s in skills.discover(home)}
+        found = {s.name: s for s in skills.discover(home)}
         for name in [n for n, settings in cfg.channels.items() if settings.get("enabled")]:
-            mark = "✓" if "attache-channel" in found.get(name, {}) else "✗"
-            checks.append((mark, f"channel {name}: skills/{name} declares attache-channel"))
+            # the test sidecars() makes (uv is checked above), so the two always agree
+            ok = name in found and channels.channel_script(found[name]) is not None
+            mark = "✓" if ok else "✗"
+            checks.append((mark, f"channel {name}: skills/{name} names its sidecar script"))
         from attache import app  # the web stack, for the same bind check as `attache run`
 
         try:

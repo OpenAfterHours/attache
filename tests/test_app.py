@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +152,46 @@ def test_run_wires_sidecars_and_outlives_a_channel(
     asyncio.run(main())
     assert answers == [("a1", "owner", "Approve")]  # a person id; the stranger never got there
     assert "anthropic" in events and "sidecar stopped" in events  # warmed, then stopped
+
+
+def slow_router(seconds: float, replies: list[str]) -> type:
+    class Router:  # turns that take a while, as a model's do
+        def __init__(self, services: app.Services) -> None:
+            self.background: dict[int, Any] = {}
+            services.scheduler.fire = self.fire
+
+        async def fire(self, task: Any) -> None: ...
+
+        async def handle(self, msg: Any) -> None:
+            await asyncio.sleep(seconds)
+            replies.append(msg.text)
+
+    return Router
+
+
+def test_piped_chat_waits_for_its_replies(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    replies: list[str] = []
+    monkeypatch.setattr(app.router, "Router", slow_router(0.3, replies))
+    monkeypatch.setattr(web, "serve", serving)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\nhow are you?\n"))  # then EOF at once
+    free_home(home)
+    asyncio.run(asyncio.wait_for(app.run(home, terminal=True), 10))
+    assert replies == ["hello", "how are you?"]  # not cancelled by the terminal quitting
+
+
+def test_piped_chat_waits_no_longer_than_the_slowest_endpoint(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replies: list[str] = []
+    monkeypatch.setattr(app.router, "Router", slow_router(60, replies))
+    monkeypatch.setattr(web, "serve", serving)
+    monkeypatch.setattr(app.importlib, "import_module", lambda name: None)  # no warm-up
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    endpoints = '[endpoints.quick]\napi = "anthropic"\nmodel = "m"\ntimeout = 0.2\n'
+    free_home(home, endpoints + '[routing]\nown_chats = "quick"\n')
+    began = time.monotonic()
+    asyncio.run(asyncio.wait_for(app.run(home, terminal=True), 10))
+    assert time.monotonic() - began < 5 and replies == []  # given up after 0.2 s
 
 
 def test_run_shuts_down_in_order(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:

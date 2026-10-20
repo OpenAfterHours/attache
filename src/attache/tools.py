@@ -24,7 +24,9 @@ from attache import channels, scheduler, skills, store, web
 from attache.types import Outbound, Tool, TurnContext
 
 OWNER, MEMBER, BOTH = frozenset({"owner"}), frozenset({"member"}), frozenset({"owner", "member"})
-BREAKS = {0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"}  # json.dumps keeps these raw
+# Unicode categories quote() escapes: controls, format characters (bidi controls, zero-width
+# characters, the BOM), lone surrogates, and the line and paragraph separators.
+HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 OUTPUT_CAP = 20_000  # characters of command output kept: the end, where errors are
 SHELL = "cmd.exe" if os.name == "nt" else "sh"
 PRIVATE = {".secret", ".git", ".claude", "claude.md"}  # and attache.db*; any case, any depth
@@ -48,8 +50,12 @@ def chat_slug(chat_key: str) -> str:
 
 def quote(text: str) -> str:
     """Someone else's text as one JSON string on one line: inside its quotes, nothing can pose
-    as a header or a label, or close a <<< >>> fence."""
-    return json.dumps(text, ensure_ascii=False).translate(BREAKS)
+    as a header or a label, or close a <<< >>> fence. Every invisible or line-breaking
+    character (HIDDEN) is written as its JSON escape, so the text shows exactly what the model
+    reads; json.dumps alone would keep these raw."""
+    # json.dumps(c) is the ASCII escape, as a surrogate pair beyond U+FFFF
+    escapes = {ord(c): json.dumps(c)[1:-1] for c in text if unicodedata.category(c) in HIDDEN}
+    return json.dumps(text, ensure_ascii=False).translate(escapes)
 
 
 def chat_files(ctx: TurnContext) -> Path:
@@ -225,18 +231,26 @@ async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
 
 
 async def _ask(ctx: TurnContext, chat_key: str, question: str, options: list[str]) -> str | None:
-    """Put a question to the owner in `chat_key` and wait for the choice (None: no answer). The
-    question is kept in that chat's history too, so a page reload still shows it."""
-    ctx.services.store.add_message(chat_key, "assistant", question)
-    return await ctx.services.channels.ask(chat_key, "owner", question, options)
+    """Put a question to the owner in `chat_key` and wait for the choice (None: no answer in
+    time). Once a surface shows it, it is kept in that chat's history, so a page reload still
+    shows it; a question nobody saw is never kept, so a later "Approve" typed there is just a
+    message. LookupError when no surface showed it."""
+
+    def keep() -> None:
+        ctx.services.store.add_message(chat_key, "assistant", question)
+
+    return await ctx.services.channels.ask(chat_key, "owner", question, options, shown=keep)
 
 
 @_tool("question options?")
 async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
     """Ask the owner a question in this chat and wait for the answer; options default to Yes
-    and No. Returns the chosen option, or "no answer"."""
+    and No. Returns the chosen option, "no answer", or "couldn't reach the owner just now"."""
     options = list(args.get("options") or ["Yes", "No"])
-    return await _ask(ctx, ctx.chat_key, args["question"], options) or "no answer"
+    try:
+        return await _ask(ctx, ctx.chat_key, args["question"], options) or "no answer"
+    except LookupError:  # no surface showed the question
+        return "couldn't reach the owner just now"
 
 
 @_tool("summary", MEMBER)
@@ -254,8 +268,11 @@ async def request(args: dict[str, Any], ctx: TurnContext) -> str:
     question = f"{ctx.sender.name} in {where} asks: {quote(summary)}"
     owner_chat = services.config.approvals  # where approvals are asked, and the work happens
 
-    async def wait_and_act() -> None:
-        choice = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
+    async def wait_and_act() -> str:  # sends the member's chat a notice, whatever happens
+        try:
+            choice = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
+        except LookupError:  # no surface showed the question, so it was not kept either
+            return await send({"text": f"Couldn't reach {owner} just now; try again later."}, ctx)
         if choice == "Approve":
             fenced = f"<<<\n[{who}]: {quote(summary)}\n>>>"
             text = f"You approved this request from {who} in {where}. Do it, within your rules:"
@@ -263,7 +280,7 @@ async def request(args: dict[str, Any], ctx: TurnContext) -> str:
             services.store.task_add(owner_chat, f"{text}\n{fenced}", due, kind="turn", by="owner")
             services.scheduler.wake()
         verb = {"Approve": "approved", "Decline": "declined"}.get(choice, "did not answer")
-        await send({"text": f"{owner} {verb} the request from {ctx.sender.name}."}, ctx)
+        return await send({"text": f"{owner} {verb} the request from {ctx.sender.name}."}, ctx)
 
     services.channels.spawn(wait_and_act())  # the turn, and the chat, need not wait for it
     return f"Asked {owner}; the answer will come to this chat."

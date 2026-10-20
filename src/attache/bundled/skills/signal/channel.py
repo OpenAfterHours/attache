@@ -5,11 +5,10 @@
 """Attaché's Signal channel: a sidecar between Attaché and `signal-cli -a <number> jsonRpc`.
 
     uv run channel.py                 run as a sidecar (Attaché starts it; docs/channels.md)
-    uv run channel.py doctor [+44…]   check java, signal-cli and the account
-    uv run channel.py setup [+44…]    print the setup steps from SKILL.md, then run doctor
+    uv run channel.py doctor [+44…]   check java, signal-cli and the account (SKILL.md: setup)
 
 Settings come from [channels.signal] as environment variables: ATTACHE_NUMBER (required),
-ATTACHE_SIGNAL_CLI (the program, if it is not on PATH) and ATTACHE_UUID (the bot's ACI,
+ATTACHE_SIGNAL_CLI (the program's path, if it is not on PATH) and ATTACHE_UUID (the bot's ACI,
 normally read from `signal-cli listAccounts`). signal-cli keeps the account's keys itself, so
 this script stores no secrets. Without a number or a working signal-cli it says why on stderr
 and waits for `stop`, so Attaché does not restart it over and over.
@@ -35,13 +34,14 @@ from typing import Any
 
 NAME = "Attaché"
 THUMBS = ("👍", "👎")  # react with these for the first and second option of an ask
+E164 = re.compile(r"\+[1-9]\d{6,14}")  # a phone number: the only kind passed to signal-cli.bat
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 MAX_FILE = 25 * 1024 * 1024  # attachments bigger than this are not copied
-STALE_DAYS = 90  # Signal's servers may stop accepting older signal-cli releases
 RELEASES = "https://api.github.com/repos/AsamK/signal-cli/releases"
 Asks = dict[int, tuple[str, list[str]]]  # sent timestamp -> (ask_id, options)
 Names = dict[str, str]  # sender uuid -> the name signal-cli gave them (sourceName)
 FAILED = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)  # running signal-cli
+HERE = Path(__file__).resolve().parent  # the skill folder: a signal-cli here is never run
 JAVA = "winget install EclipseAdoptium.Temurin.25.JRE (Windows), or Java 25 from adoptium.net"
 
 
@@ -103,7 +103,8 @@ def resolve_mentions(
 def send_params(cmd: dict[str, Any]) -> dict[str, Any]:
     """signal-cli `send` params for an Attaché `send` (or `ask`) command."""
     chat = str(cmd["chat_id"])
-    params: dict[str, Any] = {"recipient": [chat]} if UUID.fullmatch(chat) else {"groupId": chat}
+    direct = UUID.fullmatch(chat) or E164.fullmatch(chat)  # else a base64 group id
+    params: dict[str, Any] = {"recipient": [chat]} if direct else {"groupId": chat}
     params["message"] = cmd.get("text") or ""
     if cmd.get("files"):
         params["attachments"] = [str(path) for path in cmd["files"]]
@@ -146,7 +147,6 @@ def save_attachments(envelope: dict[str, Any], source: Path, target: Path) -> li
             continue
         name = Path(str(item.get("filename") or stored.name)).name  # chosen by the sender
         name = re.sub(r"[^\w.\- ]", "_", name)
-        target.mkdir(parents=True, exist_ok=True)
         dest = target / f"{envelope.get('timestamp')}-{n}-{name}"
         shutil.copyfile(stored, dest)
         saved.append(str(dest.resolve()))
@@ -163,8 +163,14 @@ def data_dir() -> Path:
 
 
 def signal_cli() -> str | None:
-    """The signal-cli program (signal-cli.bat on Windows), or None when it cannot be found."""
-    return shutil.which(os.environ.get("ATTACHE_SIGNAL_CLI") or "signal-cli")
+    """The absolute path of signal-cli (signal-cli.bat on Windows), or None when it cannot be
+    found. One in the skill folder or the working directory, where shutil.which looks first on
+    Windows, is never used: anyone who can drop a file there would get it run."""
+    found = shutil.which(os.environ.get("ATTACHE_SIGNAL_CLI") or "signal-cli")
+    path = Path(found).resolve() if found else None
+    if path is None or path.is_relative_to(HERE) or path.parent == Path.cwd().resolve():
+        return None
+    return str(path)
 
 
 def run(cmd: list[str], wait: float = 120) -> subprocess.CompletedProcess[str]:
@@ -300,13 +306,17 @@ async def sidecar() -> int:
     loop = asyncio.get_running_loop()
     threading.Thread(target=read_stdin, args=(loop, commands), daemon=True).start()
     number, cli = os.environ.get("ATTACHE_NUMBER", ""), signal_cli()
-    if not number or not cli:
-        why = "no number under [channels.signal]" if not number else "signal-cli not found"
-        return await idle(why, commands)
+    if not E164.fullmatch(number):
+        return await idle("[channels.signal] number must look like +447700900123", commands)
+    if not cli:
+        return await idle("signal-cli not found", commands)
     self_uuid = os.environ.get("ATTACHE_UUID") or await asyncio.to_thread(self_id, cli, number)
-    pipe = asyncio.subprocess.PIPE
+    # Java writes redirected stdout in the native code page (cp1252 on Windows); make it UTF-8.
+    java = f"{os.environ.get('JAVA_TOOL_OPTIONS', '')} -Dstdout.encoding=UTF-8".strip()
+    env = {**os.environ, "JAVA_TOOL_OPTIONS": java}
+    pipe, argv = asyncio.subprocess.PIPE, [cli, "-a", number, "jsonRpc"]
     proc = await asyncio.create_subprocess_exec(  # its own process group, for kill_tree
-        cli, "-a", number, "jsonRpc", stdin=pipe, stdout=pipe, limit=2**24, start_new_session=True
+        *argv, stdin=pipe, stdout=pipe, env=env, limit=2**24, start_new_session=True
     )
     bridge = Bridge(proc, self_uuid)
     with contextlib.suppress(OSError):  # signal-cli may have quit already; read_signal sees it
@@ -329,7 +339,7 @@ async def sidecar() -> int:
     return code or 1
 
 
-# doctor and setup.
+# doctor.
 
 
 def report(status: str, text: str) -> bool:
@@ -351,10 +361,7 @@ def check_java() -> bool:
 def check_version(cli: str | None) -> bool:
     if not cli:
         return report("FAIL", "signal-cli: not found on PATH (SKILL.md step 3)")
-    try:
-        done = run([cli, "--version"], 60)
-    except FAILED as e:
-        return report("FAIL", f"signal-cli ({cli}) did not run: {e}")
+    done = run([cli, "--version"], 60)
     found = re.search(r"\d+\.\d+\.\d+", done.stdout)
     if not found:
         error = (done.stderr or done.stdout).strip()[-300:]
@@ -363,14 +370,14 @@ def check_version(cli: str | None) -> bool:
     if not (released := release_date(found[0])):
         return report("ok", f"{text}; release date unknown (offline?)")
     age = (date.today() - released).days
-    if age > STALE_DAYS:
+    if age > 90:  # Signal's servers may stop accepting older releases
         return report("WARN", f"{text} is {age} days old and may stop working: update it")
     return report("ok", f"{text}, released {released}")
 
 
 def check_account(cli: str, number: str) -> bool:
-    if not number:
-        return report("FAIL", "account: no number given; run: doctor +447700900123")
+    if not E164.fullmatch(number):
+        return report("FAIL", f"account: {number!r} is not a number like +447700900123")
     try:
         aci = bot_aci(cli, number)
     except FAILED as e:
@@ -399,18 +406,12 @@ def release_date(version: str) -> date | None:
         return None
 
 
-def setup_steps() -> str:
-    """The "## Setup" section of SKILL.md, so the steps live in one place."""
-    text = Path(__file__).with_name("SKILL.md").read_text(encoding="utf-8")
-    return text.split("## Setup", 1)[-1].split("\n## ", 1)[0].strip()
-
-
 def main(argv: list[str]) -> int:
     sys.stdout.reconfigure(encoding="utf-8")  # the protocol is UTF-8 on every platform
-    command = argv[1] if len(argv) > 1 else "run"
-    if command == "setup":
-        print(f"Setting up Signal for Attaché\n\n{setup_steps()}\n\nChecking:", flush=True)
-    if command in ("setup", "doctor"):
+    # Windows (any case): shutil.which on 3.12+, and cmd.exe running signal-cli.bat, then never
+    # run a program from the working directory.
+    os.environ["NODEFAULTCURRENTDIRECTORYINEXEPATH"] = "1"
+    if argv[1:]:  # `doctor`, or `setup` from older instructions: SKILL.md is the guide now
         return doctor(argv[2:])
     return asyncio.run(sidecar())
 

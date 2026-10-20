@@ -37,9 +37,9 @@ number with signal-cli logs that number out of any phone using it.
 5. **Check it:** `uv run ~/.attache/skills/signal/channel.py doctor +447700900123`. It checks
    Java, the signal-cli version and the account, and prints the bot's own Signal id.
 
-`uv run ~/.attache/skills/signal/channel.py setup` prints these steps and runs doctor. It never
-solves the captcha for you. If the number is missing, or signal-cli cannot start the account,
-the channel says why in Attaché's output and waits; fix it, then restart Attaché.
+If the number is missing or not like +447700900123, or signal-cli cannot start the account,
+the channel says why in Attaché's output and waits; fix it, then restart Attaché. A signal-cli in
+the skill folder or the working directory is never run: install it in a folder of its own.
 
 ## Configuration
 
@@ -48,8 +48,8 @@ In `attache.toml`:
 ```toml
 [channels.signal]
 enabled = true
-number = "+447700900123"          # the bot's number
-# signal_cli = 'C:\Tools\signal-cli-0.14.9\bin\signal-cli.bat'   # if it is not on PATH
+number = "+447700900123"          # the bot's number: +, country code, number, no spaces
+# signal_cli = 'C:\Tools\signal-cli-0.14.9\bin\signal-cli.bat'   # full path, if not on PATH
 # uuid = "..."                    # the bot's id, if doctor cannot find it
 
 [owner.ids]

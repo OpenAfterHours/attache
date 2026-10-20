@@ -87,7 +87,9 @@ def git(home: Path, *args: str) -> str | None:
         result = subprocess.run(["git", *args], cwd=home, capture_output=True, encoding="utf-8")
     except OSError:  # no git binary, or no such folder
         return None
-    return result.stdout if result.returncode == 0 else None
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def commit(home: Path, message: str) -> str | None:

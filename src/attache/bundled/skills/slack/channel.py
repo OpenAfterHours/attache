@@ -33,9 +33,11 @@ SETUP = "uv run ~/.attache/skills/slack/channel.py setup"
 PLAIN = {None, "file_share", "thread_broadcast"}  # message subtypes a person typed
 COMMANDS = ("send", "ask", "answered", "stop")
 KEEP = 1000  # messages and button presses remembered
-MAX_FILE = 25 * 1024 * 1024  # bytes; bigger files aren't downloaded
+MAX_FILE = 25 * 1024 * 1024  # bytes in one downloaded file
+MAX_TOTAL = 50 * 1024 * 1024  # bytes downloaded for one message
+MAX_FILES = 10  # files downloaded for one message
 SPECIAL = re.compile(r"<!([^>|]+)(?:\|[^>]*)?>")  # <!channel>, <!here>, <!subteam^S01>
-BROADCAST = re.compile(r"(?<!\w)@(channel|here|everyone)\b")
+BROADCAST = re.compile(r"(?<!\w)@(channel|here|everyone)\b", re.I)
 TOKEN_ERRORS = ("invalid_auth", "not_authed", "account_inactive", "token_revoked")
 NOT_TAKEN = "That answer wasn't taken: only the person asked can answer, while it's still open."
 Json = dict[str, Any]
@@ -72,7 +74,7 @@ def quiet(text: str) -> str:
     """Defuse @channel, @here, @everyone and group pings, written as <!here> or as plain words,
     so a reply never notifies a whole channel because a message it quoted asked for that."""
     text = SPECIAL.sub(r"@\1", text)
-    return BROADCAST.sub("@‍\\1", text)  # a zero-width joiner after the @
+    return BROADCAST.sub("@\N{ZERO WIDTH JOINER}\\1", text)
 
 
 def inbound(event: Json, self_id: str, names: dict, seen: dict) -> Json | None:
@@ -210,25 +212,32 @@ async def name_of(client: Any, names: dict[str, str], user: str) -> str:
 
 
 async def download(files: list[Json], token: str) -> list[str]:
-    """Save a message's files into ATTACHE_FILES and return their absolute paths."""
+    """Save a message's files into ATTACHE_FILES and return their absolute paths. Downloads
+    come before Attaché's access check, so a message gets MAX_FILES and MAX_TOTAL at most."""
     import aiohttp
 
+    if len(files) > MAX_FILES:
+        log("warning", f"downloading only the first {MAX_FILES} of {len(files)} files")
     folder = Path(os.environ.get("ATTACHE_FILES") or "inbox").resolve()
     folder.mkdir(parents=True, exist_ok=True)
+    paths, room = [], MAX_TOTAL
     async with aiohttp.ClientSession(headers={"Authorization": f"Bearer {token}"}) as session:
-        paths = [await fetch(session, file, folder) for file in files]
-    return [path for path in paths if path]
+        for file in files[:MAX_FILES]:
+            if path := await fetch(session, file, folder, min(MAX_FILE, room)):
+                paths.append(path)
+                room -= Path(path).stat().st_size
+    return paths
 
 
-async def fetch(session: Any, file: Json, folder: Path) -> str | None:
-    """Download one file, or log why not and give None. Redirects aren't followed, so the bot
-    token goes only to the Slack link, and nothing over MAX_FILE is kept."""
+async def fetch(session: Any, file: Json, folder: Path, limit: int) -> str | None:
+    """Download one file of up to `limit` bytes, or log why not and give None. Redirects
+    aren't followed, so the bot token goes only to the Slack link."""
     url, path = file.get("url_private_download") or "", folder / local_name(file)
     if not is_slack_url(url):
         return None  # external or hidden files have no download link
     try:
-        if (file.get("size") or 0) > MAX_FILE:
-            raise ValueError("over 25 MB")
+        if (file.get("size") or 0) > limit:
+            raise ValueError("too big (25 MB a file, 50 MB a message)")
         async with session.get(url, allow_redirects=False) as response:
             # Without files:read, Slack answers with a redirect or its sign-in page.
             html = response.content_type == "text/html" and file.get("mimetype") != "text/html"
@@ -237,8 +246,8 @@ async def fetch(session: Any, file: Json, folder: Path) -> str | None:
             with path.open("wb") as out:
                 async for chunk in response.content.iter_chunked(65536):
                     out.write(chunk)
-                    if out.tell() > MAX_FILE:
-                        raise ValueError("over 25 MB")
+                    if out.tell() > limit:
+                        raise ValueError("too big (25 MB a file, 50 MB a message)")
     except Exception as error:
         path.unlink(missing_ok=True)
         log("warning", f"could not download {file.get('name')}: {error}")
@@ -298,12 +307,10 @@ async def run(bot_token: str, app_token: str) -> int:
     clicks: dict[Any, Json] = {}  # (ask_id, user) -> the button press, until Attaché answers
 
     async def on_event(event: Json) -> None:
-        user = event.get("user")
-        if user and not event.get("bot_id"):
-            await name_of(client, names, user)
         message = inbound(event, self_id, names, seen)
         if message is None:
             return
+        message["sender_name"] = await name_of(client, names, message["sender_id"])
         if event.get("files") and (message["mentioned"] or not message["is_group"]):
             message["files"] = await download(event["files"], bot_token)  # DMs and mentions
         emit(message)
@@ -386,10 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     """`setup`, `check`, or with no command the sidecar."""
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
-    parser = argparse.ArgumentParser(
-        description="Attaché's Slack channel. setup stores the tokens in the keychain, check "
-        "tests them, and with no command it runs the sidecar."
-    )
+    parser = argparse.ArgumentParser(description="Attaché's Slack sidecar, or its setup and check.")
     parser.add_argument("command", nargs="?", choices=["setup", "check"])
     args = parser.parse_args(argv)
     if args.command == "setup":

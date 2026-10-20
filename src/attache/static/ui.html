@@ -250,6 +250,7 @@
 
   // A question for you (an approval, say): one button per option. The first answer counts.
   function showAsk({ ask_id, text, options }) {
+    if (asks.has(ask_id)) return; // already shown (it came with the chat and as an event)
     const msg = add("bot", text);
     const choices = el("div", "choices");
     // Answering, by a button or by typing an option: the buttons go, and the choice shows.
@@ -268,15 +269,14 @@
     asks.set(ask_id, { msg, text, options, choose });
   }
 
-  // Typed text that names an option of an open question, or its number, answers it: the
-  // newest such question first, as the server's typed-reply rule does.
+  // Typed text answers a question only when exactly one is open and the text names one of its
+  // options, or its number: the server's rule. With more open, the buttons say which.
   function typedAnswer(text) {
+    if (asks.size !== 1) return null;
+    const [ask] = asks.values();
     const said = text.trim().toLowerCase();
-    for (const ask of [...asks.values()].reverse()) {
-      const option = ask.options.find((o, i) => o.toLowerCase() === said || String(i + 1) === said);
-      if (option) return () => ask.choose(option);
-    }
-    return null;
+    const option = ask.options.find((o, i) => o.toLowerCase() === said || String(i + 1) === said);
+    return option ? () => ask.choose(option) : null;
   }
 
   function setThinking(on) {
@@ -289,16 +289,20 @@
   async function loadHistory() {
     loading = true;
     const since = Date.now() / 1000 - 2;
-    const past = await api("GET", "/api/messages").catch(() => null);
-    if (past) {
+    const chat = await api("GET", "/api/messages").catch(() => null);
+    if (chat) {
+      const past = chat.messages;
       const wasThinking = Boolean(thinking);
       thinking = null;
-      log.replaceChildren(...(past.length ? [] : [hello]));
+      log.replaceChildren(...(past.length || chat.asks.length ? [] : [hello]));
       const mine = (m) => m.role === "user" && m.sender_name !== "Reminder"; // reminders are ours
-      const open = new Set([...asks.values()].map((ask) => ask.text)); // shown with buttons below
+      // The server's open questions replace the page's: after a reload their buttons come
+      // back, and ones answered elsewhere go. Their stored copy is skipped: they show below.
+      asks.clear();
+      const open = new Set(chat.asks.map((ask) => ask.text));
       for (const m of past) if (!open.has(m.text)) add(mine(m) ? "you" : "bot", m.text);
       if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
-      log.append(...[...asks.values()].map((ask) => ask.msg)); // open questions stay last
+      chat.asks.forEach(showAsk); // open questions stay last
       const fresh = past.filter((m) => m.ts >= since).map((m) => m.text);
       early = early.filter((msg) => msg.ask_id || !fresh.includes(msg.text));
     }

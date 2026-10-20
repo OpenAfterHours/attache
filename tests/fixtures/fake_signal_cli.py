@@ -7,8 +7,8 @@
 In jsonRpc mode it answers `version` and then delivers a direct message from Alex (with an
 attachment), a group message from Sam that mentions the bot and Alex, a group message with an
 attachment that mentions nobody, and envelopes the sidecar must ignore. It answers `send` with a
-timestamp, and when the text asks for a reaction it reacts 👍 as Alex. Every argv and request is
-appended to $FAKE_SIGNAL_LOG.
+timestamp, and when the text asks for a reaction it reacts 👍 as Alex. Every argv (with the
+JAVA_TOOL_OPTIONS it was given) and request is appended to $FAKE_SIGNAL_LOG.
 
 Failure modes, for the tests:
 - $FAKE_SIGNAL_DIE: exit 3 (an IO error) right after the first deliveries.
@@ -128,7 +128,7 @@ def json_rpc() -> int:
 
 
 def main(argv: list[str]) -> int:
-    record({"argv": argv})
+    record({"argv": argv, "java": os.environ.get("JAVA_TOOL_OPTIONS")})
     if "--version" in argv:
         print("signal-cli 0.14.9")
     elif "listAccounts" in argv:

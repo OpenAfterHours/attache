@@ -50,8 +50,9 @@ name = "Family"
 members = ["sam"]
 ```
 
-`approvals` is `local:me` or your direct chat with the bot on an enabled channel; a chat listed
-under `[chats]` is refused, so approval questions never land in a group.
+`approvals` is `local:me` or your own direct chat with the bot on an enabled channel. It has to
+be yours alone: a turn you approve runs with your rights, and replies there. A chat listed under
+`[chats]` is refused, so approval questions never land in a group.
 
 ## Limits
 
@@ -105,8 +106,8 @@ not JSON, and objects with an unknown `type`, are ignored (and logged).
 - `send`: `files` are absolute paths on this machine. `reply_to` may be null.
 - `ask`: a sidecar must handle it. Show `text` with the options as buttons (Slack) or as a
   prompt answered by reaction, where 👍 means the first option and 👎 the second (Signal). With
-  neither, send the text followed by "Reply 1 for Approve, 2 for Decline." A typed reply naming
-  an option, or its number, works on every channel.
+  neither, send the text followed by "Reply 1 for Approve, 2 for Decline." See
+  [Questions](#questions) for typed replies.
 - `answered`: the result of an `answer`, with its `sender_id` (the platform id) echoed back.
   `accepted` is false when the person was not the one asked, the question had closed, or the
   choice was not an option. Slack updates the question's message only when it is true; a
@@ -114,10 +115,26 @@ not JSON, and objects with an unknown `type`, are ignored (and logged).
 - `stop`: exit within 5 seconds. Attaché closes stdin straight after. Exit too whenever stdin
   closes: that is how a sidecar learns Attaché has gone.
 
+### Questions
+
+When Attaché asks someone a question, it goes to every surface of that chat: the sidecar's
+`ask`, the open web page, or the terminal as numbered text. The question counts as shown once
+one surface has taken it (a running sidecar, an open page, the terminal); only then is it
+stored in the chat's history (`ChannelManager.ask` calls its `shown` callback). If no surface
+could show it, because the sidecar is down or no page is open, the ask fails at once with a
+`LookupError` instead of waiting, and the tool or the member's chat is told Attaché couldn't
+reach the owner just now.
+
+A button or reaction answers its own question. A typed reply naming an option, or its number,
+answers only when exactly one open question in that chat waits for the person typing. With two
+or more open, a typed "Approve" could mean either, so it is an ordinary message; use the
+buttons. That stops a member from aiming your typed answer at their own request.
+
 ### Environment
 
-A sidecar gets Attaché's environment without any model API key (every endpoint's `key_env`,
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `OPENAI_API_KEY` are removed), plus:
+A sidecar runs as you, with your files and your environment: every variable reaches it except
+the model API keys, which are Attaché's own secrets (every endpoint's `key_env`,
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `OPENAI_API_KEY` are removed). It also gets:
 
 | Variable | Meaning |
 |---|---|
@@ -148,8 +165,8 @@ for `stop` instead of exiting, so it isn't restarted every minute.
 ### Logging
 
 What a sidecar writes to stderr appears on Attaché's stderr, the terminal it runs in. `ready`
-and `log` events, ignored lines and restarts go to Attaché's log, the `attache` logger, which
-shows INFO and above.
+and `log` events, ignored lines and restarts go to Attaché's log, the `attache` logger. Under
+`attache run` and `attache chat` it shows INFO and above (other libraries show warnings only).
 
 ## Writing a channel
 
