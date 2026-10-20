@@ -23,9 +23,16 @@ OPTIONS = ["Approve", "Decline"]
 
 
 class Channel:
-    def __init__(self, name: str, log: list[str] | None = None) -> None:
+    """A fake channel. Every channel has ask(): this one records the question and says
+    whether anyone saw it (sees), or fails as a broken sidecar would."""
+
+    def __init__(
+        self, name: str, log: list[str] | None = None, sees: bool = True, fails: bool = False
+    ) -> None:
         self.name, self.sent, self.started, self.stopped = name, [], False, False
         self.log = log if log is not None else []
+        self.asked: list[tuple[str, str, str, list[str]]] = []
+        self.sees, self.fails = sees, fails
 
     async def start(self, on_message: OnMessage) -> None:
         self.started = True
@@ -34,22 +41,15 @@ class Channel:
     async def send(self, msg: Outbound) -> None:
         self.sent.append(msg)
 
-    async def stop(self) -> None:
-        self.stopped = True
-        self.log.append(f"{self.name} stopped")
-
-
-class AskingChannel(Channel):
-    def __init__(self, name: str, sees: bool = True, fails: bool = False) -> None:
-        super().__init__(name)
-        self.asked: list[tuple[str, str, str, list[str]]] = []
-        self.sees, self.fails = sees, fails
-
     async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
         if self.fails:
             raise ConnectionError("the sidecar is down")
         self.asked.append((chat_id, ask_id, text, options))
         return self.sees
+
+    async def stop(self) -> None:
+        self.stopped = True
+        self.log.append(f"{self.name} stopped")
 
 
 async def until(condition: Callable[[], Any], timeout: float = 10.0) -> None:
@@ -120,25 +120,26 @@ def test_choose() -> None:
 
 async def asked(hub: ChannelManager, *question: Any) -> str | None:
     """ask(), then wait for its answer, as the tools do."""
-    return await (await hub.ask(*question))
+    waiting = await hub.ask(*question)
+    assert waiting is not None, "nobody saw the question"
+    return await waiting
 
 
 def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
     hub = ChannelManager()
-    plain, native = Channel("slack"), AskingChannel("slack")
-    hub.add(plain)
-    hub.add(native)
+    down, up = Channel("slack", sees=False), Channel("slack")
+    hub.add(down)
+    hub.add(up)
 
     async def main() -> None:
         answer = await hub.ask("slack:D0ALEX", "owner", "Send it?", OPTIONS)  # once shown
         assert isinstance(answer, asyncio.Task) and not answer.done()
-        ((chat_id, ask_id, text, options),) = native.asked
+        ((chat_id, ask_id, text, options),) = up.asked
         assert (chat_id, text, options) == ("D0ALEX", "Send it?", OPTIONS)
+        assert down.asked == up.asked  # every channel of the chat is asked; one seeing it is enough
         assert len(ask_id) == 16 and list(hub.pending) == [ask_id]  # 64 random bits
         assert hub.pending[ask_id].text == "Send it?"  # for the page to rebuild after a reload
-        assert [(m.chat_key, m.text) for m in plain.sent] == [
-            ("slack:D0ALEX", "Send it?\nReply 1 for Approve, 2 for Decline.")
-        ]
+        assert down.sent == up.sent == []  # each channel shows it its own way, through ask()
         assert not hub.answer(ask_id, "sam", "Approve")  # only the person asked
         assert not hub.answer("unknown", "owner", "Approve")
         assert not hub.answer(ask_id, "owner", "Maybe")  # not one of the options
@@ -150,16 +151,26 @@ def test_ask_shows_the_question_and_takes_one_persons_answer() -> None:
     asyncio.run(main())
 
 
-def test_ask_raises_lookup_error_at_once_when_nobody_can_see_it() -> None:
+def test_ask_gives_none_at_once_when_nobody_can_see_it() -> None:
     hub = ChannelManager()
     began = time.monotonic()
-    with pytest.raises(LookupError):  # no channel at all
-        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS))
-    hub.add(AskingChannel("slack", sees=False))  # e.g. its sidecar is down
-    with pytest.raises(LookupError):
-        asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS))
+    assert asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS)) is None  # no channel
+    hub.add(Channel("slack", sees=False))  # e.g. its sidecar is down
+    assert asyncio.run(hub.ask("slack:D1", "owner", "Hello?", OPTIONS)) is None
     assert time.monotonic() - began < 2  # not the 600 s timeout
     assert hub.pending == {} and hub.tasks == set()  # never shown: nothing waits for it
+
+
+def test_ask_gives_none_once_stop_has_begun() -> None:
+    hub = ChannelManager()
+    hub.add(Channel("local"))
+
+    async def main() -> None:
+        await hub.stop()
+        assert await hub.ask("local:me", "owner", "Still there?", OPTIONS) is None
+        assert hub.pending == {} and hub.tasks == set()
+
+    asyncio.run(main())
 
 
 def test_ask_gives_none_on_timeout() -> None:
@@ -172,7 +183,7 @@ def test_ask_gives_none_on_timeout() -> None:
 
 def test_a_failing_channel_leaves_nothing_pending() -> None:
     hub = ChannelManager()
-    hub.add(AskingChannel("slack", fails=True))
+    hub.add(Channel("slack", fails=True))
     with pytest.raises(ConnectionError):
         asyncio.run(hub.ask("slack:D1", "owner", "Ship it?", OPTIONS))
     assert hub.pending == {}

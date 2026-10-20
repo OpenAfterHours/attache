@@ -21,6 +21,10 @@ group_chats = "claude-api"  # group chats, and anyone but you
 [web]
 host = "127.0.0.1"  # only this machine can reach the web page
 port = 8765
+# Share links, for people off this machine, through Tailscale Funnel (docs/configuration.md).
+# Off until public_url is set; then run `tailscale funnel --bg <public_port>`.
+# public_url = "https://pc.tailnet.ts.net"  # https:// and your machine's name, no path
+# public_port = 8766                        # serves share links only; default port + 1
 
 # Chat apps. Each one is a skill that runs a small program, and is off until enabled here.
 # enabled is true or false; every other value must be a string ("+44…", not a number).
@@ -37,7 +41,8 @@ port = 8765
 # [limits]
 # per_sender_hour = 20  # turns per person per hour
 # per_chat_hour = 60    # turns per chat per hour
-# member_daily = 200    # turns per day across everyone but you
+# member_daily = 200    # turns per day across all your members
+# guest_daily = 50      # turns per day across all guests and pages' attache.ask, kept apart
 
 # Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
 # max_tokens, are passed to the backend as options.

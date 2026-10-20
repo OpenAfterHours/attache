@@ -23,32 +23,36 @@ are self-hosted in `src/attache/static/fonts/` (SIL OFL), so nothing loads from 
 ```
 src/attache/
   types.py      shared dataclasses and protocols; every module talks through these
-  app.py        builds Services and runs everything
-  config.py     attache.toml -> Config; init_home()
+  app.py        builds Services and runs everything (and the public share server, if set)
+  config.py     attache.toml -> Config; init_home(); restrict() keeps the home yours
   store.py      SQLite: messages, docs, tasks, sessions
-  skills.py     skill discovery, prompt index, git commit/log/undo of <home>
+  skills.py     skill discovery, prompt index, git commit/log/undo of <home> (pinned to
+                <home>/.git)
   scheduler.py  fires due tasks
   agent.py      shared tool loop for API backends
   backends/     anthropic, openai (chat + responses), claude_cli
-  tools.py      the tools a turn may use, filtered by role
-  router.py     inbound message -> access, trigger, role -> turn -> reply
+  tools.py      the tools a turn may use, filtered by role; ask (with mail approvals),
+                request (survives a restart: _requests), page turns get db only
+  router.py     inbound message -> access, trigger, role -> turn -> reply; page_turn()
   channels.py   channel manager (send, ask and answer, turn tasks), terminal channel,
                 sidecar runner for skill channels (protocol: docs/channels.md)
-  web.py        Starlette app: chat page, artifacts, data bridge, SSE, MCP endpoint for
-                Claude Code (POST /mcp/{token})
-  cli.py        argparse entry point
+  web.py        Starlette app: chat page, artifacts, data bridge, SSE, /api/ask for pages,
+                MCP endpoint for Claude Code (POST /mcp/{token}); with public=True the
+                share-links-only app on public_port (/s/{token}, for Tailscale Funnel)
+  cli.py        argparse entry point; `attache skill NAME [ARGS]` runs a skill's script
   static/       ui.html, bridge.js
-  bundled/      attache.toml template, memory templates, bundled skills (copied by init)
+  bundled/      attache.toml template, memory templates, bundled skills (copied by init:
+                mail, mailbox, docx, xlsx, pptx, service, slack, signal, render, ...)
 ```
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 1,900 lines of code in
-   `src/attache` (target about 1,850; raised from 1,600 for phase 2's channels, approvals and
-   their hardening, issue #20). Blank lines, comments and docstrings don't count, so never
-   make code denser to fit: write the readable version. Bundled skills are excluded; each
-   bundled skill's scripts have a 300-line cap. If a feature doesn't fit, it belongs in a
-   skill.
+1. **Size is a test.** `tests/test_budget.py` fails above 2,100 lines of code in
+   `src/attache` (target about 2,060; 1,600 in phase 1, 1,900 in phase 2, raised by the owner
+   for phase 3's sharing and page turns). Blank lines, comments and docstrings don't count, so
+   never make code denser to fit: write the readable version. Bundled skills are excluded;
+   each bundled skill's scripts have a 300-line cap (1,350 for `mail`, which has three
+   backends). If a feature doesn't fit, it belongs in a skill.
 2. **No new runtime dependencies** without discussion. Skill scripts declare their own with
    PEP 723 headers and run through `uv run`.
 3. **Tests run offline.** No network, no API keys, no real `claude` binary. Inject fakes

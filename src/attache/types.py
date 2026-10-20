@@ -76,15 +76,16 @@ OnAnswer = Callable[[str, str, str, str], bool]
 
 
 class Channel(Protocol):
-    """A chat surface. It may also define `async ask(chat_id, ask_id, text, options) -> bool`
-    to show a question with native buttons or reactions, returning whether anyone could see
-    it; ChannelManager falls back to numbered text."""
+    """A chat surface. ask() shows a question (buttons, reactions or numbered text) and says
+    whether anyone could see it."""
 
     name: str
 
     async def start(self, on_message: OnMessage) -> None: ...  # long-running
 
     async def send(self, msg: Outbound) -> None: ...
+
+    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool: ...
 
     async def stop(self) -> None: ...
 
@@ -97,6 +98,7 @@ class TurnContext:
     sender: Person
     is_group: bool
     services: Services
+    collections: frozenset[str] | None = None  # a page turn: only these collections
 
     @property
     def role(self) -> str:

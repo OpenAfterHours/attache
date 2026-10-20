@@ -22,8 +22,15 @@ from attache.scheduler import Scheduler
 
 @pytest.fixture(autouse=True)
 def fake_web_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    """app.run builds the web app as create_app(services, page); these tests fake the server."""
-    monkeypatch.setattr(web, "create_app", lambda services, page: None)
+    """app.run builds the web apps as create_app(services, page, router) and, for share links,
+    create_app(services, page, public=True); these tests fake them as the names "local" (with
+    a router: page turns need one) and "public", and fake the servers."""
+
+    def create_app(services: Any, page: Any, router: Any = None, public: bool = False) -> str:
+        assert public is (router is None)  # only the local app takes page turns
+        return "public" if public else "local"
+
+    monkeypatch.setattr(web, "create_app", create_app)
     monkeypatch.delenv("ATTACHE_WEB_URL", raising=False)  # restored after each test
 
 
@@ -51,10 +58,10 @@ def test_ipv6_loopback_url(home: Path) -> None:
     assert services.web_url == "http://[::1]:9001"
 
 
-def test_listen_refuses_other_hosts(home: Path) -> None:
+def test_listen_refuses_other_hosts() -> None:
     for host in ("0.0.0.0", "192.168.1.5", "example.com"):
         with pytest.raises(SystemExit, match=r"use 127\.0\.0\.1, localhost or ::1"):
-            app.listen(config.Config(home, config.load(home).owner, {}, {}, {}, host=host))
+            app.listen(host, 8765)
 
 
 def test_run_reports_a_taken_port(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,15 +80,67 @@ def test_run_reports_a_taken_port(home: Path, monkeypatch: pytest.MonkeyPatch) -
     assert not (home / "attache.db").exists()  # checked before anything was opened
 
 
-def free_home(home: Path, extra: str = "") -> None:
-    with socket.socket() as s:
+def free_ports(count: int) -> list[int]:
+    """Ports free on 127.0.0.1 now: all bound at once, so no two are the same."""
+    sockets = [socket.socket() for _ in range(count)]
+    for s in sockets:
         s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    (home / "attache.toml").write_text(f"[web]\nport = {port}\n{extra}", encoding="utf-8")
+    ports = [s.getsockname()[1] for s in sockets]
+    for s in sockets:
+        s.close()
+    return ports
+
+
+def free_home(home: Path, extra: str = "") -> None:
+    (home / "attache.toml").write_text(f"[web]\nport = {free_ports(1)[0]}\n{extra}", "utf-8")
 
 
 async def serving(app_: Any, sock: socket.socket) -> None:
     await asyncio.Event().wait()
+
+
+SHARING = '[web]\nport = {}\npublic_url = "https://pc.tailnet.ts.net"\npublic_port = {}\n'
+
+
+def test_run_reports_a_taken_public_port(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web, "serve", serving)
+    port, public = free_ports(2)
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", public))
+        busy.listen()
+        (home / "attache.toml").write_text(SHARING.format(port, public), encoding="utf-8")
+        with pytest.raises(SystemExit) as exit:
+            asyncio.run(app.run(home, terminal=False))
+    assert f"Port {port} or {public} is in use" in str(exit.value)
+    assert not (home / "attache.db").exists()
+
+
+@pytest.mark.parametrize("sharing", [True, False])
+def test_run_serves_share_links_on_a_second_loopback_port(
+    sharing: bool, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    served: list[tuple[str, Any]] = []
+    resumed: list[Any] = []
+
+    async def serve(app_: str, sock: socket.socket) -> None:
+        served.append((app_, sock.getsockname()))
+        await asyncio.Event().wait()
+
+    async def resume_requests(services: app.Services) -> None:  # the requests still open
+        resumed.append((services, os.environ["ATTACHE_HOME"]))
+
+    monkeypatch.setattr(web, "serve", serve)
+    monkeypatch.setattr(app.tools, "resume_requests", resume_requests)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("/quit\n"))
+    port, public = free_ports(2)
+    text = SHARING.format(port, public) if sharing else f"[web]\nport = {port}\n"
+    (home / "attache.toml").write_text(text, encoding="utf-8")
+    asyncio.run(asyncio.wait_for(app.run(home, terminal=True), 10))
+    local = ("local", ("127.0.0.1", port))
+    assert served == ([local, ("public", ("127.0.0.1", public))] if sharing else [local])
+    ((services, env_home),) = resumed  # once, after the channels started
+    assert isinstance(services, app.Services) and env_home == str(home.resolve())  # for scripts
+    assert not (home / "skills").exists()  # bundled skills arrive by `attache init` only
 
 
 @pytest.mark.parametrize("dies", ["web", "scheduler"])

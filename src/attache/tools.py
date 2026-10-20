@@ -29,7 +29,14 @@ OWNER, MEMBER, BOTH = frozenset({"owner"}), frozenset({"member"}), frozenset({"o
 HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 OUTPUT_CAP = 20_000  # characters of command output kept: the end, where errors are
 SHELL = "cmd.exe" if os.name == "nt" else "sh"
-PRIVATE = {".secret", ".git", ".claude", "claude.md"}  # and attache.db*; any case, any depth
+# What file tools may not touch, in any case and at any depth (and attache.db*): .mail holds
+# mail logins, and .approvals the owner's approvals for mail sends (see ask).
+PRIVATE = {".secret", ".git", ".claude", "claude.md", ".mail", ".approvals"}
+# Script arguments that are data, never paths, so they may hold / and : without owner rights:
+# web addresses, and inline JSON objects (_spec; members pass docx, xlsx and pptx specs so).
+WEB = ("http://", "https://")
+# ask's refusal for a fingerprint without the preview its mail command writes (.approvals/)
+NO_PREVIEW = "no preview for that fingerprint: run the mail command that drafts it first"
 NUM, ARRAY = {"type": "number"}, {"type": "array", "items": {"type": "string"}}
 TYPES = {"timeout": NUM, "in_minutes": NUM, "all": {"type": "boolean"}, "data": {"type": "object"}}
 TYPES |= {"args": ARRAY, "files": ARRAY, "options": ARRAY}  # every other argument is a string
@@ -167,21 +174,33 @@ async def run(args: dict[str, Any], ctx: TurnContext) -> str:
 @_tool("skill script args?", BOTH)
 async def script(args: dict[str, Any], ctx: TurnContext) -> str:
     """Run skills/<skill>/scripts/<script> with `uv run`, in this chat's files folder. Returns
-    JSON {exit_code, output}."""
+    JSON {exit_code, output}. Without owner rights, args are file names in that folder, web
+    addresses or inline JSON objects ({...}): nothing else with /, \\, : or .. in it."""
     name, file = str(args["skill"]), str(args["script"])
-    for part in (name, file):  # plain names only: no drive, folder, ".." or ":"
-        if not re.fullmatch(r"[\w.-]+", part) or part in (".", ".."):
-            raise PermissionError(f"{part!r}: give a plain name, without folders")
+    if not all(channels.PLAIN_NAME.fullmatch(part) for part in (name, file)):  # no drive, ..
+        raise PermissionError("give the skill and the script as plain names, without folders")
     skill = next((s for s in skills.discover(ctx.services.home) if s.name == name), None)
     path = skill.path / "scripts" / file if skill else None
     if path is None or not path.is_file():
         raise FileNotFoundError(f"skill {name!r} has no script {file!r}")
-    if access(ctx.role, ctx.is_group) != "owner" and not for_members(skill):
+    owner = access(ctx.role, ctx.is_group) == "owner"
+    if not owner and not for_members(skill):
         raise PermissionError(f"skill {name!r} is not available in this chat")
+    extra = [str(arg) for arg in args.get("args") or []]
+    for arg in extra:  # without owner rights, nothing that could name a path, but data
+        if not owner and re.search(r"[/\\:]|\.\.", arg) and not (arg.startswith(WEB) or _spec(arg)):
+            raise PermissionError(f"{arg!r}: give a file name from this chat's folder, or a URL")
     if not (uv := shutil.which("uv")):
         raise RuntimeError("uv is not installed: see https://docs.astral.sh/uv/")
-    argv = [uv, "run", str(path), *map(str, args.get("args") or [])]
-    return await _exec(argv, chat_files(ctx), 600)
+    return await _exec([uv, "run", str(path), *extra], chat_files(ctx), 600)
+
+
+def _spec(arg: str) -> bool:
+    """Whether a script argument is inline JSON for an object: a spec, and so data."""
+    try:
+        return isinstance(json.loads(arg), dict)
+    except ValueError:
+        return False
 
 
 @_tool("text files?", BOTH)
@@ -201,11 +220,15 @@ async def send(args: dict[str, Any], ctx: TurnContext) -> str:
     return "sent"
 
 
-@_tool("op collection id? data?", BOTH)
+@_tool("op collection id? data?", BOTH | {"page"})  # "page": a page's turn (page_turn)
 async def db(args: dict[str, Any], ctx: TurnContext) -> str:
     """Documents in named collections, e.g. lists and trackers. op: list (all docs) | get (by
     id) | put (replace the doc with `data`; no id creates one) | delete (by id)."""
+    # Without owner rights, only the docs shared with this chat; a page's turn, only its
+    # collections too.
     chat = None if access(ctx.role, ctx.is_group) == "owner" else ctx.chat_key
+    if ctx.collections is not None and args["collection"] not in ctx.collections:
+        raise PermissionError(f"this page uses only {', '.join(sorted(ctx.collections))}")
     call = (args["op"], args["collection"], args.get("id"), args.get("data"))
     found = store.db_access(ctx.services.store, *call, by=ctx.sender.id, chat=chat)
     return json.dumps(found, default=str, ensure_ascii=False)
@@ -215,7 +238,8 @@ async def db(args: dict[str, Any], ctx: TurnContext) -> str:
 async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
     """Publish a full HTML page (a list, board, chart or form) and get its URL. A page that
     reads or writes db collections names them in its head: <meta name="attache-collections"
-    content="todos,notes">; the attache bridge then keeps it live."""
+    content="todos,notes">; the attache bridge then keeps it live. In a shared chat, when
+    sharing is on, the result also has a "link" anyone can open for 7 days."""
     services, name = ctx.services, slug(args["name"])
     record = services.store.doc_get("_artifacts", name)
     # A page published by a member, or in a group, may use only this chat's shared docs.
@@ -227,29 +251,48 @@ async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
     if shared:
         services.store.doc_put("_artifacts", name, {"chat_key": ctx.chat_key}, by=ctx.sender.id)
     url = f"{services.web_url}/#page={name}"  # opens in Attaché's window
-    return json.dumps({"url": url, "snapshot": web.snapshot_url(services, name)})  # for render
+    links = {"url": url, "snapshot": web.snapshot_url(services, name)}  # snapshot: for render
+    if shared and services.config.public_url:  # a chat's page; the owner's own stay private
+        links["link"] = web.share_url(services, name)
+    return json.dumps(links)
 
 
-async def _ask(ctx: TurnContext, chat_key: str, question: str, options: list[str]) -> Any:
-    """Put a question to the owner in `chat_key`; once a surface has shown it, keep it in that
-    chat's history and return a task giving the choice (None: no answer in time). A question
-    nobody saw is never kept, so a later "Approve" typed there is just a message: LookupError,
-    straight away."""
-    answer = await ctx.services.channels.ask(chat_key, "owner", question, options)
-    ctx.services.store.add_message(chat_key, "assistant", question)
+async def _ask(services: Any, chat_key: str, question: str, options: list[str]) -> Any:
+    """Put a question to the owner in `chat_key`. Once a surface has shown it, it is kept in
+    that chat's history, and the result is a task giving the choice (None: no answer in time).
+    None at once when nobody saw it, which is then never kept, so a later "Approve" typed
+    there is just a message."""
+    answer = await services.channels.ask(chat_key, "owner", question, options)
+    if answer is not None:
+        services.store.add_message(chat_key, "assistant", question)
     return answer
 
 
-@_tool("question options?")
+@_tool("question options? approves?")
 async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
     """Ask the owner a question in this chat and wait for the answer; options default to Yes
-    and No. Returns the chosen option, "no answer", or "couldn't reach the owner just now"."""
-    options = list(args.get("options") or ["Yes", "No"])
-    try:
-        answer = await _ask(ctx, ctx.chat_key, args["question"], options)
-    except LookupError:  # no surface showed the question
+    and No. Returns the chosen option, "no answer", or "couldn't reach the owner just now".
+    approves: the fingerprint a mail command gave for a send. Then the owner sees that
+    command's own preview of exactly what will go, not `question`, with the options Send and
+    Not now; Send writes .approvals/<approves>, the approval the command checks."""
+    question, options = args["question"], list(args.get("options") or ["Yes", "No"])
+    approves = str(args.get("approves") or "")
+    if approves:  # the real draft, as mail.py wrote it, never the model's words about it
+        preview = ctx.services.home / ".approvals" / f"{approves}.preview"
+        # 8-64 letters and digits, checked before any file is looked at, so never a path
+        if not re.fullmatch(r"[A-Za-z0-9]{8,64}", approves) or not preview.is_file():
+            raise FileNotFoundError(NO_PREVIEW)
+        question, options = preview.read_text(encoding="utf-8"), ["Send", "Not now"]
+    answer = await _ask(ctx.services, ctx.chat_key, question, options)
+    if answer is None:  # no surface showed the question
         return "couldn't reach the owner just now"
-    return await answer or "no answer"
+    choice = await answer
+    if approves and choice == "Send":  # the core's mark, which mail.py checks and claims
+        # The sha256 of exactly what the owner saw (UTF-8, newlines as \n): mail.py compares
+        # it with the preview it makes afresh, so a preview rewritten after drafting is no use.
+        seen = hashlib.sha256(question.encode("utf-8")).hexdigest()
+        (ctx.services.home / ".approvals" / approves).write_text(seen, encoding="utf-8")
+    return choice or "no answer"
 
 
 @_tool("summary", MEMBER)
@@ -262,29 +305,69 @@ async def request(args: dict[str, Any], ctx: TurnContext) -> str:
         raise ValueError("keep the summary under 300 characters")
     chat, owner = services.config.chats.get(ctx.chat_key), services.config.owner.name
     who, where = f"{ctx.sender.name} ({ctx.role})", (chat and chat.name) or ctx.chat_key
-    # Quoted as one JSON string, the way the router fences group messages: the owner approves
-    # exactly the text the owner turn will get, and it reaches that turn only as data.
-    question = f"{ctx.sender.name} in {where} asks: {quote(summary)}"
-    owner_chat = services.config.approvals  # where approvals are asked, and the work happens
-
-    try:
-        answer = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
-    except LookupError:  # no surface showed the question, so it was not kept either
+    until = datetime.now().timestamp() + services.channels.ask_seconds
+    # Kept as a doc, so a restart can ask again (resume_requests); the summary is kept raw.
+    doc = {"member_chat": ctx.chat_key, "sender_id": ctx.sender.id, "summary": summary}
+    doc |= {"sender_name": ctx.sender.name, "who": who, "where": where, "until": until}
+    stored = services.store.doc_put("_requests", None, doc)  # with its id
+    answer = await _ask_about(services, stored)
+    if answer is None:  # no surface showed the question, so it was not kept either
+        services.store.doc_delete("_requests", stored["id"])
         return f"Couldn't reach {owner} just now; try again later."
-
-    async def wait_and_act() -> str:  # sends the member's chat a notice, whatever happens
-        choice = await answer
-        if choice == "Approve":
-            fenced = f"<<<\n[{who}]: {quote(summary)}\n>>>"
-            text = f"You approved this request from {who} in {where}. Do it, within your rules:"
-            due = datetime.now().timestamp()
-            services.store.task_add(owner_chat, f"{text}\n{fenced}", due, kind="turn", by="owner")
-            services.scheduler.wake()
-        verb = {"Approve": "approved", "Decline": "declined"}.get(choice, "did not answer")
-        return await send({"text": f"{owner} {verb} the request from {ctx.sender.name}."}, ctx)
-
-    services.channels.spawn(wait_and_act())  # the turn, and the chat, need not wait for it
+    services.channels.spawn(_follow_up(services, stored, answer))  # the chat need not wait
     return f"Asked {owner}; the answer will come to this chat."
+
+
+async def _ask_about(services: Any, doc: dict[str, Any]) -> Any:
+    """Ask the owner, in their approvals chat, about a stored request: as _ask. The summary is
+    quoted as one JSON string, the way the router fences group messages, so the owner approves
+    exactly the text the owner turn will get, as data."""
+    question = f"{doc['sender_name']} in {doc['where']} asks: {quote(doc['summary'])}"
+    return await _ask(services, services.config.approvals, question, ["Approve", "Decline"])
+
+
+async def _follow_up(services: Any, doc: dict[str, Any], answer: Any) -> None:
+    """Wait for the owner's choice on a stored request (answer None: no answer), forget the
+    request at once, so it can never run twice, then act on it and tell the member's chat. An
+    approval is checked against the config as it is now (_still_member)."""
+    choice = await answer if answer else None
+    services.store.doc_delete("_requests", doc["id"])
+    who, where = doc["who"], doc["where"]
+    verb = {"Approve": "approved", "Decline": "declined"}.get(choice, "did not answer")
+    notice = f"{services.config.owner.name} {verb} the request from {doc['sender_name']}."
+    if choice == "Approve":
+        if not _still_member(services.config, doc):
+            notice = "declined: no longer a member here"
+        else:  # the turn gets the summary quoted afresh, fenced as data
+            text = f"You approved this request from {who} in {where}. Do it, within your rules:"
+            text += f"\n<<<\n[{who}]: {quote(doc['summary'])}\n>>>"
+            now = datetime.now().timestamp()
+            services.store.task_add(services.config.approvals, text, now, kind="turn", by="owner")
+            services.scheduler.wake()
+    services.store.add_message(doc["member_chat"], "assistant", notice)
+    await services.channels.send(Outbound(doc["member_chat"], notice))
+
+
+def _still_member(config: Any, doc: dict[str, Any]) -> bool:
+    """Whether a request's sender may still ask in its chat: in a group listed in [chats], one
+    of its members (or the owner); in a direct chat, a person still configured as a member."""
+    chat, person = config.chats.get(doc["member_chat"]), config.people.get(doc["sender_id"])
+    if chat is not None:
+        return doc["sender_id"] in [*chat.members, "owner"]
+    return person is not None and person.role == "member"
+
+
+async def resume_requests(services: Any, retry: float = 30.0) -> None:
+    """Called once at start, in a spawned task (so stopping cancels it): ask the owner again
+    about each request still open. Right after a start no sidecar may be up yet and no page
+    open, so while nothing can show the question it tries again every `retry` seconds; only
+    once its time is up does the member get "did not answer"."""
+    for doc in services.store.doc_list("_requests"):
+        answer = None
+        while answer is None and doc["until"] > datetime.now().timestamp():
+            if (answer := await _ask_about(services, doc)) is None:
+                await asyncio.sleep(retry)
+        services.channels.spawn(_follow_up(services, doc, answer))
 
 
 @_tool("op text? at? in_minutes? cron? kind? id? all?", BOTH)

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from socket import AF_INET, AF_INET6, create_server, socket
 
-from attache import channels, config, router, scheduler, store, web
+from attache import channels, config, router, scheduler, store, tools, web
 from attache.types import Turn
 
 SDKS = {"anthropic": "anthropic", "openai-chat": "openai", "openai-responses": "openai"}
@@ -26,18 +26,20 @@ class Services:
     gateway: dict[str, Turn]  # MCP token -> the turn it serves (the claude-cli backend's tools)
     web_url: str  # e.g. http://127.0.0.1:8765
     ui_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))  # new every run
+    snapshots: dict[str, tuple[str, float]] = field(default_factory=dict)  # web.snapshot_url's
 
     @property
     def home(self) -> Path:
         return self.config.home
 
 
-def listen(cfg: config.Config) -> socket:
-    """Bind [web] host:port. Phase 1 serves this machine only: another host is a SystemExit.
-    A port in use raises OSError."""
-    if cfg.host not in ("127.0.0.1", "localhost", "::1"):
-        raise SystemExit(f"[web] host = {cfg.host!r}: use 127.0.0.1, localhost or ::1 for now")
-    return create_server((cfg.host, cfg.port), family=AF_INET6 if cfg.host == "::1" else AF_INET)
+def listen(host: str, port: int) -> socket:
+    """Bind host:port. Attaché serves this machine only, so a host that is not a loopback
+    address ([web] host) is a SystemExit; share links reach it through Tailscale Funnel, which
+    connects from 127.0.0.1. A port in use raises OSError."""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit(f"[web] host = {host!r}: use 127.0.0.1, localhost or ::1 for now")
+    return create_server((host, port), family=AF_INET6 if host == "::1" else AF_INET)
 
 
 def build(home: Path) -> Services:
@@ -49,18 +51,23 @@ def build(home: Path) -> Services:
 
 
 async def run(home: Path, *, terminal: bool) -> None:
-    """Start the web server, scheduler and channels (plus the terminal chat when asked).
+    """Start the web server, scheduler and channels (plus the terminal chat when asked), and
+    with [web] public_url set a second web server, for share links only, on 127.0.0.1:[web]
+    public_port. Then ask the owner again about members' requests still open.
 
     Returns when the terminal session ends (EOF or /quit) or on Ctrl+C. A channel that stops,
-    a sidecar included, never ends the run; the web server or the scheduler stopping does, as
+    a sidecar included, never ends the run; a web server or the scheduler stopping does, as
     a SystemExit. A port in use or a host that is not this machine is a SystemExit too."""
     cfg = config.load(home)
     try:
-        sock = listen(cfg)
+        sock = listen(cfg.host, cfg.port)
+        public = listen("127.0.0.1", cfg.public_port) if cfg.public_url else None
     except OSError:
-        raise SystemExit(f"Port {cfg.port} is in use. Is `attache run` already running?") from None
+        ports = f"{cfg.port} or {cfg.public_port}" if cfg.public_url else cfg.port
+        raise SystemExit(f"Port {ports} is in use. Is `attache run` already running?") from None
     services = build(home)
     os.environ["ATTACHE_WEB_URL"] = services.web_url  # for skill scripts and sidecars
+    os.environ["ATTACHE_HOME"] = str(home.resolve())  # for them too, wherever they run
     rt, page = router.Router(services), web.WebChannel()  # rt sets itself as scheduler.fire
     url = f"{services.web_url}/#t={services.ui_token}"
     print(f"Open {url}", flush=True)
@@ -73,17 +80,21 @@ async def run(home: Path, *, terminal: bool) -> None:
     term = channels.TerminalChannel(cfg.owner.name, url)
     for channel in [page, *([term] if terminal else []), *channels.sidecars(cfg, on_answer)]:
         services.channels.add(channel)
-    server = asyncio.create_task(web.serve(web.create_app(services, page), sock))
+    servers = [asyncio.create_task(web.serve(web.create_app(services, page, rt), sock))]
+    if public:  # the share links' app, for `tailscale funnel` (docs/configuration.md)
+        shared = web.create_app(services, page, public=True)
+        servers.append(asyncio.create_task(web.serve(shared, public)))
     beat = asyncio.create_task(services.scheduler.run())
     sdks = {SDKS[e.api] for e in cfg.endpoints.values() if e.api in SDKS}  # so turn 1 won't wait
     warmups = [asyncio.create_task(asyncio.to_thread(importlib.import_module, m)) for m in sdks]
     channel_loops = await services.channels.start(rt.handle)
-    rest = [beat, *warmups, *channel_loops]
+    services.channels.spawn(tools.resume_requests(services))
+    vital = [*servers, beat]  # if one of these stops, so does Attaché
     quitting = [asyncio.create_task(term.done.wait())] if terminal else []
     try:
-        done, _ = await asyncio.wait([server, beat, *quitting], return_when=asyncio.FIRST_COMPLETED)
-        if server in done or beat in done:
-            raise SystemExit("The web server or the scheduler stopped; see the log above.")
+        done, _ = await asyncio.wait([*vital, *quitting], return_when=asyncio.FIRST_COMPLETED)
+        if done & set(vital):
+            raise SystemExit("A web server or the scheduler stopped; see the log above.")
         if services.channels.tasks:  # the terminal quit, maybe at the end of piped input:
             # let its turns reply first, for as long as the slowest endpoint may take
             timeouts = [float(e.options.get("timeout", 900)) for e in cfg.endpoints.values()]
@@ -92,7 +103,7 @@ async def run(home: Path, *, terminal: bool) -> None:
     finally:  # in this order:
         await services.channels.stop()  # the turns still running, then every channel, which
         # ends the page's event streams, so the web server's own shutdown is quick and quiet
-        everything = [server, *rest, *quitting, *rt.background.values()]
+        everything = [*vital, *warmups, *channel_loops, *quitting]
         for task in everything:
             task.cancel()
         for result in await asyncio.gather(*everything, return_exceptions=True):

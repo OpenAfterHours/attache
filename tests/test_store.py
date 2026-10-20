@@ -60,7 +60,7 @@ def test_history_before(store: Store) -> None:
 
 def test_docs(store: Store) -> None:
     doc = store.doc_put("todos", None, {"text": "milk", "done": False}, by="owner")
-    assert re.fullmatch(r"[0-9a-f]{8}", doc["id"])
+    assert re.fullmatch(r"[0-9a-f]{16}", doc["id"])  # 64 random bits: no clash check needed
     assert doc["_by"] == "owner" and isinstance(doc["_updated"], float)
     assert store.doc_get("todos", doc["id"]) == doc
     store.doc_put("todos", "b", {"text": "eggs"})

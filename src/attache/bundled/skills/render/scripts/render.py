@@ -139,7 +139,8 @@ def check(url: str) -> str | None:
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", "replace")[:200]
         return (
-            f"the page answered {error.code} {detail} (snapshot links change when Attaché restarts)"
+            f"the page answered {error.code} {detail} (a snapshot link lasts 10 minutes: "
+            "publish the page again for a new one)"
         )
     except OSError as error:
         return f"cannot reach the page: {error} (is Attaché running?)"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import shutil
@@ -25,14 +26,15 @@ from attache.store import Store
 from attache.types import Endpoint, Inbound, Outbound, Person, Tool, Turn, TurnContext
 
 UI_TOKEN = "ui-token-made-fresh-by-app-build"
-KEY = UI_TOKEN.encode()  # page tokens derive from the run's UI token
 BASE = "http://127.0.0.1:8765"
+PUBLIC = "https://pc.tailnet.ts.net"  # [web] public_url, which Funnel serves
 UI = {"X-Attache-Token": UI_TOKEN}
 CSP = (
     "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; "
     "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'none'; "
     "base-uri 'none'; frame-ancestors 'self'"
 )
+SHARE_CSP = CSP.replace("frame-ancestors 'self'", "frame-ancestors 'none'")
 PREFLIGHT = {
     "Origin": "null",
     "Access-Control-Request-Method": "PUT",
@@ -40,12 +42,22 @@ PREFLIGHT = {
 }
 
 
+def ptoken(name: str, ui_token: str = UI_TOKEN) -> str:
+    """A page's token, which derives from the run's UI token."""
+    return web.page_token(SimpleNamespace(ui_token=ui_token), name)
+
+
 class FakeRouter:
     def __init__(self) -> None:
         self.seen: list[Inbound] = []
+        self.asked: list[tuple[web.Scope, str]] = []
 
     async def handle(self, msg: Inbound) -> None:
         self.seen.append(msg)
+
+    async def page_turn(self, scope: web.Scope, prompt: str) -> str:
+        self.asked.append((scope, prompt))
+        return f"reply to {scope.slug}"
 
 
 class FakeChannels:
@@ -73,6 +85,7 @@ def services(home: Path) -> Any:
         ui_token=UI_TOKEN,
         web_url=BASE,
         channels=FakeChannels(),
+        snapshots={},
     )
     store.close()
 
@@ -81,8 +94,15 @@ def services(home: Path) -> Any:
 def env(services: Any) -> Any:
     router, channel = FakeRouter(), web.WebChannel()
     channel.on_message = router.handle  # what start() keeps; ChannelManager's returns at once
-    client = TestClient(web.create_app(services, channel), base_url=BASE)
+    client = TestClient(web.create_app(services, channel, router), base_url=BASE)
     return SimpleNamespace(client=client, router=router, channel=channel, sv=services)
+
+
+@pytest.fixture
+def public(env: Any) -> Any:
+    """The share links' app, as app.run serves it on [web] public_port when sharing is on."""
+    env.sv.config.public_url = PUBLIC
+    return TestClient(web.create_app(env.sv, env.channel, public=True), base_url=PUBLIC)
 
 
 def page(sv: Any, name: str, collections: str | None = "todos", head: bool = True) -> None:
@@ -93,13 +113,13 @@ def page(sv: Any, name: str, collections: str | None = "todos", head: bool = Tru
 
 
 def auth(name: str, token_for: str | None = None) -> dict[str, str]:
-    token = web.artifact_token(KEY, token_for or name)
+    token = ptoken(token_for or name)
     return {"X-Attache-Artifact": name, "X-Attache-Token": token}
 
 
 def src(name: str) -> str:
     """Where the Attaché page loads a page from, as /api/artifacts lists it."""
-    return f"/a/{name}?t={web.artifact_token(KEY, name)}"
+    return f"/a/{name}?t={ptoken(name)}"
 
 
 def group_page(sv: Any, name: str = "family", collections: str = "todos") -> None:
@@ -135,13 +155,15 @@ def test_index_holds_no_token(env: Any) -> None:
 def test_bridge_js_is_served(env: Any) -> None:
     r = env.client.get("/bridge.js")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
-    assert "window.attache = Object.freeze({ db, on })" in r.text
+    assert "window.attache = Object.freeze({ db, on, ask })" in r.text
+    assert 'if (share) throw new Error("not available on shared links");' in r.text
+    assert '{ "X-Attache-Share": share }' in r.text and "`share=${enc(share)}`" in r.text
 
 
 def test_artifact_gets_the_bridge_and_the_exact_csp(env: Any) -> None:
     page(env.sv, "home")
     r = env.client.get(src("home"), headers={"Sec-Fetch-Dest": "iframe"})
-    token = web.artifact_token(KEY, "home")
+    token = ptoken("home")
     tag = f'<script src="/bridge.js" data-token="{token}" data-artifact="home"></script></head>'
     assert r.status_code == 200 and tag in r.text
     assert r.headers["content-security-policy"] == CSP
@@ -155,7 +177,7 @@ def test_artifact_opened_outside_a_frame_is_refused(env: Any) -> None:
     assert env.client.get(src("home")).status_code == 200  # no Sec-Fetch-Dest: an older client
 
 
-@pytest.mark.parametrize("query", ["", "?t=", "?t=wrong", f"?t={web.artifact_token(KEY, 'trip')}"])
+@pytest.mark.parametrize("query", ["", "?t=", "?t=wrong", f"?t={ptoken('trip')}"])
 def test_artifact_needs_its_own_token(env: Any, query: str) -> None:
     page(env.sv, "home")  # any local process could read a page's token before this check
     r = env.client.get(f"/a/home{query}", headers={"Sec-Fetch-Dest": "iframe"})
@@ -170,7 +192,7 @@ def test_artifact_without_head_gets_the_bridge_first(env: Any) -> None:
 @pytest.mark.parametrize("name", ["missing", "Home", "HOME", "a.b", "a_b", "%2e%2e", "home.html"])
 def test_bad_or_missing_artifact_names_are_404(env: Any, name: str) -> None:
     page(env.sv, "home")  # exists, so "Home" fails on the name even on a case-insensitive disk
-    assert env.client.get(f"/a/{name}?t={web.artifact_token(KEY, name)}").status_code == 404
+    assert env.client.get(f"/a/{name}?t={ptoken(name)}").status_code == 404
 
 
 def test_artifact_list_gives_each_page_with_its_token(env: Any) -> None:
@@ -229,11 +251,11 @@ def test_scope_from_headers(services: Any) -> None:
     [
         {},
         {"X-Attache-Token": "wrong"},
-        {"X-Attache-Token": web.artifact_token(KEY, "home")},  # a page token is not the UI's
+        {"X-Attache-Token": ptoken("home")},  # a page token is not the UI's
         {"X-Attache-Artifact": "home", "X-Attache-Token": UI_TOKEN},  # nor the reverse
-        {"X-Attache-Artifact": "home", "X-Attache-Token": web.artifact_token(KEY, "other")},
-        {"X-Attache-Artifact": "home", "X-Attache-Token": web.artifact_token(b"old run", "home")},
-        {"X-Attache-Artifact": "../home", "X-Attache-Token": web.artifact_token(KEY, "../home")},
+        {"X-Attache-Artifact": "home", "X-Attache-Token": ptoken("other")},
+        {"X-Attache-Artifact": "home", "X-Attache-Token": ptoken("home", "old run")},
+        {"X-Attache-Artifact": "../home", "X-Attache-Token": ptoken("../home")},
         {"X-Attache-Artifact": "home", "X-Attache-Token": "ünicode"},
     ],
 )
@@ -246,7 +268,7 @@ def test_scope_refuses_bad_tokens(services: Any, headers: dict[str, str]) -> Non
 
 def test_scope_from_the_event_stream_query(services: Any) -> None:
     page(services, "home")
-    token = web.artifact_token(KEY, "home")
+    token = ptoken("home")
     found = web.scope_of(services, request(query=f"artifact=home&token={token}"), query=True)
     assert found == web.Scope("home", frozenset({"todos"}))
     assert web.scope_of(services, request(query=f"token={UI_TOKEN}"), query=True).slug == "_ui"
@@ -570,10 +592,10 @@ def test_fonts_are_served_to_sandboxed_pages(env: Any) -> None:
 
 
 def test_artifact_tokens() -> None:
-    token = web.artifact_token(KEY, "home")
-    assert re.fullmatch(r"[0-9a-f]{64}", token) and token == web.artifact_token(KEY, "home")
-    assert token != web.artifact_token(KEY, "trip")
-    assert token != web.artifact_token(b"the next run's ui token", "home")  # rotates per run
+    token = ptoken("home")
+    assert re.fullmatch(r"[0-9a-f]{64}", token) and token == ptoken("home")
+    assert token != ptoken("trip")
+    assert token != ptoken("home", "the next run's ui token")  # rotates per run
 
 
 # live events
@@ -712,23 +734,338 @@ def test_answer_goes_to_the_channel_manager_as_the_owner(env: Any) -> None:
 def test_snapshot_url_lets_the_render_browser_open_the_page(env: Any) -> None:
     page(env.sv, "home")
     url = web.snapshot_url(env.sv, "home")
-    render = web.artifact_token(KEY, "render:home")
-    assert url == f"{BASE}/a/home?t={web.artifact_token(KEY, 'home')}&r={render}"
+    match = re.fullmatch(rf"{BASE}/a/home\?t={ptoken('home')}&r=([\w-]{{20,}})", url)
+    assert match, url
+    [(render, (name, until))] = env.sv.snapshots.items()  # in memory, for this run only
+    assert render == match[1] and name == "home" and 590 < until - time.time() <= 600
     top = {"Sec-Fetch-Dest": "document"}
     r = env.client.get(url.removeprefix(BASE), headers=top)
     assert r.status_code == 200 and 'data-artifact="home"' in r.text
     assert r.headers["content-security-policy"] == CSP  # still sandboxed when top-level
+    assert web.snapshot_url(env.sv, "home") != url  # a new token each time
     page(env.sv, "trip")
+    trip = web.snapshot_url(env.sv, "trip").partition("&r=")[2]
     for query in (
-        f"?t={web.artifact_token(KEY, 'home')}",  # no r: top-level stays refused
-        f"?t={web.artifact_token(KEY, 'home')}&r=wrong",
-        f"?t={web.artifact_token(KEY, 'home')}&r={web.artifact_token(KEY, 'render:trip')}",
+        f"?t={ptoken('home')}",  # no r: top-level stays refused
+        f"?t={ptoken('home')}&r=wrong",
+        f"?t={ptoken('home')}&r={trip}",  # another page's
+        f"?t={ptoken('home')}&r={ptoken('render:home')}",  # the old HMAC form
         f"?t=wrong&r={render}",
     ):
         assert env.client.get(f"/a/home{query}", headers=top).status_code == 403, query
     assert env.client.get(src("home"), headers={"Sec-Fetch-Dest": "iframe"}).status_code == 200
-    next_run = SimpleNamespace(ui_token="the-next-run", web_url=BASE)
-    assert web.snapshot_url(next_run, "home") != url  # tokens rotate with the run
+
+
+def test_snapshot_links_last_ten_minutes(env: Any) -> None:
+    page(env.sv, "home")
+    url = web.snapshot_url(env.sv, "home").removeprefix(BASE)
+    [render] = env.sv.snapshots
+    env.sv.snapshots[render] = ("home", time.time() - 1)  # as if ten minutes had passed
+    r = env.client.get(url, headers={"Sec-Fetch-Dest": "document"})
+    assert r.status_code == 403 and "inside the Attaché window" in r.json()["error"]
+
+
+# attache.ask
+
+
+def test_ask_runs_a_page_turn_for_the_page_that_asks(env: Any) -> None:
+    group_page(env.sv)
+    r = env.client.post("/api/ask", headers=auth("family"), json={"prompt": "What's left?"})
+    assert r.status_code == 200 and r.json() == {"reply": "reply to family"}
+    assert env.router.asked == [
+        (web.Scope("family", frozenset({"todos"}), "slack:C1"), "What's left?")
+    ]
+    env.client.post("/api/ask", headers=auth("family"), json={"prompt": "x" * 5000})
+    assert env.router.asked[-1][1] == "x" * 2000  # capped
+    assert env.router.seen == []  # not a chat message
+
+
+def test_ask_takes_a_page_token_only(env: Any, public: TestClient) -> None:
+    group_page(env.sv)
+    link = web.share_url(env.sv, "family").rpartition("/")[2]
+    ask = {"prompt": "hi"}
+    assert env.client.post("/api/ask", headers=UI, json=ask).status_code == 403  # the UI's alone
+    assert env.client.post("/api/ask", json=ask).status_code == 401
+    assert (
+        env.client.post("/api/ask", headers={"X-Attache-Share": link}, json=ask).status_code == 401
+    )
+    assert env.client.post("/api/ask", headers=auth("family", "other"), json=ask).status_code == 401
+    assert public.post("/api/ask", headers={"X-Attache-Share": link}, json=ask).status_code == 404
+    assert env.router.asked == []
+    r = env.client.options(
+        "/api/ask", headers={**PREFLIGHT, "Access-Control-Request-Method": "POST"}
+    )
+    assert r.status_code == 200 and r.headers["access-control-allow-origin"] == "*"  # from frames
+
+
+# share links
+
+
+def test_share_url_stores_only_a_hash_of_its_token(env: Any) -> None:
+    env.sv.config.public_url = PUBLIC
+    group_page(env.sv, collections="todos, trip")
+    url = web.share_url(env.sv, "family")
+    token = re.fullmatch(rf"{PUBLIC}/s/([\w-]{{32}})", url)[1]
+    [share] = env.sv.store.doc_list("_shares")
+    assert share["id"] == hashlib.sha256(token.encode()).hexdigest() and token not in str(share)
+    version = hashlib.sha256((env.sv.config.home / "artifacts" / "family.html").read_bytes())
+    assert share["name"] == "family" and share["chat_key"] == "slack:C1"
+    assert (
+        share["collections"] == ["todos", "trip"] and share["version"] == version.hexdigest()[:12]
+    )
+    assert 7 * 86400 - 10 < share["until"] - time.time() <= 7 * 86400
+    assert web.share_url(env.sv, "family") != url  # a new link each time
+
+
+def test_owner_pages_cannot_be_shared(env: Any) -> None:
+    page(env.sv, "home")  # no "_artifacts" record: the owner's own page
+    with pytest.raises(PermissionError):
+        web.share_url(env.sv, "home")
+    assert env.sv.store.doc_list("_shares") == []
+
+
+def share(env: Any, collections: str = "todos") -> tuple[str, dict[str, str]]:
+    """A group page "family" shared: its link's token, and the bridge's header for it."""
+    env.sv.config.public_url = PUBLIC
+    group_page(env.sv, collections=collections)
+    token = web.share_url(env.sv, "family").rpartition("/")[2]
+    return token, {"X-Attache-Share": token}
+
+
+def test_share_link_serves_the_page_top_level(env: Any, public: TestClient) -> None:
+    token, _ = share(env)
+    r = public.get(f"/s/{token}", headers={"Sec-Fetch-Dest": "document"})
+    tag = f'<script src="/bridge.js" data-share="{token}"></script></head>'
+    assert r.status_code == 200 and tag in r.text and "data-token" not in r.text
+    assert r.headers["content-security-policy"] == SHARE_CSP  # sandboxed, and never framed
+    assert r.headers["referrer-policy"] == "no-referrer"  # the link stays out of Referer
+    assert "access-control-allow-origin" not in r.headers
+
+
+def test_share_link_dies_when_it_expires_or_the_page_changes(env: Any, public: TestClient) -> None:
+    token, _ = share(env)
+    assert public.get("/s/").status_code == 404
+    for wrong in ("not-a-token", f"{token}x", token.upper()):
+        assert public.get(f"/s/{wrong}").status_code == 410, wrong
+    page(env.sv, "family", "todos, notes")  # the page changed
+    r = public.get(f"/s/{token}")
+    assert r.status_code == 410 and "ask for a new one" in r.text
+    token, _ = share(env)
+    (env.sv.config.home / "artifacts" / "family.html").unlink()  # the page is gone
+    assert public.get(f"/s/{token}").status_code == 410
+    token, _ = share(env)
+    assert public.get(f"/s/{token}").status_code == 200
+    key = hashlib.sha256(token.encode()).hexdigest()
+    record = env.sv.store.doc_get("_shares", key)
+    env.sv.store.doc_put("_shares", key, {**record, "until": time.time() - 1})
+    assert public.get(f"/s/{token}").status_code == 410  # a week has passed
+
+
+def test_share_link_gets_the_chats_member_access_only(env: Any, public: TestClient) -> None:
+    _, header = share(env)
+    st = env.sv.store
+    shared = st.doc_put("todos", None, {"title": "Passports", "_shared": ["slack:C1"]})
+    private = st.doc_put("todos", None, {"title": "Gift for Sam"})
+    st.doc_put("notes", None, {"text": "private", "_shared": ["slack:C1"]})
+    assert [d["title"] for d in public.get("/api/db/todos", headers=header).json()] == ["Passports"]
+    assert public.get(f"/api/db/todos/{private['id']}", headers=header).status_code == 403
+    assert public.get("/api/db/notes", headers=header).status_code == 403  # not declared
+    added = public.post("/api/db/todos", headers=header, json={"title": "Sun cream"}).json()
+    assert added["_shared"] == ["slack:C1"] and added["_by"] == "web:family"
+    assert public.delete(f"/api/db/todos/{shared['id']}", headers=header).status_code == 403
+    page(env.sv, "family", "todos, notes")  # editing the page doesn't widen an old link
+    assert public.get("/api/db/notes", headers=header).status_code == 410
+    found = web.scope_of(env.sv, request(query=f"share={share(env)[0]}"), query=True, public=True)
+    assert found == web.Scope("family", frozenset({"todos"}), "slack:C1")  # the event stream
+
+
+def test_public_app_takes_share_tokens_only(env: Any, public: TestClient) -> None:
+    token, header = share(env)
+    page(env.sv, "home")
+    for headers in (UI, auth("home"), auth("family"), {}):
+        assert public.get("/api/db/todos", headers=headers).status_code == 410, headers
+    with pytest.raises(HTTPException):
+        web.scope_of(env.sv, request(query=f"token={UI_TOKEN}"), query=True, public=True)
+    assert env.client.get("/api/db/todos", headers=header).status_code == 401  # nor the reverse
+    assert env.client.get(f"/s/{token}").status_code == 404  # the local app has no share links
+
+
+def test_public_app_has_only_the_share_routes(env: Any, public: TestClient) -> None:
+    _, header = share(env)
+    page(env.sv, "home")
+    env.sv.gateway["tok"] = make_turn(env.sv)
+    for path in ("/", "/api/artifacts", "/api/messages", src("home"), "/api/x"):
+        assert public.get(path, headers={**UI, **header}).status_code == 404, path
+    for path in ("/api/chat", "/api/answer", "/api/ask", "/mcp/tok"):
+        assert public.post(path, headers={**UI, **header}, json={}).status_code == 404, path
+    assert public.get("/bridge.js").status_code == 200
+    assert public.get("/fonts/inter-latin-400-normal.woff2").status_code == 200
+    r = public.options(
+        "/api/db/todos", headers={**PREFLIGHT, "Access-Control-Request-Headers": "x-attache-share"}
+    )
+    assert r.status_code == 200 and r.headers["access-control-allow-origin"] == "*"
+    assert env.router.seen == [] and env.sv.channels.answers == []
+
+
+@pytest.mark.parametrize(
+    ("base", "status"),
+    [
+        (PUBLIC, 200),
+        ("https://PC.tailnet.ts.net", 200),
+        ("http://127.0.0.1:8766", 200),  # Funnel may pass loopback's Host on
+        ("http://localhost:8766", 200),
+        ("https://other.tailnet.ts.net", 400),  # DNS rebinding names stay refused
+    ],
+)
+def test_public_app_serves_its_host_and_loopback(env: Any, base: str, status: int) -> None:
+    env.sv.config.public_url = PUBLIC
+    app = web.create_app(env.sv, env.channel, public=True)
+    assert TestClient(app, base_url=base).get("/bridge.js").status_code == status
+
+
+def test_one_store_listener_feeds_both_apps(env: Any, public: TestClient) -> None:
+    """The public app shares the local app's channel, so it must not add a second listener
+    (each change would reach every page twice)."""
+    assert len(env.sv.store.on_change) == 1
+
+
+# what a share link may write: anyone who has it can, so it is capped (the local app is not)
+
+
+def test_share_link_bodies_are_at_most_64_kb(env: Any, public: TestClient) -> None:
+    _, header = share(env)
+    big = public.post("/api/db/todos", headers=header, json={"title": "x" * 5_000_000})
+    assert big.status_code == 413 and "64 KB" in big.text
+    edge = public.post("/api/db/todos", headers=header, json={"title": "x" * 65_000})
+    assert edge.status_code == 200
+    assert [len(d["title"]) for d in env.sv.store.doc_list("todos")] == [65_000]
+    r = env.client.post("/api/db/todos", headers=auth("family"), json={"title": "x" * 100_000})
+    assert r.status_code == 200  # a page in the Attaché window isn't capped
+
+
+def test_share_link_refuses_a_body_of_unknown_size(env: Any, public: TestClient) -> None:
+    """A chunked body has no Content-Length, so its size is known only once it is all read."""
+    _, header = share(env)
+    sent: list[int] = []
+
+    def chunks() -> Any:
+        for n in range(1000):  # 4 MB, in 4 KB chunks
+            sent.append(n)
+            yield b"x" * 4096
+
+    r = public.post("/api/db/todos", headers=header, content=chunks())
+    assert r.status_code == 413 and "Content-Length" in r.text
+    assert sent == []  # refused before a single chunk was read
+    for length in ("", "ten", "-1", str(64 * 1024 + 1)):
+        headers = {**header, "Content-Type": "application/json", "Content-Length": length}
+        assert public.post("/api/db/todos", headers=headers, content=b"{}").status_code == 413
+    assert env.sv.store.doc_list("todos") == []
+    r = env.client.post("/api/db/todos", headers=auth("family"), content=iter([b'{"a": 1}']))
+    assert r.status_code == 200  # the Attaché window takes chunks
+
+
+@pytest.mark.parametrize("framing", ["", "Content-Length: 10\r\n"])
+def test_share_link_answers_a_chunked_body_before_reading_it(env: Any, framing: str) -> None:
+    """Over a real socket: only the headers are sent, and the 413 comes at once. Chunks win
+    over a Content-Length, so a small one beside them changes nothing."""
+    token, _ = share(env)
+    app = web.create_app(env.sv, env.channel, public=True)
+
+    async def scenario(sock: socket.socket) -> bytes:
+        server = asyncio.create_task(web.serve(app, sock))
+        for _ in range(100):  # until uvicorn is listening
+            try:
+                reader, writer = await asyncio.open_connection(*sock.getsockname()[:2])
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        head = f"POST /api/db/todos HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Attache-Share: {token}\r\n"
+        writer.write(f"{head}Transfer-Encoding: chunked\r\n{framing}\r\n".encode())
+        reply = await asyncio.wait_for(reader.readuntil(b"\r\n"), 2)  # no body sent yet
+        writer.close()
+        server.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await server
+        return reply
+
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        assert asyncio.run(scenario(sock)).startswith(b"HTTP/1.1 413")
+    assert env.sv.store.doc_list("todos") == []
+
+
+def test_share_link_writes_at_most_60_an_hour(
+    env: Any, public: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token, header = share(env)
+    codes = [
+        public.post("/api/db/todos", headers=header, json={"n": n}).status_code for n in range(61)
+    ]
+    assert codes == [200] * 60 + [429] and len(env.sv.store.doc_list("todos")) == 60
+    assert "60 changes this hour" in public.post("/api/db/todos", headers=header, json={}).text
+    assert public.get("/api/db/todos", headers=header).status_code == 200  # reads go on
+    other = {"X-Attache-Share": share(env)[0]}  # another link has its own count
+    assert public.post("/api/db/todos", headers=other, json={"n": 61}).status_code == 200
+    for n in range(70):  # the Attaché window has no such limit
+        assert env.client.post("/api/db/todos", headers=auth("family"), json={"n": n}).is_success
+    later = time.time() + 3600
+    monkeypatch.setattr(web, "time", SimpleNamespace(time=lambda: later))  # the next hour
+    assert public.post("/api/db/todos", headers=header, json={"n": 62}).status_code == 200
+    assert token not in str(env.sv.store.doc_list("todos"))
+
+
+def test_share_link_adds_no_doc_past_500(env: Any, public: TestClient) -> None:
+    _, header = share(env)
+    st = env.sv.store
+    for n in range(499):
+        st.doc_put("todos", f"d{n}", {"n": n, "_shared": ["slack:C1"]})
+    for n in range(20):
+        st.doc_put("todos", f"p{n}", {"n": n})  # not the chat's: these don't count
+    assert public.post("/api/db/todos", headers=header, json={"n": 499}).status_code == 200
+    full = public.post("/api/db/todos", headers=header, json={"n": 500})
+    assert full.status_code == 403 and "500" in full.json()["error"]
+    assert public.put("/api/db/todos/new-id", headers=header, json={}).status_code == 403
+    assert public.put("/api/db/todos/d1", headers=header, json={"n": 1, "done": True}).is_success
+    assert len(st.doc_list("todos", shared_with="slack:C1")) == 500
+    r = env.client.post("/api/db/todos", headers=auth("family"), json={"n": 501})
+    assert r.status_code == 200  # the Attaché window isn't capped
+
+
+# collections no page reaches
+
+
+@pytest.mark.parametrize("chat_key", [None, "slack:C1"])
+def test_no_page_reaches_shares_or_requests(env: Any, chat_key: str | None) -> None:
+    st = env.sv.store
+    st.doc_put(
+        "_requests", "r1", {"summary": "Sam asks to change a skill", "_shared": ["slack:C1"]}
+    )
+    st.doc_put("_shares", "h1", {"name": "trip", "_shared": ["slack:C1"]})
+    page(env.sv, "spy", "todos, _shares, _requests")
+    if chat_key:
+        st.doc_put("_artifacts", "spy", {"chat_key": chat_key})
+    scope = web.page_scope(env.sv, "spy")
+    assert scope.collections == frozenset({"todos"})
+    for collection in ("_shares", "_requests"):
+        r = env.client.get(f"/api/db/{collection}", headers=auth("spy"))
+        assert r.status_code == 403 and collection in r.json()["error"]
+        assert env.client.get(f"/api/db/{collection}/h1", headers=auth("spy")).status_code == 403
+    assert env.client.get("/api/db/_requests", headers=UI).json()[0]["id"] == "r1"  # the owner's
+
+
+def test_share_links_never_reach_shares_or_requests(env: Any, public: TestClient) -> None:
+    _, header = share(env, collections="todos, _shares, _requests")
+    [record] = env.sv.store.doc_list("_shares")
+    assert record["collections"] == ["todos"]
+    for collection in ("_shares", "_requests"):
+        assert public.get(f"/api/db/{collection}", headers=header).status_code == 403
+
+
+def test_snapshot_url_drops_expired_snapshots(env: Any) -> None:
+    page(env.sv, "home")
+    env.sv.snapshots.update({"old": ("home", time.time() - 1), "live": ("home", time.time() + 60)})
+    web.snapshot_url(env.sv, "home")
+    assert "old" not in env.sv.snapshots and "live" in env.sv.snapshots
+    assert len(env.sv.snapshots) == 2
 
 
 def test_stream_pings_when_idle(monkeypatch: pytest.MonkeyPatch) -> None:

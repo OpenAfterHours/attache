@@ -62,11 +62,13 @@ Turns from anyone but the owner are rate limited:
 [limits]
 per_sender_hour = 20   # turns per person per hour
 per_chat_hour = 60     # turns per chat per hour
-member_daily = 200     # turns per day across all non-owner senders
+member_daily = 200     # turns per day across all your members
+guest_daily = 50       # turns per day across all guests and pages' attache.ask
 ```
 
-Each is a whole number of at least 1. A public chat (`guests = "public"`) shares
-`member_daily` with everyone else; guests have no budget of their own yet. When a limit is hit,
+Each is a whole number of at least 1. The two daily budgets are separate pools: guests in a
+public chat (`guests = "public"`) and requests from pages (`attache.ask`) draw on
+`guest_daily`, so they can never use up the turns your members have. When a limit is hit,
 Attaché says so once and then stays quiet until the window resets.
 
 ## The sidecar protocol
@@ -87,7 +89,10 @@ not JSON, and objects with an unknown `type`, are ignored (and logged).
 
 - `message`: `is_group` is false for direct messages. `mentioned` is true for a native mention
   or a reply to the bot. `files` are absolute paths of attachments the sidecar downloaded into
-  `ATTACHE_FILES`; a path anywhere else is dropped.
+  `ATTACHE_FILES`; a path anywhere else is dropped. When a message gets no turn (its sender
+  isn't admitted, a guest Attaché doesn't answer, nothing triggered it, or a rate limit), its
+  files are deleted, since nothing will read them. Fetching attachments only after a message
+  is admitted is planned (#33); until then a sidecar downloads them first, within its caps.
 - `answer`: a button press or reaction answering an `ask`. Attaché accepts it only from the
   person who was asked, and replies with `answered`.
 
@@ -117,14 +122,21 @@ not JSON, and objects with an unknown `type`, are ignored (and logged).
 
 ### Questions
 
-When Attaché asks someone a question, it goes to every surface of that chat: the sidecar's
-`ask`, the open web page, or the terminal as numbered text. The question counts as shown once
-one surface has taken it (a running sidecar, an open page, the terminal).
-`ChannelManager.ask` returns as soon as it is shown, with a task that gives the answer, so the
-question is stored in the chat's history only then, and a member's `request` replies "Asked
-Alex" knowing that is true. If no surface could show it, because the sidecar is down or no
-page is open, `ask` raises `LookupError` at once instead of waiting, and the tool's own reply
-says Attaché couldn't reach the owner just now.
+When Attaché asks someone a question, it goes to every surface of that chat, and each shows
+it its own way through its `ask`: the sidecar's buttons or reactions, the open web page's
+buttons, or numbered text in the terminal. Each says whether anyone could see it, and the
+question counts as shown once one surface has (a running sidecar, an open page, the
+terminal). `ChannelManager.ask` returns as soon as it is shown, with a task that gives the
+answer, so the question is stored in the chat's history only then, and a member's `request`
+replies "Asked Alex" knowing that is true. If no surface could show it, because the sidecar is
+down or no page is open, `ask` returns `None` at once instead of waiting, and the tool's own
+reply says Attaché couldn't reach the owner just now.
+
+A member's `request` is kept until the owner answers, so it survives a restart: when Attaché
+starts again it asks the owner once more. Right after a start no sidecar may be up yet and no
+page open, so while nothing can show the question it tries again every 30 seconds, until the
+request's time runs out; only then does the member get "did not answer". Buttons from before
+the restart no longer answer anything.
 
 A button or reaction answers its own question. A typed reply naming an option, or its number,
 answers only when exactly one open question in that chat waits for the person typing. With two
@@ -175,5 +187,6 @@ and `log` events, ignored lines and restarts go to Attaché's log, the `attache`
    `metadata: {attache-channel: "channel.py"}`.
 2. Give the script a PEP 723 header for its dependencies.
 3. Read secrets from the keychain, settings from `ATTACHE_*`, and speak the protocol above,
-   `ask` included.
+   `ask` included. (Inside Attaché every channel has an `ask`; `SidecarChannel` turns it into
+   the `ask` command.)
 4. Add a `setup` subcommand that stores the secrets.

@@ -228,7 +228,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
 <div class="page">
   <header class="letterhead">
     <div class="wordmark">Attaché</div>
-    <div class="filed">Design proposal · v0.7 · 20 October 2026</div>
+    <div class="filed">Design proposal · v0.8 · 20 October 2026</div>
   </header>
 
   <div class="hero">
@@ -245,13 +245,13 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
     </div>
     <p class="namenote">The name is <code>attache</code>, after the assistant on an ambassador's staff and the case an executive carries. It was unclaimed on PyPI on 19 October 2026, so register it before the first release.</p>
     <div class="memo changes">
-      <span class="tag">Changes in v0.7</span>
+      <span class="tag">Changes in v0.8</span>
       <ul>
-        <li>Phase 2 is built, in pull request #34. It adds Slack and Signal as skills that run a sidecar program over JSON lines, approvals, rate limits for group chats, and the <code>render</code> skill. Three review rounds, for correctness, security and simplicity, checked it, and it has 412 tests.</li>
-        <li>The core cap is now 1,900 lines of code, raised for the channels, approvals and their hardening. The core fills it exactly, so phase 3's core work needs cuts or a budget decision of its own (D9, §10).</li>
-        <li>When a member asks for something only you can do, you see their words verbatim, at most 300 characters, and the work runs as your turn only if you approve. A typed answer counts only when exactly one question is open (§8).</li>
-        <li>Sidecars run in their own process group, without the model API keys, and may only hand over files from their own inbox. The render browser can reach nothing but Attaché's own pages (§3, §7).</li>
-        <li>v0.6: phase 1 built (pull request #28, version 0.0.1), the OpenAfterHours theme, Claude Code reaching Attaché's tools over MCP, and one conversation shared by the terminal and the web page.</li>
+        <li>Phase 3 is built, in pull request #35. It adds the <code>mail</code> skill for Outlook (COM or Graph), Gmail and Titan, a morning triage, Word, Excel and PowerPoint files, share links, <code>attache.ask</code> from pages, and starting at login. A security review challenged the designs before they were built; then came reviews, a fix round and a verification round. It has 757 tests.</li>
+        <li>Nothing is sent until you pick Send on a preview the core shows you, built by the mail skill from exactly what would go out. The approval is tied to that account, draft and preview, claimed once, and expires after 15 minutes (§5).</li>
+        <li>Share links work only for a group's pages, see only that group's shared data, and are served from a second loopback port meant for Tailscale Funnel, which has nothing else on it (§7).</li>
+        <li>The core cap is now 2,100 lines of code (the core is at 2,075), and the mail skill's 1,350 (D9, §10).</li>
+        <li>v0.7: phase 2 built (pull request #34): Slack and Signal, approvals, rate limits and the render skill. v0.6: phase 1 built (pull request #28, version 0.0.1).</li>
       </ul>
     </div>
   </div>
@@ -291,7 +291,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
           <li><span class="d-id">D6</span><div><h3>Artifacts are local pages over real data</h3><p>The agent writes HTML. The built-in server adds a small <code>attache</code> bridge to the SQLite store, with live updates. People in chat apps get a PNG snapshot and a signed link.</p></div></li>
           <li><span class="d-id">D7</span><div><h3>Group chats follow a fixed policy</h3><p>Access, then trigger, then role. Each role has its own toolset, and a guest's turn never has private data and outbound sending at the same time.</p></div></li>
           <li><span class="d-id">D8</span><div><h3>Three surfaces, each with one job</h3><p>The CLI sets up and operates. One local web page holds chat and artifacts. Chat apps cover the phone and the group.</p></div></li>
-          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 1,900 lines of code. Blank lines, comments and docstrings don't count, so the budget never rewards dense code. New features arrive as skills, and the contribution guide says so.</p></div></li>
+          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 2,100 lines of code. Blank lines, comments and docstrings don't count, so the budget never rewards dense code. New features arrive as skills, and the contribution guide says so.</p></div></li>
           <li><span class="d-id">D10</span><div><h3>One mail skill for every account</h3><p>Outlook through Outlook classic's COM interface or Microsoft Graph with OAuth, your choice per account. Gmail and Titan over IMAP. All behind the same commands. It reads and files on its own, saves replies as drafts, and sends only after your yes.</p></div></li>
         </ol>
       </section>
@@ -305,7 +305,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
             <thead><tr><th></th><th>nanoclaw v1</th><th>nanoclaw v2</th><th>OpenClaw</th><th>nanobot</th><th>Attaché</th></tr></thead>
             <tbody>
               <tr><th>Language</th><td>TypeScript</td><td>TypeScript</td><td>TypeScript</td><td>Python</td><td>Python</td></tr>
-              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>1,900 lines of code after phase 2, 1,900 cap</td></tr>
+              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>2,075 lines of code after phase 3, 2,100 cap</td></tr>
               <tr><th>Install</th><td>Fork, then <code>/setup</code> in Claude Code</td><td>Same, Docker required</td><td>npm, gateway daemon</td><td><code>uv tool install nanobot-ai</code></td><td><code>uvx attache</code></td></tr>
               <tr><th>Models</th><td>Claude via the Agent SDK</td><td>Claude; Codex, OpenCode, Ollama as skills</td><td>Many, via config</td><td>Native OpenAI and Anthropic SDKs</td><td>Four adapters, any endpoint</td></tr>
               <tr><th>Extending it</th><td>Skills that rewrite your fork</td><td>Skills copy code from registry branches</td><td>Plugins, ClawHub skills</td><td>Built-in channels, skills</td><td>Runtime skills folder, no code changes</td></tr>
@@ -681,8 +681,8 @@ user    = "you@yourdomain.com"</code></pre>
           <div>
             <h3>How sending works</h3>
             <ol>
-              <li>The agent saves the reply in that account's Drafts and shows it to you in your Slack DM.</li>
-              <li>Your yes runs <code>send-draft</code> with a confirmation token, a hash of the recipients, subject and body you saw. If the draft changed in between, the send is refused.</li>
+              <li>The agent saves the reply in that account's Drafts. The mail skill writes a preview of exactly what would go out (from, to, cc, bcc, subject, attachments and body), and the core shows you that preview, not the agent's words, with Send and Not now.</li>
+              <li>Your Send leaves an approval that only that account, draft and preview can use, once, within 15 minutes. If anything changed in between, the send is refused. A send that may already have gone out is never retried. A turn that can run shell commands could still forge an approval; the docs say so.</li>
               <li>Outlook sends it itself, through COM or Graph. Gmail and Titan send through SMTP, with a fixed Message-ID so a retry can't send twice. Titan doesn't file sent mail on its own, so the skill copies it to Sent.</li>
               <li>Every action, read or write, is appended to <code>~/.attache/logs/mail.jsonl</code>.</li>
             </ol>
@@ -703,7 +703,7 @@ user    = "you@yourdomain.com"</code></pre>
           <span class="tag">Off this PC</span>
           <p>Gmail, Titan and Outlook through Graph work wherever Attaché runs. Only the COM route ties the Outlook account to this PC. EWS isn't an option: Microsoft starts blocking it in Exchange Online on 1 October 2026 and removes it on 1 April 2027.</p>
         </div>
-        <p class="small muted">Budget, estimated: about 1,100 lines in four files. Shared commands about 150, COM about 300, IMAP about 250 with IMAPClient, Graph about 400 with msal. Capped at 1,200. It is the biggest skill, and it is still outside the core. Early open-source Outlook MCP servers such as outlook-classic-mcp and Robvred/outlook-mcp are useful for patterns: one Outlook thread, draft-only defaults and an audit log.</p>
+        <p class="small muted">Budget: built at 1,349 lines in four files (shared commands and IMAP about 655, COM and Graph about 695), against a cap of 1,350, raised from the 1,200 first estimated. It is the biggest skill, and it is still outside the core. Early open-source Outlook MCP servers such as outlook-classic-mcp and Robvred/outlook-mcp are useful for patterns: one Outlook thread, draft-only defaults and an audit log.</p>
       </section>
 
       <!-- §6 -->
@@ -803,7 +803,8 @@ async def tool_loop(complete, turn, steps=20):
 await attache.db.put("todos", id,
                 {...t, status: "done"})
 attache.on("todos", render)   <span class="c">// live, over SSE</span>
-<span class="c">// attache.ask(prompt) arrives in phase 3</span></code></pre>
+<span class="c">// in the Attaché window: a turn with db on this page's data</span>
+const answer = await attache.ask("Suggest three more items")</code></pre>
             <p class="small muted">The names follow Claude.ai's artifact storage API, which models already write against. Each page gets a token that reaches only the collections named in its <code>attache-collections</code> meta tag.</p>
           </div>
           <div>
@@ -811,8 +812,8 @@ attache.on("todos", render)   <span class="c">// live, over SSE</span>
             <ol>
               <li>The agent calls <code>artifact(name="trip-checklist", html=…)</code>; the page declares <code>&lt;meta name="attache-collections" content="trip"&gt;</code>.</li>
               <li>In the web app the page opens in a sandboxed frame. It can't reach the internet, other pages or any data it didn't declare.</li>
-              <li>In a chat app the reply is a PNG snapshot plus a signed link that expires. The signature is an HMAC from the standard library. Links are not single-use, because link-preview crawlers open them first.</li>
-              <li>On a laptop, links go out through Tailscale Funnel when you turn sharing on. In the cloud they use the public URL. Cloudflare quick tunnels also work but drop live updates, since they don't pass SSE.</li>
+              <li>In a chat app the reply is a PNG snapshot plus, for a group's page, a share link that lasts 7 days. Its token is random and only its hash is stored. It reaches only that group's shared data, and stops working when the page changes. Links are not single-use, because link-preview crawlers open them first.</li>
+              <li>On a laptop, links go out through Tailscale Funnel when you turn sharing on. Funnel points at a second loopback port that serves share links and nothing else, with caps on what a link can write. In the cloud they use the public URL.</li>
             </ol>
           </div>
         </div>
@@ -975,28 +976,28 @@ attache.on("todos", render)   <span class="c">// live, over SSE</span>
       <!-- §9 -->
       <section id="budget">
         <div class="sec-head"><span class="sec-no">§10</span><h2>Code budget</h2></div>
-        <p>Phase 1 came in at 1,576 lines of code in <code>src/attache</code>, against a cap of 1,600 that CI enforces. Phase 2 added the sidecar runner, approvals, rate limits and the hardening its reviews asked for. The simplicity review cut 54 lines first, and the owner then raised the cap to 1,900, with a target of about 1,850. The core ended phase 2 at exactly 1,900, so phase 3's core work (sharing, <code>attache.ask</code> from pages, the service) needs cuts or a budget decision of its own; the mail, file and knowledge work is all skills. Blank lines, comments and docstrings don't count, so the budget never pushes code to be denser than it should be. Bundled skills, static files and tests don't count either, but each bundled skill has its own cap: 300 lines by default, 1,200 for <code>mail</code>, which has three backends.</p>
+        <p>Phase 1 came in at 1,576 lines of code in <code>src/attache</code>, against a cap of 1,600 that CI enforces. Phase 2 added the sidecar runner, approvals, rate limits and the hardening its reviews asked for. The simplicity review cut 54 lines first, and the owner then raised the cap to 1,900, with a target of about 1,850. For phase 3 the owner raised it to 2,050, then to 2,100 for the review fixes: sharing, <code>attache.ask</code> from pages, persisted requests and their hardening. The core is at 2,075. Mail, files, the triage and the service are all skills. Blank lines, comments and docstrings don't count, so the budget never pushes code to be denser than it should be. Bundled skills, static files and tests don't count either, but each bundled skill has its own cap: 300 lines by default, 1,350 for <code>mail</code>, which has three backends.</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Module</th><th>Job</th><th>Code lines</th><th class="bar">Share</th></tr></thead>
             <tbody>
-              <tr><th>cli.py</th><td>init, chat, run, doctor, skills</td><td class="num">107</td><td class="bar"><span style="--w:43.1%"></span></td></tr>
-              <tr><th>app.py</th><td>Wiring, supervision, clean shutdown</td><td class="num">74</td><td class="bar"><span style="--w:29.8%"></span></td></tr>
-              <tr><th>config.py</th><td>attache.toml and its checks, init_home</td><td class="num">138</td><td class="bar"><span style="--w:55.6%"></span></td></tr>
-              <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">159</td><td class="bar"><span style="--w:64.1%"></span></td></tr>
-              <tr><th>router.py</th><td>Access, roles, fencing, prompt, limits, turns</td><td class="num">190</td><td class="bar"><span style="--w:76.6%"></span></td></tr>
-              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">50</td><td class="bar"><span style="--w:20.2%"></span></td></tr>
-              <tr><th>types.py</th><td>Shared types</td><td class="num">90</td><td class="bar"><span style="--w:36.3%"></span></td></tr>
-              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">43</td><td class="bar"><span style="--w:17.3%"></span></td></tr>
-              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">72</td><td class="bar"><span style="--w:29.0%"></span></td></tr>
-              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">118</td><td class="bar"><span style="--w:47.6%"></span></td></tr>
-              <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">25</td><td class="bar"><span style="--w:10.1%"></span></td></tr>
-              <tr><th>tools.py</th><td>Tools by role, path confinement, ask and request</td><td class="num">213</td><td class="bar"><span style="--w:85.9%"></span></td></tr>
-              <tr><th>skills.py</th><td>Discovery, index, git history</td><td class="num">92</td><td class="bar"><span style="--w:37.1%"></span></td></tr>
-              <tr><th>channels.py</th><td>Channel manager, questions and answers, terminal, sidecars</td><td class="num">248</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
-              <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">44</td><td class="bar"><span style="--w:17.7%"></span></td></tr>
-              <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP endpoint</td><td class="num">234</td><td class="bar"><span style="--w:94.4%"></span></td></tr>
-              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>1,900</strong></td><td class="bar"></td></tr>
+              <tr><th>cli.py</th><td>init, chat, run, doctor, skills, skill</td><td class="num">120</td><td class="bar"><span style="--w:40.1%"></span></td></tr>
+              <tr><th>app.py</th><td>Wiring, the two servers, clean shutdown</td><td class="num">82</td><td class="bar"><span style="--w:27.4%"></span></td></tr>
+              <tr><th>config.py</th><td>attache.toml and its checks, init_home, restrict</td><td class="num">165</td><td class="bar"><span style="--w:55.2%"></span></td></tr>
+              <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">156</td><td class="bar"><span style="--w:52.2%"></span></td></tr>
+              <tr><th>router.py</th><td>Access, roles, fencing, prompt, limits, turns, page turns</td><td class="num">211</td><td class="bar"><span style="--w:70.6%"></span></td></tr>
+              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">50</td><td class="bar"><span style="--w:16.7%"></span></td></tr>
+              <tr><th>types.py</th><td>Shared types</td><td class="num">92</td><td class="bar"><span style="--w:30.8%"></span></td></tr>
+              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">43</td><td class="bar"><span style="--w:14.4%"></span></td></tr>
+              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">72</td><td class="bar"><span style="--w:24.1%"></span></td></tr>
+              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">115</td><td class="bar"><span style="--w:38.5%"></span></td></tr>
+              <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">25</td><td class="bar"><span style="--w:8.4%"></span></td></tr>
+              <tr><th>tools.py</th><td>Tools by role, path confinement, ask, request, mail approvals</td><td class="num">262</td><td class="bar"><span style="--w:87.6%"></span></td></tr>
+              <tr><th>skills.py</th><td>Discovery, index, git history</td><td class="num">93</td><td class="bar"><span style="--w:31.1%"></span></td></tr>
+              <tr><th>channels.py</th><td>Channel manager, questions and answers, terminal, sidecars</td><td class="num">243</td><td class="bar"><span style="--w:81.3%"></span></td></tr>
+              <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">44</td><td class="bar"><span style="--w:14.7%"></span></td></tr>
+              <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP, attache.ask, share links</td><td class="num">299</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
+              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>2,075</strong></td><td class="bar"></td></tr>
             </tbody>
           </table>
         </div>
@@ -1020,7 +1021,7 @@ attache = "attache.cli:main"</code></pre>
           </div>
           <div>
             <div class="code-label">tests/test_budget.py</div>
-<pre><code>CORE_LIMIT = 1900  <span class="c"># blanks, comments, docstrings free</span>
+<pre><code>CORE_LIMIT = 2100  <span class="c"># blanks, comments, docstrings free</span>
 
 def test_core_stays_small():
     lines = sum(code_lines(p) for p in core_files())
@@ -1038,7 +1039,7 @@ def test_core_stays_small():
         <ol class="phases">
           <li><div class="ph">PHASE 1<strong>Local core</strong></div><div><p>Package skeleton and budget test, config, store, terminal and web chat, the four adapters, tools, the skills folder with git, the scheduler, the <code>todos</code> skill and the Home artifact.</p><p class="done"><b>Done when</b><code>uvx attache</code> gives a working assistant on localhost with to-dos and reminders.</p><p class="small muted">Built: pull request #28, version 0.0.1.</p></div></li>
           <li><div class="ph">PHASE 2<strong>Messaging</strong></div><div><p>The sidecar protocol with approval requests, the <code>slack</code> and <code>signal</code> skills, router policy and roles, file sending, the <code>render</code> skill for PNG and PDF.</p><p class="done"><b>Done when</b>you approve actions from a Slack DM, and a family Signal group can ask for answers, files and a shared checklist.</p><p class="small muted">Built: pull request #34. Tested offline with a fake channel; the run against real Slack and Signal accounts is yours.</p></div></li>
-          <li><div class="ph">PHASE 3<strong>Email and files</strong></div><div><p>The <code>mail</code> skill with its three backends: Outlook classic through COM or Microsoft Graph with OAuth, and IMAP for Gmail and Titan, with approved sends. The <code>mailbox</code> knowledge skill and a 07:30 triage task. Then docx, xlsx and pptx skills, sharing through Tailscale Funnel, <code>attache.ask</code> from artifacts, and <code>attache service install</code>.</p><p class="done"><b>Done when</b>each morning the assistant files new mail in all three accounts, drafts the replies you need, sends the ones you approve in Slack, and starts at login.</p></div></li>
+          <li><div class="ph">PHASE 3<strong>Email and files</strong></div><div><p>The <code>mail</code> skill with its three backends: Outlook classic through COM or Microsoft Graph with OAuth, and IMAP for Gmail and Titan, with approved sends. The <code>mailbox</code> knowledge skill and a 07:30 triage task. Then docx, xlsx and pptx skills, sharing through Tailscale Funnel, <code>attache.ask</code> from artifacts, and <code>attache service install</code>.</p><p class="done"><b>Done when</b>each morning the assistant files new mail in all three accounts, drafts the replies you need, sends the ones you approve in Slack, and starts at login.</p><p class="small muted">Built: pull request #35. Tested offline with fakes; the run against your real mail accounts, Tailscale and Task Scheduler is yours.</p></div></li>
           <li><div class="ph">PHASE 4<strong>Cloud</strong></div><div><p>A Dockerfile with <code>ATTACHE_HOME=/data</code>, an owner login for the web page, a Fly.io guide (one machine, a volume, auto-stop off so the scheduler keeps running), an MCP client for the API backends, the <code>codex-cli</code> adapter.</p><p class="done"><b>Done when</b>the same package runs on a small cloud machine, with your folder synced by git.</p></div></li>
         </ol>
       </section>

@@ -12,8 +12,9 @@ import tokenize
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "attache"
-CORE_LIMIT = 1900  # raised from 1,600 for phase 2's sidecars, approvals, limits (issue #20)
+CORE_LIMIT = 2100  # 1,600 in phase 1, 1,900 in phase 2; phase 3's sharing, page turns and fixes
 SKILL_SCRIPT_LIMIT = 300
+SKILL_LIMITS = {"mail": 1350}  # shared and IMAP ~600, Outlook COM and Graph ~700 (owner's call)
 
 
 def code_lines(path: Path) -> int:
@@ -42,7 +43,8 @@ def test_core_stays_small() -> None:
 def test_bundled_skill_scripts_stay_small() -> None:
     for skill in sorted((SRC / "bundled" / "skills").glob("*/")):
         lines = sum(code_lines(p) for p in skill.rglob("*.py"))
-        assert lines <= SKILL_SCRIPT_LIMIT, f"{skill.name} scripts are {lines} lines of code"
+        limit = SKILL_LIMITS.get(skill.name, SKILL_SCRIPT_LIMIT)
+        assert lines <= limit, f"{skill.name} scripts are {lines} lines of code (cap {limit})"
 
 
 def test_counting_ignores_blanks_comments_and_docstrings(tmp_path: Path) -> None:

@@ -1,14 +1,19 @@
 // The Attaché bridge. The server injects it into every artifact as
 //   <script src="/bridge.js" data-token="..." data-artifact="<slug>"></script>
-// and it gives the page window.attache = {db: {list, get, put, delete}, on}.
+// or, on a share link, as <script src="/bridge.js" data-share="<link token>"></script>,
+// and it gives the page window.attache = {db: {list, get, put, delete}, on, ask}.
 // Pages run sandboxed at an opaque origin, so every call is a CORS request carrying the
 // page's token in headers; the server allows only the collections the page declares in its
 // <meta name="attache-collections" content="a,b">.
 (() => {
   "use strict";
-  const { token, artifact } = document.currentScript.dataset;
+  const { token, artifact, share } = document.currentScript.dataset;
   const enc = encodeURIComponent;
-  const auth = { "X-Attache-Token": token, "X-Attache-Artifact": artifact };
+  const auth = share
+    ? { "X-Attache-Share": share }
+    : { "X-Attache-Token": token, "X-Attache-Artifact": artifact };
+  // An EventSource can't send headers, so the event stream takes the token in its query.
+  const events = share ? `share=${enc(share)}` : `artifact=${enc(artifact)}&token=${enc(token)}`;
 
   async function call(method, path, body) {
     const init = { method, headers: { ...auth } };
@@ -54,7 +59,7 @@
     if (!listeners.has(collection)) listeners.set(collection, new Set());
     listeners.get(collection).add(callback);
     if (!source) {
-      source = new EventSource(`/api/events?artifact=${enc(artifact)}&token=${enc(token)}`);
+      source = new EventSource(`/api/events?${events}`);
       source.addEventListener("doc", (event) => {
         const change = JSON.parse(event.data);
         for (const fn of listeners.get(change.collection) || []) {
@@ -69,5 +74,14 @@
     return () => listeners.get(collection).delete(callback);
   }
 
-  window.attache = Object.freeze({ db, on });
+  // ask("Which of these are overdue?") resolves to the assistant's reply, as text. The turn
+  // sees only this page's collections. Pages open in the Attaché window only: never on a
+  // share link.
+  async function ask(prompt) {
+    if (share) throw new Error("not available on shared links");
+    const { reply } = await call("POST", "/api/ask", { prompt: String(prompt) });
+    return reply;
+  }
+
+  window.attache = Object.freeze({ db, on, ask });
 })();

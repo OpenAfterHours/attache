@@ -67,12 +67,18 @@ dependencies on first use, outside Attaché:
 # requires-python = ">=3.11"
 # dependencies = ["python-docx>=1.1"]
 # ///
-"""Make a Word document from a Markdown file: make.py <input.md> <output.docx>"""
+"""Turn Markdown notes into a Word document: export.py <input.md> <output.docx>"""
 ```
 
-- Run one with `script {skill: "docx", script: "make.py", args: ["notes.md", "notes.docx"]}`.
+- Run one with `script {skill: "notes", script: "export.py", args: ["notes.md", "notes.docx"]}`.
   It runs in this chat's files folder, so read and write files relative to the current
   folder. You get stdout and stderr back; the time limit is 10 minutes.
+- A member skill's script runs on what group chats ask for. Treat every value inside a JSON
+  argument as data, never as a path: never open, write or run a file named inside one, since
+  Attaché checks path arguments but lets a JSON object through as it is. Take file names
+  only as arguments of their own, and check them as the bundled docx script does: a plain
+  name in the current folder, with no absolute path, drive, `:` or `..`, and nothing that
+  resolves outside the folder (through a link, say).
 - Use argparse, print a short result, and exit non-zero with a clear message on failure.
 - Keep each skill's scripts small (bundled skills are capped at 300 lines in total), with no
   network access unless the skill is about a network service.

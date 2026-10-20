@@ -42,14 +42,18 @@ header Attaché adds: [name, role, channel, local time].
 fire(task): the scheduler callback (the router registers itself). kind "message" -> send
 "Reminder (set by <name>): <text>" to the task's chat, stored as a user message under the
 setter's id, so a member's words never pass as the assistant's; kind "turn" -> handle() it in
-the background, as a message from the owner in that chat, so a long turn never holds up other
-reminders; one still running from its last time is skipped, so a slow cron routine cannot pile
-up.
+the background (channels.spawn, so stopping cancels it), as a message from the owner in that
+chat, so a long turn never holds up other reminders; one still running from its last time is
+skipped, so a slow cron routine cannot pile up.
+
+page_turn(scope, prompt): a request from an artifact page (attache.ask), as its own sender with
+only the db tool on that page's docs; see its docstring.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -67,6 +71,7 @@ from attache.types import Backend, Endpoint, Inbound, Outbound, Person, Reply, T
 
 if TYPE_CHECKING:
     from attache.app import Services
+    from attache.web import Scope
 
 APOLOGY = "Sorry, I couldn't do that just now."
 BUSY = "I've had a lot of requests here; I'll be back in about {} minutes."
@@ -94,6 +99,13 @@ def _shown(row: dict[str, Any]) -> str:
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+
+
+def _discard(files: list[str]) -> None:
+    """Delete the files of a message from someone Attaché neither answers nor keeps."""
+    for path in files:
+        with contextlib.suppress(OSError):
+            Path(path).unlink()
 
 
 class Router:
@@ -150,7 +162,10 @@ class Router:
         return "\n\n".join(p.strip() for p in parts if p.strip())
 
     async def handle(self, msg: Inbound) -> Reply | None:
-        """Steps 1-8 above. Never raises; a message with no text and no files is ignored."""
+        """Steps 1-8 above. Never raises; a message with no text and no files is ignored. The
+        files of a message that is not admitted, or from a guest who isn't stored, are deleted
+        (_discard). The owner's and members' files stay, answered or not: they stay in the
+        chat's context."""
         try:
             # A chat listed in [chats] is a group whatever the channel says, so a sidecar cannot
             # give it a direct chat's trust.
@@ -159,9 +174,11 @@ class Router:
             empty = not msg.text.strip() and not msg.files
             admitted = None if empty else self.admit(msg)
             if admitted is None:
+                _discard(msg.files)
                 return None
             sender, chat = admitted
             if sender.role == "guest" and not (chat and chat.guests == "public"):
+                _discard(msg.files)
                 return None  # not answered, and not stored either
             store, channels = self.services.store, self.services.channels
             msg_id = store.add_message(msg.chat_key, "user", msg.text, sender.id, sender.name)
@@ -172,7 +189,8 @@ class Router:
                 await channels.send(mirror)
             if not self.triggered(msg, chat):
                 return None
-            limited, notice = (False, "") if sender.role == "owner" else self._limited(msg, sender)
+            owner = sender.role == "owner"
+            limited, notice = (False, "") if owner else self._limited(msg.chat_key, sender)
             async with self.locks[msg.chat_key]:
                 if notice:  # here, so it comes after the replies already queued in this chat
                     await channels.send(Outbound(msg.chat_key, notice))
@@ -181,15 +199,21 @@ class Router:
             logging.getLogger(__name__).exception("message in %s failed", msg.chat_key)
             return None
 
-    def _limited(self, msg: Inbound, sender: Person) -> tuple[bool, str]:
-        """Sliding windows on turns from anyone but the owner (config.limits): per sender and
-        per chat each hour, and across all of them each day. (over a limit?, notice): the first
-        message over a limit gets the notice; later ones get "" (silence) until that window has
-        room again."""
+    def _limited(self, chat_key: str | None, sender: Person) -> tuple[bool, str]:
+        """Sliding windows on turns (config.limits): per sender and per chat each hour, and a
+        daily pool shared by everyone of a kind: guests and pages in one ("guest_daily"), so a
+        public chat cannot use up the members' ("member_daily"). (over a limit?, notice): the
+        first turn over a limit gets the notice; later ones get "" (silence) until that window
+        has room again. handle() exempts the owner. page_turn passes chat_key None: a page
+        counts against itself and the guests' pool, so an auto-refreshing page never silences
+        its chat."""
         limits, now = self.services.config.limits, time.time()
-        keys = (f"sender {sender.id}", f"chat {msg.chat_key}", "everyone")
-        caps = (limits["per_sender_hour"], limits["per_chat_hour"], limits["member_daily"])
-        for key, span, cap in zip(keys, (3600, 3600, 86400), caps, strict=True):
+        pool = "guest" if sender.role in ("guest", "page") else "member"
+        windows = [(f"sender {sender.id}", 3600, limits["per_sender_hour"])]
+        if chat_key is not None:
+            windows.append((f"chat {chat_key}", 3600, limits["per_chat_hour"]))
+        windows.append((f"{pool}s", 86400, limits[f"{pool}_daily"]))
+        for key, span, cap in windows:
             self.recent[key] = [t for t in self.recent[key] if t > now - span]
             if len(self.recent[key]) >= cap:
                 free = self.recent[key][0] + span  # when the window has room again
@@ -197,11 +221,12 @@ class Router:
                     return True, ""  # told already in this window
                 self.noticed[key] = free
                 return True, BUSY.format(max(1, round((free - now) / 60)))
-        for key in keys:
+        for key, _, _ in windows:
             self.recent[key].append(now)
         return False, ""
 
-    async def _turn(self, msg: Inbound, sender: Person, msg_id: int) -> Reply:
+    async def _turn(self, msg: Inbound, sender: Person, msg_id: int, collections=None) -> Reply:
+        """Steps 6-8. collections: a page turn's (page_turn), which db keeps to."""
         store, key = self.services.store, msg.chat_key
         chat = self.services.config.chats.get(key)
         owner = sender.role == "owner"
@@ -211,7 +236,7 @@ class Router:
             timeout = float(ep.options.get("timeout", 900))
             if ep.name not in self.backends:
                 self.backends[ep.name] = self.make_backend(ep)
-            ctx = TurnContext(key, sender, msg.is_group, self.services)
+            ctx = TurnContext(key, sender, msg.is_group, self.services, collections=collections)
             history, text = self._conversation(msg, sender, chat, msg_id)
             system, session = self.system_prompt(sender, msg, chat), store.session_get(key, ep.name)
             turn = Turn(ctx, ep, system, history, text, tools.build(ctx), session)
@@ -222,7 +247,7 @@ class Router:
         except Exception as e:
             logging.getLogger(__name__).exception("turn in %s failed", key)
             reply = Reply(f"That failed: {type(e).__name__}: {e}" if owner else APOLOGY)
-        if reply.text:
+        if reply.text and sender.role != "page":  # a page shows its own reply
             store.add_message(key, "assistant", reply.text)
             out = Outbound(key, reply.text, reply_to=msg.message_id or None)
             await self.services.channels.send(out)
@@ -230,6 +255,22 @@ class Router:
             note = f"{key}: {' '.join(msg.text.split())[:60]}"
             await asyncio.to_thread(skills.commit, self.services.home, note)
         return reply
+
+    async def page_turn(self, scope: Scope, prompt: str) -> str:
+        """A request from an artifact page (attache.ask, web.py), as the page itself
+        ("page:<slug>", role "page") in the page's chat (scope.chat_key, or "local:me" for the
+        owner's pages). Like a guest's direct message: the group_chats endpoint (so never
+        claude-cli), the prompt quoted as data, and rate limits from the guests' pool. Unlike
+        one: no history (msg_id 0 is before every message) and nothing stored or sent, and its
+        only tool is db, on the docs shared with that chat and the page's collections, so owner
+        rights never reach a page. Returns the reply's text."""
+        key = scope.chat_key or "local:me"
+        sender = Person(f"page:{scope.slug}", f"page {scope.slug}", "page")
+        limited, notice = self._limited(None, sender)  # not in its chat's window: see _limited
+        if limited:
+            return notice or APOLOGY
+        msg = Inbound(*key.split(":", 1), sender.id, sender.name, prompt)
+        return (await self._turn(msg, sender, 0, scope.collections)).text
 
     def _conversation(self, msg, sender, chat, msg_id) -> tuple[list[dict[str, str]], str]:
         """(history, text). A direct chat keeps its history as turns. A group puts earlier
@@ -273,8 +314,9 @@ class Router:
             sender, name = config.owner.ids.get(channel, "owner"), config.owner.name
             # handle() makes it a group message when the chat is listed in [chats]
             msg = Inbound(channel, cid, sender, name, task["text"], mentioned=True)
-            self.background[task["id"]] = job = asyncio.create_task(self.handle(msg))
-            job.add_done_callback(lambda _: self.background.pop(task["id"], None))
+            if job := self.services.channels.spawn(self.handle(msg)):  # None once stopping
+                self.background[task["id"]] = job
+                job.add_done_callback(lambda _: self.background.pop(task["id"], None))
         else:
             setter = config.owner if task["by"] == "owner" else config.people.get(task["by"])
             text = f"Reminder (set by {setter.name if setter else 'someone'}): {task['text']}"

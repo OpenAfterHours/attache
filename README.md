@@ -2,12 +2,13 @@
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is under 1,900 lines of Python code, the cap
+folder of skills it can edit itself. The core is under 2,100 lines of Python code, the cap
 CI enforces; everything else is a skill.
 
-> **Status:** phase 2 of the [roadmap](docs/proposal.html): the local core, terminal and web
-> chat, plus Slack and Signal (with group chats, approvals and rate limits). Email (Outlook,
-> Gmail, Titan) arrives in phase 3.
+> **Status:** phase 3 of the [roadmap](docs/proposal.html): the local core, terminal and web
+> chat; Slack and Signal with group chats, approvals and rate limits; email (Outlook, Gmail,
+> Titan) with a morning triage; Word, Excel and PowerPoint files; share links; and starting at
+> login. The cloud arrives in phase 4.
 
 **Documentation:** <https://openafterhours.github.io/attache/>.
 
@@ -19,6 +20,8 @@ uv tool install attache  # keep it
 attache chat             # terminal chat, plus the web page
 attache run              # web page, reminders and channels, no terminal chat
 attache doctor           # check your setup
+attache skill mail login gmail   # a skill's own setup step, run in your terminal
+attache skill service install    # start Attaché when you log in
 ```
 
 ![The web page: chat on the left, the Home page with to-dos and reminders on the right](docs/phase-1-ui.png)
@@ -63,6 +66,12 @@ key_env = "ANTHROPIC_API_KEY"
 - **Channels.** Slack and Signal are skills that ship a small program, a sidecar, which Attaché
   starts with `uv run` and talks to over JSON lines. Any chat app can be added the same way:
   see [docs/channels.md](docs/channels.md).
+- **Mail** is one skill with the same commands for Outlook (Outlook classic on this PC, or
+  Microsoft Graph), Gmail and Titan. Bodies come back marked untrusted, every action is logged,
+  and nothing is sent until you pick Send: see [docs/mail.md](docs/mail.md).
+- **Share links.** With `[web] public_url` set and Tailscale Funnel pointed at a second local
+  port, a group's page gets a link that works on anyone's phone, for that group's shared data
+  only: see [docs/pages.md](docs/pages.md).
 - **Roles.** You are the owner. Group members only reach what is shared with their chat, and
   never files, shell or email. Your own turns inside a group get member tools too, because the
   group's messages are untrusted. When a member asks for something only you can do, Attaché
