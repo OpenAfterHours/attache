@@ -4,11 +4,14 @@ Routes
   GET  /                       static/ui.html. It holds no token: the terminal prints
                                http://127.0.0.1:<port>/#t=<services.ui_token> and the page keeps it.
   GET  /bridge.js              static/bridge.js
+  GET  /fonts/{name}.woff2     static/fonts/ ([a-z0-9-] names only), cached for a year, with
+                               Access-Control-Allow-Origin: * (a sandboxed page's font loads
+                               are CORS requests from the origin "null")
   GET  /a/{name}?t=<token>     artifacts/<name>.html (name [a-z0-9-]+) with the bridge script
                                injected and CSP; 403 without the page's token, or when
                                Sec-Fetch-Dest says it is not loaded in a frame
   GET  /api/artifacts          [{name, src}], src = "/a/<name>?t=<token>", sorted   UI token
-  GET  /api/messages           the last 50 of local:me: [{role, text, ts, sender_name}] UI token
+  GET  /api/messages           the last 50 of local:me, as store.history gives them    UI token
   POST /api/chat {text}        an owner Inbound in local:me; the reply arrives over SSE UI token
   GET|POST /api/db/{c}         list | create   } the UI token or a page's token, under the db
   GET|PUT|DELETE /api/db/{c}/{id}             } tool's rules (store.db_access)
@@ -73,12 +76,13 @@ STATIC = Path(__file__).parent / "static"
 SLUG = re.compile(r"[a-z0-9-]+")
 META = re.compile(r"<meta\b(?=[^>]*name=.attache-collections.)[^>]*content=[\"']([^\"']*)", re.I)
 TAG = '<script src="/bridge.js" data-token="{}" data-artifact="{}"></script>'
-CSP = (
-    "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data:; "
-    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'none'; "
-    "base-uri 'none'; frame-ancestors 'self'"
-)
+PAGE_HEADERS = {
+    "Content-Security-Policy": "sandbox allow-scripts allow-forms; default-src 'self' "
+    "'unsafe-inline' data:; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+    "form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
+}
 UI_CSP = "default-src 'self' 'unsafe-inline' data:; frame-ancestors 'none'; base-uri 'none'"
+FONT_HEADERS = {"Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=31536000, immutable"}
 ERRORS = {PermissionError: 403, KeyError: 404, ValueError: 400}
 SERVER = {"capabilities": {"tools": {}}, "serverInfo": {"name": "attache", "version": __version__}}
 
@@ -86,6 +90,10 @@ SERVER = {"capabilities": {"tools": {}}, "serverInfo": {"name": "attache", "vers
 def artifact_token(key: bytes, name: str) -> str:
     """The token that lets the page `name` load and use the bridge; key is the run's UI token."""
     return hmac.new(key, f"attache:{name}".encode(), "sha256").hexdigest()
+
+
+def page_token(services: Services, name: str) -> str:
+    return artifact_token(services.ui_token.encode(), name)
 
 
 class Scope(NamedTuple):
@@ -105,8 +113,7 @@ def scope_of(services: Services, request: Request, *, query: bool = False) -> Sc
     field = "{}" if query else "x-attache-{}"
     artifact = source.get(field.format("artifact"))
     token = source.get(field.format("token")) or ""
-    ui = services.ui_token
-    expected = artifact_token(ui.encode(), artifact) if artifact else ui
+    expected = page_token(services, artifact) if artifact else services.ui_token
     valid = not artifact or SLUG.fullmatch(artifact)
     if not valid or not hmac.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(401, "bad or missing token")
@@ -121,8 +128,7 @@ def scope_of(services: Services, request: Request, *, query: bool = False) -> Sc
 
 async def body(request: Request) -> dict[str, Any]:
     """The request's JSON body, which must be an object: ValueError (so 400) otherwise."""
-    data = await request.json()
-    if not isinstance(data, dict):
+    if not isinstance(data := await request.json(), dict):
         raise ValueError("send a JSON object")
     return data
 
@@ -191,9 +197,6 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
     store, home = services.store, services.config.home
     store.on_change.append(lambda c, i, d: channel.publish("doc", collection=c, id=i, doc=d))
 
-    def page_token(name: str) -> str:
-        return artifact_token(services.ui_token.encode(), name)
-
     def static(name: str, **options: Any) -> Any:
         return lambda request: FileResponse(STATIC / name, **options)
 
@@ -206,26 +209,31 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         page = home / "artifacts" / f"{name}.html"
         if not SLUG.fullmatch(name) or not page.is_file():
             raise KeyError(f"no artifact {name!r}")
-        token = request.query_params.get("t", "")
+        token, given = page_token(services, name), request.query_params.get("t", "")
         framed = request.headers.get("sec-fetch-dest", "iframe") == "iframe"
-        if not framed or not hmac.compare_digest(token.encode(), page_token(name).encode()):
+        if not framed or not hmac.compare_digest(given.encode(), token.encode()):
             raise PermissionError("pages open inside the Attaché window only")
         text = page.read_text(encoding="utf-8")
-        tag = TAG.format(page_token(name), name)
+        tag = TAG.format(token, name)
         html, found = re.subn(r"</head\s*>", lambda end: tag + end[0], text, count=1, flags=re.I)
-        headers = {"Content-Security-Policy": CSP}
-        return Response(html if found else tag + text, headers=headers, media_type="text/html")
+        return Response(html if found else tag + text, headers=PAGE_HEADERS, media_type="text/html")
+
+    async def font(request: Request) -> Response:
+        name = request.path_params["name"]  # [a-z0-9-] only, so it cannot leave static/fonts/
+        if not re.fullmatch(r"[a-z0-9-]+\.woff2", name) or not (STATIC / "fonts" / name).is_file():
+            raise KeyError(f"no font {name!r}")
+        return FileResponse(STATIC / "fonts" / name, headers=FONT_HEADERS)
 
     async def artifacts(request: Request) -> Response:
         ui_only(request)
         files = (home / "artifacts").glob("*.html")
         names = sorted(p.stem for p in files if SLUG.fullmatch(p.stem))
-        return JSONResponse([{"name": n, "src": f"/a/{n}?t={page_token(n)}"} for n in names])
+        listing = [{"name": n, "src": f"/a/{n}?t={page_token(services, n)}"} for n in names]
+        return JSONResponse(listing)
 
     async def messages(request: Request) -> Response:
         ui_only(request)
-        keep = ("role", "text", "ts", "sender_name")  # reminders come from "Reminder"
-        return JSONResponse([{k: m[k] for k in keep} for m in store.history("local:me", 50)])
+        return JSONResponse(store.history("local:me", 50))  # reminders come from "Reminder"
 
     async def chat(request: Request) -> Response:
         ui_only(request)
@@ -279,6 +287,7 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
     routes = [
         Route("/", static("ui.html", headers={"Content-Security-Policy": UI_CSP})),
         Route("/bridge.js", static("bridge.js", media_type="text/javascript")),
+        Route("/fonts/{name}", font),
         Route("/a/{name}", artifact),
         Route("/api/artifacts", artifacts),
         Route("/api/messages", messages),

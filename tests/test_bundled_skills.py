@@ -58,7 +58,9 @@ def test_templates_inline_the_tokens_and_load_nothing(name: str) -> None:
     page = (KIT / "templates" / name).read_text(encoding="utf-8")
     assert (KIT / "tokens.css").read_text(encoding="utf-8").strip() in page
     assert not EXTERNAL.search(page)
-    assert "@import" not in page and "url(" not in page
+    assert "@import" not in page
+    urls = re.findall(r"url\(([^)]*)\)", page)  # only the fonts Attaché serves itself
+    assert all(re.fullmatch(r'"/fonts/[a-z0-9-]+\.woff2"', url) for url in urls), urls
     assert "innerHTML" not in page and "localStorage" not in page
     assert '<meta name="viewport"' in page and "<title>" in page
     assert re.search(r'<meta name="attache-collections" content="[a-z_,-]+">', page)
@@ -80,8 +82,19 @@ def test_board_is_adaptable() -> None:
     assert "attache.on(COLLECTION" in page
 
 
-def test_tokens_define_both_themes() -> None:
+def test_tokens_are_dark_by_default_with_a_light_scheme() -> None:
     css = (KIT / "tokens.css").read_text(encoding="utf-8")
-    light, dark = css.split("@media (prefers-color-scheme: dark)", 1)
-    names = set(re.findall(r"(--[a-z0-9-]+):\s*#", light))
-    assert names and names == set(re.findall(r"(--[a-z0-9-]+):\s*#", dark))
+    base, light = css.split("@media (prefers-color-scheme: light)", 1)
+    kit = base[base.index("/* The kit's tokens") :]
+    defaults = dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", kit))
+    overrides = dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", light.split("}", 1)[0]))
+    assert "color-scheme: dark light" in kit
+    assert (
+        defaults["--bg"] == "var(--oah-slate-900)" and defaults["--text"] == "var(--oah-slate-100)"
+    )
+    assert (
+        defaults["--accent"] == "var(--oah-orange)"
+        and defaults["--ok"] == "var(--oah-terminal-green)"
+    )
+    assert defaults["--display"] == "var(--font-display)"  # Space Grotesk headings
+    assert len(overrides) >= 8 and set(overrides) <= set(defaults)

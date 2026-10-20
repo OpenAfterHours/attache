@@ -1,53 +1,134 @@
-/* Attaché design tokens (artifact-kit/tokens.css). Paste this whole file into a <style>
-   element at the top of every artifact: pages cannot load other files. Use only these color
-   tokens, so the page follows the viewer's light or dark setting. */
+/* Attaché page kit: design tokens and base styles (artifact-kit/tokens.css), in the
+   OpenAfterHours look: night-sky slate, orange accents, terminal green for good states,
+   Inter, Space Grotesk headings, JetBrains Mono. Paste this whole file into a <style> element
+   at the top of every artifact: pages cannot load other files. Use only the kit tokens below
+   (--bg, --text, --accent ...), so a page is dark by default and light where the viewer
+   prefers it. */
+
+/* OpenAfterHours brand tokens: a copy of Attaché's static/oah-tokens.css. */
 :root {
-  color-scheme: light dark;
-  --bg: #f6f5f2;
-  --surface: #ffffff;
-  --surface-2: #eeece7;
-  --text: #1f1e1c;
-  --muted: #6d6a64;
-  --border: #e0ddd6;
-  --accent: #2b5fd9;
-  --accent-text: #ffffff;
-  --ok: #2e7d32;
-  --warn: #9a5b00;
-  --danger: #b3261e;
-  --radius: 10px;
-  --gap: 12px;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  --oah-orange:           #ff9100;
+  --oah-orange-bright:    #ffa724;
+  --oah-orange-hover:     #e68200;
+  --oah-orange-soft:      #ffb74d;
+  --oah-owl-body:         #c9442a;
+  --oah-owl-eye:          #ffc857;
+  --oah-terminal-green:   #3dd68c;
+
+  --oah-slate-900:        #0d0e11;
+  --oah-slate-850:        #11141a;
+  --oah-slate-800:        #161719;
+  --oah-slate-700:        #1f2430;
+  --oah-slate-600:        #2a3142;
+  --oah-slate-500:        #3b4356;
+  --oah-slate-400:        #64748b;
+  --oah-slate-300:        #a0a4ab;
+  --oah-slate-200:        #cbd0d8;
+  --oah-slate-100:        #e2e4e8;
+  --oah-slate-050:        #f1f5f9;
+
+  --font-sans:    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                  Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Space Grotesk", "Inter", -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", "Roboto Mono", "Fira Code",
+                  ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
 }
-@media (prefers-color-scheme: dark) {
+
+/* The fonts, which Attaché serves at /fonts/: a copy of its static/fonts.css rules. */
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/fonts/inter-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/fonts/inter-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/fonts/inter-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/fonts/inter-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk"; font-style: normal; font-weight: 300 700; font-display: swap;
+  src: url("/fonts/space-grotesk-latin-wght-normal.woff2") format("woff2-variations"),
+       url("/fonts/space-grotesk-latin-wght-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2");
+}
+
+/* The kit's tokens. Dark is the default; a few light values are darkened (not brand colours)
+   so text stays readable: --link, --ok and --warn on white. */
+:root {
+  color-scheme: dark light;
+  --bg: var(--oah-slate-900);
+  --surface: var(--oah-slate-850);
+  --surface-2: var(--oah-slate-800);
+  --raised: var(--oah-slate-700);
+  --text: var(--oah-slate-100);
+  --heading: #ffffff;
+  --muted: var(--oah-slate-300);
+  --border: rgba(216, 222, 233, 0.12);
+  --accent: var(--oah-orange);
+  --accent-hover: var(--oah-orange-bright);
+  --accent-text: var(--oah-slate-900);
+  --accent-tint: rgba(255, 145, 0, 0.12);
+  --link: var(--oah-orange-soft);
+  --ok: var(--oah-terminal-green);
+  --warn: var(--oah-orange-soft);
+  --danger: #ff8f73;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --gap: 12px;
+  --font: var(--font-sans);
+  --display: var(--font-display);
+  --mono: var(--font-mono);
+}
+@media (prefers-color-scheme: light) {
   :root {
-    --bg: #161615;
-    --surface: #1f1f1d;
-    --surface-2: #2a2a27;
-    --text: #ecebe7;
-    --muted: #a3a09a;
-    --border: #363531;
-    --accent: #7aa2ff;
-    --accent-text: #0d1630;
-    --ok: #81c784;
-    --warn: #ffb74d;
-    --danger: #ff8a80;
+    --bg: var(--oah-slate-050);
+    --surface: #ffffff;
+    --surface-2: var(--oah-slate-050);
+    --raised: var(--oah-slate-100);
+    --text: var(--oah-slate-900);
+    --heading: var(--oah-slate-900);
+    --muted: var(--oah-slate-500);
+    --border: rgba(13, 14, 17, 0.12);
+    --accent-hover: var(--oah-orange-hover);
+    --accent-tint: rgba(255, 145, 0, 0.14);
+    --link: #a35400;
+    --ok: #1d8350;
+    --warn: #a35400;
+    --danger: var(--oah-owl-body);
   }
 }
 *, *::before, *::after { box-sizing: border-box; }
 body {
   margin: 0; padding: 16px;
-  background: var(--bg); color: var(--text); font: 15px/1.5 var(--font);
+  background: var(--bg); color: var(--text); font: 15px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
 }
-h1 { margin: 0; font-size: 20px; font-weight: 650; }
+h1 { margin: 0; font: 700 22px/1.25 var(--display); letter-spacing: -0.02em; color: var(--heading); }
 h2 {
-  margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.04em;
+  margin: 0 0 8px; font: 600 11px/1.4 var(--mono); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
 }
+a { color: var(--link); }
+code, pre { font-family: var(--mono); }
 .page { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
 .card {
-  padding: 12px; background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
 }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .grow { flex: 1; min-width: 0; }
@@ -58,29 +139,36 @@ h2 {
 .board { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .column { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .item {
-  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
+  display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  transition: border-color 180ms var(--ease-std);
 }
+.item:hover { border-color: var(--accent); }
 .item .title { overflow-wrap: anywhere; }
 .item.done .title { color: var(--muted); text-decoration: line-through; }
 .badge {
-  padding: 1px 8px; font-size: 12px; white-space: nowrap; color: var(--muted);
-  background: var(--surface-2); border-radius: 999px;
+  padding: 1px 8px; font: 11px/1.6 var(--mono); white-space: nowrap; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
 }
-.badge.today { color: var(--warn); }
-.badge.late { color: var(--danger); }
+.badge.today { color: var(--warn); border-color: var(--warn); }
+.badge.late { color: var(--danger); border-color: var(--danger); }
 input, select, textarea, button { font: inherit; color: inherit; }
 input, select, textarea {
-  min-width: 0; padding: 6px 10px; background: var(--surface);
+  min-width: 0; padding: 7px 11px; background: var(--bg);
   border: 1px solid var(--border); border-radius: var(--radius);
 }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
 button {
-  padding: 6px 12px; cursor: pointer; background: var(--surface-2);
+  padding: 7px 14px; cursor: pointer; font-weight: 600; background: transparent;
   border: 1px solid var(--border); border-radius: var(--radius);
+  transition: background 180ms var(--ease-std), border-color 180ms var(--ease-std);
 }
+button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-button.quiet { padding: 2px 6px; background: none; border-color: transparent; color: var(--muted); }
+button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.quiet { padding: 2px 6px; font-weight: 500; border-color: transparent; color: var(--muted); }
+button.quiet:hover { color: var(--accent); background: var(--accent-tint); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 600px) {
   body { padding: 12px; }

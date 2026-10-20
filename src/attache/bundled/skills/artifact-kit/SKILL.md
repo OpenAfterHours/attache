@@ -17,14 +17,24 @@ The page runs sandboxed and can reach only the collections its meta tag declares
 1. **Self-contained.** One file: inline the whole of `tokens.css` (in this folder) in a
    `<style>` at the top, then your own CSS and JS. Pages cannot load anything from the
    network: no external scripts, styles, fonts or images (the server's policy blocks them).
-   Images must be inline `data:` URLs or SVG.
+   The only exception is the fonts `tokens.css` already declares, which Attaché serves at
+   `/fonts/`. Images must be inline `data:` URLs or SVG.
 2. **Declare collections.** `<meta name="attache-collections" content="todos,_tasks">` in
    `<head>` is the only place a page gets data access. Without it, every call is refused.
 3. **Data through `window.attache` only.** Read data at load and on change; never paste data
    that will change into the HTML.
 4. **`textContent` for data.** Docs hold text from chats, emails and web pages. Build elements
    and set `textContent`; never put data into `innerHTML` or into attributes such as `href`.
-5. **Both themes.** Use only the `var(--...)` color tokens; never hard-code a color.
+5. **The OpenAfterHours look, in both themes.** Pages are dark by default (night-sky slate)
+   and light where the viewer prefers it. Use only the kit's `var(--...)` tokens, never a
+   hard-coded color, and keep to the brand's roles:
+   - `--bg`, `--surface`, `--surface-2` and `--raised` for surfaces, with `--border`;
+     `--text`, `--heading` and `--muted` for text.
+   - `--accent` (orange) for the one primary action, focus and highlights, with
+     `--accent-text` on it; `--link` for links; `--accent-tint` for a selected or hovered row.
+   - `--ok` (terminal green) for done, live or good; `--warn` and `--danger` for the rest.
+   - Fonts: `--font` (Inter) for text, `--display` (Space Grotesk) for headings,
+     `--mono` (JetBrains Mono) for numbers, codes and small labels. `h1` and `h2` are styled.
 6. **Phone width.** It must work at 360px wide: keep the viewport meta, wrap rows, no fixed
    widths.
 7. **No secrets.** Never put tokens, passwords, keys or private notes in a page.
@@ -57,21 +67,12 @@ const stop = attache.on("todos", ({id, doc}) => render());       // live; doc is
   person asks in the chat.
 
 Collections starting with `_` are read-only. `_tasks` lists pending reminders, earliest
-first, each `{id, chat_key, text, kind, due, cron, status, by, created}`:
-
-| Field | Meaning |
-|---|---|
-| `id` | Number; what `schedule {op: "cancel"}` takes. |
-| `chat_key` | The chat it fires in, such as `local:me`. |
-| `text` | The reminder text, or the request a routine runs. |
-| `kind` | `"message"` (sent as text) or `"turn"` (run as a request). |
-| `due` | Next time it fires, in epoch seconds: `new Date(due * 1000)`. |
-| `cron` | Five-field schedule for repeating tasks, or `null`. |
-| `status` | Always `"pending"` here. |
-| `by` | Who set it (a person id). |
-| `created` | When it was set, in epoch seconds. |
-
-`_tasks` has no live updates: refresh it on a timer (Home does every minute).
+first: `id` (a number, what `schedule {op: "cancel"}` takes), `chat_key` (the chat it fires
+in, such as `local:me`), `text` (the reminder, or the request a routine runs), `kind`
+(`"message"` is sent, `"turn"` runs as a request), `due` (next time, in epoch seconds:
+`new Date(due * 1000)`), `cron` (five fields, or `null`), `status` (always `"pending"`), `by`
+(a person id) and `created` (epoch seconds). It has no live updates: refresh it on a timer
+(Home does every minute).
 
 ## Pages made by members or in a group chat
 
@@ -98,7 +99,7 @@ templates themselves unless the owner asks for a new look.
 - The `artifact` tool takes only `name` and `html`, and returns `{"url": ...}`, a link such as
   `http://127.0.0.1:8765/#page=trip-checklist`. Give the person that link: it opens the page
   in the Pages panel of the Attaché window, the only place pages run.
-- Publishing the same name again replaces the page; the open copy reloads.
+- Publishing the same name again replaces the page; it shows the new version when opened.
 - Names become lowercase-and-hyphens slugs, shown under Pages as words ("trip-checklist" is
   "Trip checklist"); choose short, clear ones.
 
@@ -111,5 +112,7 @@ templates themselves unless the owner asks for a new look.
 
 ## Changing the look
 
-Every page shares `tokens.css`, so they look like one product. When the owner asks for a
-different look, edit `tokens.css` and the templates here, then republish the pages they use.
+Every page shares `tokens.css`, so pages look like one product and match the Attaché window
+and the other OpenAfterHours projects. When the owner asks for a different look, change the
+kit tokens in `tokens.css` (never the `--oah-*` brand values, which come from the org's design
+system) and the templates here, then republish the pages that use them.

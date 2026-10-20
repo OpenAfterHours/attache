@@ -20,22 +20,20 @@ publisher the moment the first release lands, and that release also claims the n
    | Owner | `OpenAfterHours` |
    | Repository name | `attache` |
    | Workflow name | `release.yml` |
-   | Environment name | *(leave blank while the repo is private)* |
+   | Environment name | `pypi` |
 
-3. Save. The fields must match the workflow exactly or the upload is rejected.
+3. Save. All five fields must match or the upload is rejected. The environment name in
+   particular is easy to leave blank, and it is part of the claim.
 
-### Later: the `pypi` environment
+### The `pypi` environment
 
-GitHub's free plan only allows environments in public repositories, so the publish job runs
-without one for now. When the repository is made public:
+The `publish` job runs in a GitHub environment named `pypi`; GitHub creates it on the first
+release. It pins the Trusted Publishing claim, and it is where an approval gate goes:
 
-1. In `release.yml`, add `environment: {name: pypi, url: https://pypi.org/p/attache}` to the
-   `publish` job.
-2. On PyPI, edit the publisher and set **Environment name** to `pypi`.
-3. Optionally add a required reviewer under **Settings → Environments → pypi** so a person
-   approves each upload.
-4. Add a tag ruleset (**Settings → Rules → Rulesets**) so only maintainers can create `v*`
-   tags. Until then, anyone with write access can publish by pushing a tag.
+- **Settings → Environments → pypi → Required reviewers** makes a person approve each upload.
+  Leave it unprotected and a pushed tag publishes on its own, which is the intended default.
+- A tag ruleset (**Settings → Rules → Rulesets**, target `v*`) limits who can create release
+  tags. Without one, anyone with write access can publish by pushing a tag.
 
 ## Cutting a release
 

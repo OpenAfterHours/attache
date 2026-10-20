@@ -75,11 +75,12 @@ jobs:
     needs: [verify, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Trusted Publishing: PyPI accepts uploads from this repository and this workflow file, with
-    # no API token stored anywhere. GitHub's free plan only allows environments in public
-    # repositories, so there is no `environment:` here while the repo is private. Once it is
-    # public, add `environment: {name: pypi, url: https://pypi.org/p/attache}` and set the same
-    # environment name on PyPI's publisher; that is also where an approval gate can go.
+    # Trusted Publishing: PyPI accepts uploads from this repository, this workflow file and this
+    # environment, with no API token stored anywhere. The environment is also where a manual
+    # approval gate goes, should you ever want one before an upload.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/attache
     permissions:
       id-token: write  # mints the short-lived OIDC token PyPI exchanges for an upload token
     steps:

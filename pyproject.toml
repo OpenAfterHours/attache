@@ -43,6 +43,8 @@ dev = [
     "httpx",  # starlette.testclient
     "ruff>=0.10",
 ]
+# The documentation site (zensical.toml): `uv run --group docs zensical serve` or `build`.
+docs = ["zensical>=0.0.45"]
 
 [build-system]
 requires = ["hatchling"]

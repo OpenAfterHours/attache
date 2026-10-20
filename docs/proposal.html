@@ -2,29 +2,30 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus&family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: a diplomatic dispatch. Letterhead, then one reading column with a docket index on wide screens; decisions are filed as records D1 to D9 and referenced later. */
+/* Layout: the OpenAfterHours night-sky theme (slate surfaces, orange accents, Space Grotesk display). A header bar, then one reading column with a section index on wide screens; decisions are filed as records D1 to D10 and referenced later. Dark first, like the org's other sites. */
 :root{
-  --paper:#F3F5F9; --sheet:#FFFFFF; --ink:#16203A; --muted:#556079; --rule:#D5DBE5;
-  --brass:#8A5E17; --brass-tint:#F4EBDA; --seal:#A3263A; --ok:#2C7650; --code:#ECEFF5;
-  --bubble-in:#FFFFFF; --bubble-out:#E1EAF7; --chat-bg:#E8ECF2;
-  --f-display:"Marcellus","Optima",Georgia,serif;
-  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --f-mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --paper:#0d0e11; --sheet:#11141a; --ink:#e2e4e8; --muted:#a0a4ab; --rule:#2a3142;
+  --brass:#ff9100; --brass-tint:rgba(255,145,0,.10); --seal:#e0664c; --ok:#3dd68c; --code:#161719;
+  --bubble-in:#161719; --bubble-out:#2a2114; --chat-bg:#0b0c0f; --fill:#ff9100; --on-accent:#0d0e11;
+  --f-display:"Space Grotesk","Inter",system-ui,sans-serif;
+  --f-body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
   --measure:70ch;
+  color-scheme:dark;
 }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --paper:#0E1422; --sheet:#151D30; --ink:#E3E7EF; --muted:#9AA3B8; --rule:#283250;
-    --brass:#D8A852; --brass-tint:#2A2416; --seal:#EC7183; --ok:#62C08F; --code:#111A2C;
-    --bubble-in:#1A2338; --bubble-out:#1E3050; --chat-bg:#0B111D; color-scheme:dark;
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --paper:#f7f8fa; --sheet:#ffffff; --ink:#0d0e11; --muted:#555d6b; --rule:#dfe2e7;
+    --brass:#b35f00; --brass-tint:#fff3e0; --seal:#b23a22; --ok:#1d8a55; --code:#f1f5f9;
+    --bubble-in:#ffffff; --bubble-out:#fff3e0; --chat-bg:#eef0f3; --fill:#ff9100; --on-accent:#0d0e11; color-scheme:light;
   }
 }
-:root[data-theme="dark"]{
-  --paper:#0E1422; --sheet:#151D30; --ink:#E3E7EF; --muted:#9AA3B8; --rule:#283250;
-  --brass:#D8A852; --brass-tint:#2A2416; --seal:#EC7183; --ok:#62C08F; --code:#111A2C;
-  --bubble-in:#1A2338; --bubble-out:#1E3050; --chat-bg:#0B111D; color-scheme:dark;
+:root[data-theme="light"]{
+  --paper:#f7f8fa; --sheet:#ffffff; --ink:#0d0e11; --muted:#555d6b; --rule:#dfe2e7;
+  --brass:#b35f00; --brass-tint:#fff3e0; --seal:#b23a22; --ok:#1d8a55; --code:#f1f5f9;
+  --bubble-in:#ffffff; --bubble-out:#fff3e0; --chat-bg:#eef0f3; --fill:#ff9100; --on-accent:#0d0e11; color-scheme:light;
 }
 *{box-sizing:border-box}
 body{background:var(--paper);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.62;-webkit-font-smoothing:antialiased}
@@ -36,12 +37,13 @@ p,li{text-wrap:pretty}
 .page{max-width:1200px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 96px}
 
 /* Letterhead */
-.letterhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px 24px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
-.wordmark{font-family:var(--f-display);font-size:22px;letter-spacing:.32em;text-transform:uppercase}
+.letterhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px 24px;padding-bottom:14px;border-bottom:1px solid var(--rule)}
+.wordmark{font-family:var(--f-display);font-size:22px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.wordmark::before{content:"";display:inline-block;width:.5em;height:.5em;margin-right:.6em;border-radius:50%;background:var(--fill);box-shadow:0 0 12px rgba(255,145,0,.55);vertical-align:.12em}
 .filed{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .hero{display:grid;gap:22px;padding-block:44px 36px;max-width:880px}
 .eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--brass)}
-h1{font-family:var(--f-display);font-weight:400;font-size:clamp(34px,5.2vw,56px);line-height:1.08;margin:0;text-wrap:balance;letter-spacing:-.005em}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(34px,5.2vw,56px);line-height:1.08;margin:0;text-wrap:balance;letter-spacing:-.02em}
 .lead{font-size:clamp(17px,1.6vw,19px);line-height:1.6;max-width:62ch;margin:0;color:var(--ink)}
 .install{display:grid;gap:10px;max-width:640px}
 .specline{font-family:var(--f-mono);font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;padding:0;list-style:none}
@@ -66,7 +68,7 @@ section{display:flex;flex-direction:column;gap:18px;padding-block:52px 4px;borde
 section:first-child{border-top:0;padding-top:12px}
 .sec-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
 .sec-no{font-family:var(--f-mono);font-size:13px;color:var(--brass);letter-spacing:.06em}
-h2{font-family:var(--f-display);font-weight:400;font-size:clamp(26px,3vw,32px);line-height:1.15;margin:0;text-wrap:balance}
+h2{font-family:var(--f-display);font-weight:600;font-size:clamp(26px,3vw,32px);line-height:1.15;margin:0;text-wrap:balance;letter-spacing:-.01em}
 h3{font-size:17px;font-weight:700;margin:0;line-height:1.35;text-wrap:balance}
 h4{font-size:13px;font-family:var(--f-mono);font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0}
 section p,section ul,section ol{margin:0;max-width:var(--measure)}
@@ -166,7 +168,7 @@ figcaption{font-size:14px;color:var(--muted);max-width:var(--measure)}
 @media (prefers-reduced-motion:reduce){.item.fresh{animation:none}}
 .add-row{display:flex;gap:8px;padding:0 14px 14px}
 .add-row input{flex:1;min-width:0;font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--rule);border-radius:5px;background:var(--sheet);color:var(--ink)}
-button{font:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:5px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer}
+button{font:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid var(--fill);background:var(--fill);color:var(--on-accent);cursor:pointer}
 button.ghost{background:transparent;color:var(--ink);border-color:var(--rule);font-weight:500;font-size:12px;padding:3px 9px}
 button:disabled{opacity:.45;cursor:default}
 .log-panel{display:flex;flex-direction:column;min-width:0}
@@ -202,7 +204,7 @@ button:disabled{opacity:.45;cursor:default}
 /* Pipeline */
 .pipeline{list-style:none;padding:0 !important;display:grid !important;gap:10px !important;max-width:none !important}
 @media (min-width:760px){.pipeline{grid-template-columns:repeat(3,minmax(0,1fr))}}
-.pipeline li{border-top:2px solid var(--ink);padding-top:10px;display:grid;gap:4px}
+.pipeline li{border-top:2px solid var(--brass);padding-top:10px;display:grid;gap:4px}
 .pipeline li b{font-family:var(--f-mono);font-size:12px;color:var(--brass);font-weight:500;letter-spacing:.06em}
 .pipeline li p{color:var(--muted);font-size:14.5px}
 
@@ -220,13 +222,13 @@ button:disabled{opacity:.45;cursor:default}
 .sources li{break-inside:avoid;margin-bottom:6px;color:var(--muted)}
 .sources a{color:var(--muted)}
 .sources a:hover{color:var(--brass)}
-footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
+footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
 </style>
 
 <div class="page">
   <header class="letterhead">
     <div class="wordmark">Attaché</div>
-    <div class="filed">Design proposal · v0.5 · 20 October 2026</div>
+    <div class="filed">Design proposal · v0.6 · 20 October 2026</div>
   </header>
 
   <div class="hero">
@@ -243,9 +245,10 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
     </div>
     <p class="namenote">The name is <code>attache</code>, after the assistant on an ambassador's staff and the case an executive carries. It was unclaimed on PyPI on 19 October 2026, so register it before the first release.</p>
     <div class="memo changes">
-      <span class="tag">Changes in v0.5</span>
+      <span class="tag">Changes in v0.6</span>
       <ul>
-        <li>Phase 1 is built: 1,576 lines of code and 242 tests, reviewed for correctness, security and simplicity, in a pull request on <code>OpenAfterHours/attache</code>.</li>
+        <li>Phase 1 is built: 1,591 lines of code and 257 tests, reviewed for correctness, security and simplicity, in pull request #28 on the now public <code>OpenAfterHours/attache</code>, released as version 0.0.1.</li>
+        <li>Restyled in the OpenAfterHours night-sky theme to match the org's other projects. The web app, its pages and the new docs site share the same design tokens.</li>
         <li>The size budget now counts lines of code only, with a cap of 1,600 (D9, §10).</li>
         <li>Claude Code reaches Attaché's tools through an MCP endpoint on the local web server (§6).</li>
         <li>The terminal and the web page are one conversation, and the web link is printed at start with a token that changes every run (§9).</li>
@@ -363,7 +366,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
               <rect x="16" y="214" width="160" height="34" rx="4" class="d-skill"/>
               <text x="28" y="236" class="d-name">Signal</text><text x="166" y="235" class="d-tag" text-anchor="end">SKILL</text>
               <rect x="16" y="256" width="160" height="34" rx="4" class="d-skill"/>
-              <text x="28" y="278" class="d-name">Discord, Matrix, …</text><text x="166" y="277" class="d-tag" text-anchor="end">SKILLS</text>
+              <text x="28" y="278" class="d-name">More channels</text><text x="166" y="277" class="d-tag" text-anchor="end">SKILLS</text>
 
               <!-- bus -->
               <line x1="196" y1="84" x2="196" y2="273" class="d-line"/>
@@ -461,7 +464,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--ink);font-fam
               <text x="274" y="508" class="d-label">how the assistant edits its own skills</text>
             </svg>
           </div>
-          <figcaption>A message's path through Attaché. Dashed boxes are skills that run as separate processes. The brass path is how the assistant edits its own skills. With the <code>claude-cli</code> backend, Claude Code runs the loop itself and reaches the same tools through an MCP endpoint on the local web server.</figcaption>
+          <figcaption>A message's path through Attaché. Dashed boxes are skills that run as separate processes. The orange path is how the assistant edits its own skills. With the <code>claude-cli</code> backend, Claude Code runs the loop itself and reaches the same tools through an MCP endpoint on the local web server.</figcaption>
         </figure>
 
         <h3>One message, start to finish</h3>

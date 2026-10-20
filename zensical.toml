@@ -1,0 +1,139 @@
+# Zensical configuration for the Attaché documentation site.
+#
+# Build:   uv run --group docs zensical build   -> static site in ./site
+# Preview: uv run --group docs zensical serve   -> local server with live reload
+#
+# .github/workflows/docs.yml builds it on every pull request and publishes it to
+# GitHub Pages on every push to main.
+
+[project]
+
+site_name = "Attaché"
+site_description = "A personal assistant you install with one command. It runs on your own machine, keeps your to-dos and reminders, makes interactive pages on demand, and learns how you work through a folder of skills it can edit itself."
+site_author = "The attache authors"
+site_url = "https://openafterhours.github.io/attache/"
+
+copyright = """
+Copyright &copy; 2026 The attache authors
+"""
+
+repo_url = "https://github.com/OpenAfterHours/attache"
+repo_name = "OpenAfterHours/attache"
+# The default branch is main, so the edit and view buttons point there.
+edit_uri = "edit/main/docs/"
+
+# The OpenAfterHours night-sky theme: brand tokens plus the md-* mapping.
+extra_css = ["assets/stylesheets/oah-theme.css"]
+
+# Explicit navigation, so ordering and titles don't depend on the docs/ layout.
+# docs/proposal.html is a standalone page, copied as a static file and linked
+# from design.md rather than listed here.
+nav = [
+  { "Home" = "index.md" },
+  { "Quickstart" = "quickstart.md" },
+  { "Guides" = [
+    { "Configuration" = "configuration.md" },
+    { "Skills" = "skills.md" },
+    { "Pages" = "pages.md" },
+    { "Security" = "security.md" },
+  ] },
+  { "Design and roadmap" = "design.md" },
+  { "For developers" = [
+    { "Contributing" = "developers/contributing.md" },
+    { "Releasing" = "developers/releasing.md" },
+  ] },
+]
+
+# ----------------------------------------------------------------------------
+# Theme
+# ----------------------------------------------------------------------------
+[project.theme]
+
+language = "en"
+logo = "assets/openafterhours_icon_512.png"
+favicon = "assets/openafterhours_icon_512.png"
+
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+
+# Inter for text and JetBrains Mono for code; oah-theme.css adds Space Grotesk
+# for headings.
+[project.theme.font]
+text = "Inter"
+code = "JetBrains Mono"
+
+# slate first, so the dark night-sky scheme is the default and light is the
+# toggle. oah-theme.css keeps the header dark and the links orange.
+[[project.theme.palette]]
+scheme = "slate"
+primary = "orange"
+accent = "orange"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "orange"
+accent = "orange"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to dark mode"
+
+# ----------------------------------------------------------------------------
+# Markdown extensions
+# ----------------------------------------------------------------------------
+[project.markdown_extensions.abbr]
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.def_list]
+[project.markdown_extensions.footnotes]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.toc]
+permalink = true
+[project.markdown_extensions.pymdownx.betterem]
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.emoji]
+emoji_generator = "zensical.extensions.emoji.to_svg"
+emoji_index = "zensical.extensions.emoji.twemoji"
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+line_spans = "__span"
+pygments_lang_class = true
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.keys]
+[project.markdown_extensions.pymdownx.mark]
+[project.markdown_extensions.pymdownx.smartsymbols]
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
+]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+combine_header_slug = true
+
+# ----------------------------------------------------------------------------
+# Extra
+# ----------------------------------------------------------------------------
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/OpenAfterHours/attache"

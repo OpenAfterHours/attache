@@ -1,0 +1,72 @@
+name: Docs
+
+# Build the Zensical documentation site and publish it to GitHub Pages.
+# Pull requests build it too, without deploying, so a broken page shows up in review.
+#
+# One-time setup: Settings -> Pages -> Build and deployment -> Source = GitHub Actions.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "zensical.toml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "zensical.toml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Least privilege: build only reads the repo; deploy alone gets the Pages and OIDC scopes.
+permissions:
+  contents: read
+
+# One Pages deploy at a time, and never cancel one halfway. Pull request builds get their own
+# group, so they neither wait for nor cancel a deploy.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('docs-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_LOCKED: "1"  # a stale uv.lock fails the build instead of being re-resolved
+
+# Actions are pinned to commit SHAs: the deploy job can write to the Pages site.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Configure Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      # --strict fails the build on a link to a missing page or anchor.
+      - name: Build the docs site
+        run: uv run --only-group docs zensical build --clean --strict
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
