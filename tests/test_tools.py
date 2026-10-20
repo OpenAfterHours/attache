@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -542,11 +543,24 @@ def test_ask_shows_the_drafts_own_preview_and_approves_only_on_send(
     shown = {(text, tuple(options)) for _, _, text, options in hub.asked}
     assert shown == {(PREVIEW, ("Send", "Not now"))}  # verbatim, with the options fixed
     assert sorted(p.name for p in folder.iterdir() if p.suffix != ".preview") == ["abc12345"]
-    assert (folder / "abc12345").read_bytes() == b""  # written on Send only
+    approval = (folder / "abc12345").read_text(encoding="utf-8")  # written on Send only
+    assert approval == sha256(PREVIEW)  # what the owner saw, for mail.py to check
     for bad in ("nopreview1", "short1", "../../etc/x", "a" * 65, "abc-12345"):
         with pytest.raises(FileNotFoundError, match="no preview for that fingerprint"):
             call(ctx(services), "ask", question="Send it?", approves=bad)
     assert len(hub.asked) == 3  # refused before anyone is asked
+    # A turn with a shell rewrites a preview after the draft was made: the owner approves the
+    # text they saw, whose hash then differs from the preview mail.py makes of the real draft.
+    rewritten = "Send from work (imap)\nTo: sam@example.com\n\nJust a hello."
+    (folder / "jkl24680.preview").write_text(rewritten, encoding="utf-8")
+    hub.answers = ["Send"]
+    call(ctx(services), "ask", question="Send it?", approves="jkl24680")
+    assert hub.asked[-1][2] == rewritten
+    assert (folder / "jkl24680").read_text(encoding="utf-8") == sha256(rewritten) != approval
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def test_an_approval_checks_the_requester_is_still_a_member(services: app.Services) -> None:

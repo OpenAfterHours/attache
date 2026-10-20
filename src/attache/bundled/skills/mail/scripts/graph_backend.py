@@ -9,7 +9,7 @@ the cause.
 Ids are immutable ids (Prefer: IdType="ImmutableId"), which survive moves, and bodies arrive as
 plain text (Prefer: outlook.body-content-type="text"). When Graph is busy (429, 503), a request
 is tried again after its Retry-After. A ValueError from a send, a reply or a new event means
-nothing went out (GraphRefusedError is one), so mail.py can let the owner's approval stand.
+nothing went out (GraphRefusedError, NotSentError), so mail.py can let the approval stand.
 
 msal and msal-extensions are imported only inside functions. Tests pass `client`, an object
 whose `request(method, path, body)` stands in for Graph and whose `app` stands in for msal's
@@ -45,14 +45,10 @@ NO_CLIENT_ID = (
     'Set client_id = "<app id>" for this account in accounts.toml: the Application (client) '
     "ID of an app registered in Microsoft Entra, with http://localhost as a redirect URI."
 )
-NO_BROWSER = (
-    "Signing in to Microsoft needs a web browser, and none could be opened here. "
-    "Run the login on a computer with a desktop session."
-)
+NO_BROWSER = "Signing in to Microsoft needs a web browser: run the login where one can open."
 CAUSES = {  # Microsoft's AADSTS error codes, as the cause and the fix
     700082: "The Microsoft sign-in lapsed after 90 days without use. {login}",
     50173: "The Microsoft sign-in ended when your password changed. {login}",
-    50133: "The Microsoft sign-in ended when your password changed. {login}",
     65001: "This account hasn't granted the app's permissions. {login}, and accept them",
     90094: (
         "Your organisation blocks unverified apps: an admin has to approve this app in "
@@ -76,6 +72,10 @@ class GraphError(RuntimeError):
 class GraphRefusedError(GraphError, ValueError):
     """Graph refused the request (a 4xx, or 503 Unavailable), so it certainly didn't act. As a
     ValueError, it tells mail.py that nothing was sent."""
+
+
+class NotSentError(ValueError):
+    """The request never reached Graph (no sign-in, or no connection), so nothing was sent."""
 
 
 def failure(error: urllib.error.HTTPError) -> GraphError:
@@ -388,7 +388,7 @@ class Backend:
         if accounts:
             result = app.acquire_token_silent_with_error(SCOPES, account=accounts[0])
         if not result or "access_token" not in result:
-            raise PermissionError(self._cause(result))
+            raise NotSentError(self._cause(result))
         return result["access_token"]
 
     def _cause(self, result: dict | None) -> str:
@@ -414,14 +414,17 @@ class Backend:
         for attempt in range(1, TRIES + 1):
             try:
                 with urllib.request.urlopen(request, timeout=60) as response:
-                    raw = response.read()
-                return json.loads(raw) if raw else {}
+                    return json.loads(response.read() or b"{}")  # /send answers with nothing
+            except json.JSONDecodeError:  # a 2xx all the same, so Graph may have acted
+                raise GraphError(200, "the answer wasn't JSON") from None
             except urllib.error.HTTPError as error:
                 wait = retry_after(error)
                 if attempt == TRIES or not retried(method, error.code) or waited + wait > PATIENCE:
                     raise failure(error) from None
                 waited += wait
                 time.sleep(wait)
+            except urllib.error.URLError as error:  # only while connecting or writing the request
+                raise NotSentError(f"Microsoft Graph can't be reached: {error.reason}") from None
         raise AssertionError("the last try returns or raises")
 
     def _all(self, path: str) -> Iterator[dict]:

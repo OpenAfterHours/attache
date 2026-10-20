@@ -115,7 +115,9 @@ When `[web] public_url` is set, a page made in a chat gets a share link,
 - **Capped writes.** Anyone with the link can write, so each link may make at most 60
   changes an hour (refused tries count too), each at most 64 KB, and adds no document once
   the chat has 500 in that collection; it can still edit the ones there. Over a cap, the
-  answer is 429, 413 or 403. Pages in the Attaché window have no such caps.
+  answer is 429, 413 or 403. The size is checked from the `Content-Length` header before
+  any of the body is read, so a write without one, or sent in chunks (whose size is known
+  only at the end), gets 413 straight away. Pages in the Attaché window have no such caps.
 - **Short-lived.** A link lasts 7 days, and dies at once if the page changes or is deleted.
 - **Kept as a hash.** The token is 24 random bytes, and Attaché stores only its SHA-256 (in
   the read-only `_shares` collection), so the database holds no working links.

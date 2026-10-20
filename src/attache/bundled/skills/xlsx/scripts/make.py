@@ -31,6 +31,17 @@ SHEET = {"name", "rows", "header", "widths", "formats"}
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?")  # becomes a real date
 FIT = (8, 60)  # the narrowest and widest fitted column, in characters
 LIVE = ("=", "+", "-", "@")  # text a spreadsheet may take for a formula when it is typed
+# The functions a formula may use: arithmetic, aggregates and logic. Nothing that links,
+# fetches, looks a cell up by name or reaches another program (HYPERLINK, WEBSERVICE,
+# INDIRECT, ...), because a sheet a member asked for is opened by the owner or the group.
+FUNCTIONS = {
+    "SUM", "AVERAGE", "MIN", "MAX", "COUNT", "COUNTA", "MEDIAN", "PRODUCT",
+    "ROUND", "ROUNDUP", "ROUNDDOWN", "ABS",
+    "IF", "IFERROR", "AND", "OR", "NOT",
+    "SUMIF", "COUNTIF", "AVERAGEIF",
+    "TODAY", "DATE",
+}  # fmt: skip
+CALL = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)\s*\(")  # a function name and its "("
 
 
 def inside(name: str, suffix: str) -> Path:
@@ -74,15 +85,29 @@ def check_keys(found: dict[str, Any], allowed: set[str], where: str) -> None:
         raise ValueError(f"{where}: unknown key {', '.join(unknown)}; known: {sorted(allowed)}")
 
 
+def check_formula(formula: str) -> None:
+    """ValueError naming the problem, for a formula that uses more than FUNCTIONS. A name
+    inside quoted text counts too, which only ever refuses more."""
+    if "|" in formula:
+        raise ValueError(f"formula {formula}: | is not allowed (it runs another program)")
+    if "[" in formula:
+        raise ValueError(f"formula {formula}: [ is not allowed (it reads another workbook)")
+    for name in CALL.findall(formula):
+        if name.upper() not in FUNCTIONS:
+            allowed = ", ".join(sorted(FUNCTIONS))
+            raise ValueError(f"formula {formula}: {name} is not allowed; use only {allowed}")
+
+
 def write(target: Any, value: Any) -> None:
-    """Put one JSON value in a cell. Only {"formula": "=SUM(B2:B4)"} makes a formula: text is
-    always text, even when it starts with "=", because it may come from someone's message
-    (=HYPERLINK or =WEBSERVICE would run in Excel). ISO dates become dates; numbers,
-    true/false and null stay as they are."""
+    """Put one JSON value in a cell. Only {"formula": "=SUM(B2:B4)"} makes a formula, using
+    FUNCTIONS alone: text is always text, even when it starts with "=", because it may come
+    from someone's message (=HYPERLINK or =WEBSERVICE would run in Excel). ISO dates become
+    dates; numbers, true/false and null stay as they are."""
     if isinstance(value, dict):
         formula = value.get("formula")
         if set(value) != {"formula"} or not isinstance(formula, str) or not formula.strip("= "):
             raise ValueError(f'cell {value!r}: a formula is {{"formula": "=SUM(B2:B4)"}}')
+        check_formula(formula)
         target.value = formula if formula.startswith("=") else f"={formula}"
     elif isinstance(value, str) and DATE.fullmatch(value):
         moment = datetime.fromisoformat(value)

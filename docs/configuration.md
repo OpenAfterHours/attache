@@ -286,7 +286,7 @@ port = 8765
 | `host` | `127.0.0.1` (the default), `localhost` or `::1`. Attaché serves this machine only, and refuses to start with any other address. |
 | `port` | The port for the web page. Default `8765`. Change it if something else uses that port. |
 | `public_url` | Optional. The `https://` address where people off this machine open share links, such as `https://pc.tailnet.ts.net`: a host and perhaps a port, no path. Empty or left out, sharing is off. |
-| `public_port` | The port on `127.0.0.1` that serves share links when `public_url` is set. Default `port + 1`, so `8766`. |
+| `public_port` | The port on `127.0.0.1` that serves share links when `public_url` is set. Default `port + 1`, so `8766` (`65534` when `port` is `65535`). It must differ from `port`. |
 
 If a port is taken when you start, Attaché stops with a message saying so:
 

@@ -168,13 +168,19 @@ Moving more than 20 messages at once needs your yes too.
 3. On **Send**, Attaché records your approval, and the skill sends the draft.
 
 The approval is tied to a **fingerprint**: a hash of the preview, the account and the draft.
-When you press Send, Attaché's core writes an empty file named after that fingerprint in
-`~/.attache/.approvals/`. The send command then checks:
+When you press Send, Attaché's core writes a file named after that fingerprint in
+`~/.attache/.approvals/`, holding a hash of the exact text it showed you. The send command then
+checks:
 
 - **The draft is still the one you saw.** It reads the draft again and rebuilds the preview.
   If anything changed in between (a recipient or a Bcc added, an attachment, the text edited),
-  it refuses: "the draft changed since it was approved". A yes for one account's draft can't
-  send another account's.
+  it refuses: "it changed since it was approved". It also compares the rebuilt preview with
+  the hash of what you were shown, so a preview file rewritten after drafting is no use: "the
+  preview changed since it was approved". A yes for one account's draft can't send another
+  account's.
+- **The preview can't be dressed up.** In the header lines (To, Cc, Bcc, Subject, attachment
+  names), line breaks and control characters become spaces, so a subject can't draw a fake
+  `To:` line. The body is shown as it is.
 - **You approved it, recently.** The approval file must exist and be under 15 minutes old.
   The send claims it by renaming it, so two sends can't share one yes, and it is deleted once
   the mail has gone: one yes sends one message.
@@ -182,10 +188,12 @@ When you press Send, Attaché's core writes an empty file named after that finge
 If a send fails, what happens next depends on where it failed. When nothing can have left
 your machine (the mail server refused the sign-in, the draft can't be found), your approval
 is put back, so you needn't be asked again. When the mail may have gone (the connection broke
-after the server took it), the skill keeps a marker, `<fingerprint>.sending`, and refuses to
-send that draft again: "this may already have been sent; check Sent before asking again". For
-Gmail and Titan the skill also records each Message-ID in `~/.attache/.mail/sent.jsonl` just
-before handing the message over, and never sends a recorded one again. (For anyone writing a
+after the server took it), the skill keeps a marker, `<fingerprint>.sending`. For Outlook it
+then refuses that draft for good: "this may already have been sent; check Sent, then edit it
+to resend" (an edited draft is a new one to approve). For Gmail and Titan the skill records
+each Message-ID in `~/.attache/.mail/sent.jsonl` just before handing the message over, and
+that record decides: a recorded one is never sent again ("already sent at …: check Sent"), and
+one that was never recorded, because the try stopped before that, can be approved and sent. (For anyone writing a
 backend: a `ValueError` from `send_draft`, `respond` or `create_event` means nothing was sent,
 and any other exception means it may have been.)
 
@@ -210,7 +218,7 @@ refused: send that one from your mail app. The draft is removed from Drafts afte
 | Accounts (no secrets) | `~/.attache/skills/mail/accounts.toml` |
 | Gmail and Titan passwords | Your system keyring, service `attache-mail`, one entry per account name |
 | Graph sign-in | `~/.attache/.mail/graph-cache.bin`, encrypted for your user (DPAPI on Windows) |
-| Previews and approvals | `~/.attache/.approvals/`: a `.preview` file per draft, an empty file per approved send, both removed after the send |
+| Previews and approvals | `~/.attache/.approvals/`: a `.preview` file per draft and a file per approved send, both removed after the send; previews of drafts never sent go after a day |
 | Gmail and Titan sends | `~/.attache/.mail/sent.jsonl`: time, account, Message-ID and number of recipients |
 | Audit log | `~/.attache/logs/mail.jsonl` |
 

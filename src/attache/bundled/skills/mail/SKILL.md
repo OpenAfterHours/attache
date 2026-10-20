@@ -70,11 +70,14 @@ to do. Ids look like `gmail:1801234567890123456`; pass them back exactly as give
    draft in Drafts and say so. To change it, make a new draft and ask again.
 
 `send-draft` refuses when:
-- the draft changed after the yes ("the draft changed since it was approved"): ask again;
-- the owner didn't press Send for that F ("not approved"), or did so over 15 minutes ago;
+- the draft changed after the yes ("it changed since it was approved"), or the preview the
+  owner saw isn't the real one any more ("the preview changed"): ask again;
+- the owner didn't press Send for that F ("not approved"), or did so over 15 minutes ago
+  ("the approval expired");
 - the same approval was used already: each Send sends once;
-- an earlier try may have sent it ("this may already have been sent"): ask the owner to look
-  in Sent, and never send it again yourself.
+- an earlier try may have sent it ("this may already have been sent", "already sent at"): ask
+  the owner to look in Sent, and never send it again yourself. To send it after all, they
+  change the draft, which makes a new one to approve.
 
 Without `--fingerprint`, `send-draft` returns `needs_approval` and the `preview` text.
 
@@ -94,7 +97,7 @@ Titan accounts may have a `send_limit_hour`; a send past it is refused until lat
 
 Both work like sending: the first call returns `{needs_approval: F, preview}`. Ask with
 `ask {question: "...", approves: "F"}`, and on Send run the same command again with
-`--fingerprint F`.
+`--fingerprint F`. On Gmail and Titan accounts both are refused straight away.
 
 ## When something fails
 

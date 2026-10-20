@@ -40,8 +40,9 @@ which Tailscale Funnel exposes as [web] public_url. Nothing else exists there.
   GET  /bridge.js, /fonts/...  as above
   /api/db/..., /api/events     as above, for share scopes only: the X-Attache-Share header,
                                or ?share= for SSE. Writes through a link are capped: 64 KB
-                               a body (413), 60 an hour per link (429), and no new doc once
-                               the chat has 500 in that collection (403)
+                               a body by its Content-Length, checked before reading, so no
+                               length or chunks is 413 too; 60 an hour per link (429); and
+                               no new doc once the chat has 500 in that collection (403)
 
 Security
   Artifacts are written by the agent and may quote emails or web pages, so they are untrusted.
@@ -389,8 +390,12 @@ def create_app(
             writes[hour] = writes.get(hour, 0) + 1
             if writes[hour] > 60:
                 raise HTTPException(429, "this link has made 60 changes this hour; try again later")
-            if len(await request.body()) > 64 * 1024:
-                raise HTTPException(413, "a change through a share link is at most 64 KB")
+            # Checked before reading a byte. A chunked body's size is known only once it has all
+            # come, and it wins over any Content-Length, so it is refused whatever that says.
+            length = request.headers.get("content-length", "")
+            chunked = "transfer-encoding" in request.headers
+            if chunked or not length.isdigit() or int(length) > 64 * 1024:
+                raise HTTPException(413, "send a Content-Length of at most 64 KB, not chunks")
             new = not doc_id or store.doc_get(collection, doc_id) is None
             if new and len(store.doc_list(collection, shared_with=scope.chat_key)) >= 500:
                 raise PermissionError(f"{collection} already holds 500 docs for this chat")

@@ -129,7 +129,8 @@ def load(home: Path | None = None) -> Config:
     for section, keys in SECTIONS.items():
         settings.update(_check(path, section, raw.get(section, {}), keys))
     for key in ("port", "public_port"):  # a number, or digits in a string: "9000" is fine
-        value = settings.get(key, 8765 if key == "port" else settings["port"] + 1)
+        step = -1 if settings.get("port") == 65535 else 1  # public_port: the next one, in range
+        value = settings.get(key, 8765 if key == "port" else settings["port"] + step)
         if not str(value).isdigit() or not 0 < int(value) < 65536:
             raise ValueError(f"{path}: [web] {key} must be a port, 1 to 65535, not {value!r}")
         settings[key] = int(value)

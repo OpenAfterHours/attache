@@ -288,7 +288,10 @@ async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
         return "couldn't reach the owner just now"
     choice = await answer
     if approves and choice == "Send":  # the core's mark, which mail.py checks and claims
-        (ctx.services.home / ".approvals" / approves).touch()
+        # The sha256 of exactly what the owner saw (UTF-8, newlines as \n): mail.py compares
+        # it with the preview it makes afresh, so a preview rewritten after drafting is no use.
+        seen = hashlib.sha256(question.encode("utf-8")).hexdigest()
+        (ctx.services.home / ".approvals" / approves).write_text(seen, encoding="utf-8")
     return choice or "no answer"
 
 

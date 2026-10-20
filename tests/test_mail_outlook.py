@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import importlib.util
 import inspect
 import io
@@ -448,6 +449,8 @@ def test_com_needs_windows(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
         com.connect()
     assert com.Backend("outlook", {}, home).doctor() == (False, com.NOT_WINDOWS)
     assert com.new_outlook() is False
+    with pytest.raises(ValueError, match="only on Windows"):  # not "no such item": and unsent
+        com.Backend("outlook", {}, home).send_draft("00000000ABCD")
 
 
 def test_com_refuses_to_run_elevated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1026,6 +1029,8 @@ def serve(monkeypatch: pytest.MonkeyPatch, home: Path, *answers: Any) -> tuple[A
     def urlopen(request: urllib.request.Request, timeout: int) -> Answer:
         asked.append(request.get_method())
         answer = queue.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
         if isinstance(answer, bytes):
             return Answer(answer)
         status, after = answer
@@ -1037,6 +1042,28 @@ def serve(monkeypatch: pytest.MonkeyPatch, home: Path, *answers: Any) -> tuple[A
     backend = graph.Backend("outlook", {"client_id": "app-id"}, home)
     monkeypatch.setattr(backend, "_token", lambda: "t0k")
     return backend, asked, slept
+
+
+def test_graph_failures_before_the_send_mean_not_sent(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mail.py puts the approval back on a ValueError, so only a failure Graph can't have acted
+    on is one: no sign-in, or no connection. Waiting for the answer, it may have gone."""
+    backend = graph.Backend("outlook", {"client_id": "app-id"}, home)
+    monkeypatch.setattr(backend, "_msal", lambda: FakeMsal([]))
+    with pytest.raises(graph.NotSentError, match="Not signed in"):
+        backend.send_draft("A")
+    for answer, unsent in [
+        (urllib.error.URLError(OSError(11001, "getaddrinfo failed")), True),  # offline
+        (urllib.error.URLError(ConnectionRefusedError("refused")), True),
+        (TimeoutError("timed out"), False),  # urllib passes these on as they are
+        (ConnectionResetError("reset"), False),
+        (b"<html>", False),  # a 2xx, but not JSON
+    ]:
+        backend, _, _ = serve(monkeypatch, home, answer)
+        with pytest.raises((OSError, ValueError, RuntimeError)) as error:
+            backend.request("POST", "/me/messages/A/send", None)
+        assert isinstance(error.value, ValueError) is unsent, answer
 
 
 def test_graph_tries_again_while_busy(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1422,9 +1449,10 @@ def test_mail_py_drives_the_outlook_backends(
     bcc(native, False)
     assert run("send-draft", draft["id"])["needs_approval"] == approved
     assert not run("send-draft", draft["id"], "--fingerprint", approved)["ok"]  # no yes yet
-    (approvals / approved).write_text("", encoding="utf-8")  # the core's ask, on Send
+    shown = hashlib.sha256(preview.encode("utf-8")).hexdigest()
+    (approvals / approved).write_text(shown, encoding="utf-8")  # the core's ask, on Send
     sent = run("send-draft", draft["id"], "--fingerprint", approved)
-    assert sent["ok"] and sent["sent"] is True
+    assert sent["ok"] and sent["sent"] is True, sent
     left = {path.name for path in approvals.iterdir()}
     assert not left & {approved, f"{approved}.sending", f"{approved}.preview"}
     assert not run("send-draft", draft["id"], "--fingerprint", approved)["ok"]  # once only

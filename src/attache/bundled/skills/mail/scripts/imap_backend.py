@@ -47,7 +47,6 @@ TITAN_FIX = "for Titan, switch on 'Enable Titan on Other Apps' in webmail, or us
 PARTS = "this draft has parts Attaché can't show you; send it from your mail app"
 SEEN, FLAGGED, DRAFT = rb"\Seen", rb"\Flagged", rb"\Draft"
 Json = dict[str, Any]
-Text = str | None
 
 
 def host_port(text: str, port: int) -> tuple[str, int]:
@@ -112,9 +111,8 @@ def compose(sender: str, fields: Json, headers: dict[str, str]) -> EmailMessage:
         msg["Cc"] = ", ".join(fields["cc"])
     msg["Subject"] = fields["subject"]
     msg["Date"] = formatdate(localtime=True)
-    for name, value in headers.items():
-        if value:
-            msg[name] = value
+    for name, value in headers.items():  # only those with a value
+        msg[name] = value
     msg.set_content(fields["body"])
     return msg
 
@@ -133,13 +131,12 @@ def draft_fields(native: str, msg: EmailMessage) -> Json:
     }
 
 
-def utc(moment: datetime) -> str:
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # naive means local time
-
-
 class Backend:
+    guards_resends = True  # sent.jsonl: what went once is never sent again, so mail.py may retry
+
     def __init__(self, account: str, settings: Json, home: Path, client: Any = None) -> None:
         self.account, self.settings, self.home = account, settings, home
+        self.records = home / ".mail" / "sent.jsonl"  # a line per message given to SMTP
         self.user = str(settings.get("user") or "")
         self.gmail = settings.get("kind") == "gmail"
         self._imap = client
@@ -273,14 +270,19 @@ class Backend:
             "folder": folder,
             "subject": str(msg.get("subject", "")),
             "from": {"name": name, "smtp": address},
-            "received_utc": utc(row[b"INTERNALDATE"]),
+            "received_utc": row[b"INTERNALDATE"].astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "preview": text_of(msg),  # mail.py flattens and caps it
             "unread": SEEN.lower() not in flags,
             "flagged": FLAGGED.lower() in flags,
         }
 
     def list(
-        self, folder: Text, unread: bool, limit: int, since: datetime | None, query: Text
+        self,
+        folder: str | None,
+        unread: bool,
+        limit: int,
+        since: datetime | None,
+        query: str | None,
     ) -> list[Json]:
         folder = folder or "INBOX"
         validity = self._select(folder)
@@ -345,7 +347,7 @@ class Backend:
 
     # drafts and sending
 
-    def draft(self, to, cc, subject, body, reply_to: Text, reply_all: bool) -> Json:
+    def draft(self, to, cc, subject, body, reply_to: str | None, reply_all: bool) -> Json:
         """Save a new message, or a reply to reply_to (to, cc and subject then come from it),
         in Drafts. A reply holds only the body given, without the original quoted."""
         threading = {}
@@ -387,16 +389,15 @@ class Backend:
     def _may_send(self, message_id: str, recipients: int) -> None:
         """Refuse a Message-ID that went to SMTP before, by <home>/.mail/sent.jsonl, and a
         send past send_limit_hour."""
-        path = self.home / ".mail" / "sent.jsonl"
         hour_ago = (datetime.now(UTC) - timedelta(hours=1)).isoformat(timespec="seconds")
         records, recent = [], 0
-        for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
+        log = self.records
+        for line in log.read_text(encoding="utf-8").splitlines() if log.exists() else []:
             with contextlib.suppress(ValueError):  # a line cut short
                 records.append(json.loads(line))
         for record in records:
             if record.get("message_id") == message_id:
-                again = "check Sent; to send it again, draft it again"
-                raise ValueError(f"already sent at {record.get('ts')}: {again}")
+                raise ValueError(f"already sent at {record.get('ts')}: check Sent")
             if record.get("account") == self.account and record.get("ts", "") >= hour_ago:
                 recent += record.get("recipients", 0)
         limit = self.settings.get("send_limit_hour")
@@ -404,11 +405,10 @@ class Backend:
             raise ValueError(f"{self.account} sends to {limit} people an hour; {recent} so far")
 
     def _record(self, message_id: str, recipients: int) -> None:
-        path = self.home / ".mail" / "sent.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
+        self.records.parent.mkdir(parents=True, exist_ok=True)
         when = datetime.now(UTC).isoformat(timespec="seconds")
         record = {"ts": when, "account": self.account, "message_id": message_id}
-        with path.open("a", encoding="utf-8") as log:
+        with self.records.open("a", encoding="utf-8") as log:
             log.write(json.dumps({**record, "recipients": recipients}) + "\n")
 
     def send_draft(self, native: str) -> str:
@@ -419,7 +419,7 @@ class Backend:
             draft = draft_fields(native, msg)
             recipients = draft["to"] + draft["cc"] + draft["bcc"]
             keep = ("Message-ID", "In-Reply-To", "References")
-            headers = {name: str(msg.get(name, "")) for name in keep}
+            headers = {name: str(msg[name]) for name in keep if msg[name]}
             outgoing = compose(self.user, draft, headers)
             self._may_send(headers["Message-ID"], len(recipients))
             session = self._smtp()

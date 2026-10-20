@@ -205,7 +205,7 @@ def test_load_accepts_a_byte_order_mark(home: Path) -> None:
         ("[web]\nport = 8080.5\n", r"\[web\] port must be a port"),
         ("[web]\npublic_port = []\n", r"\[web\] public_port must be a port, 1 to 65535, not \[\]"),
         ("[web]\npublic_port = 0\n", r"\[web\] public_port must be a port"),
-        ("[web]\nport = 65535\n", r"\[web\] public_port must be a port, 1 to 65535, not 65536"),
+        ("[web]\npublic_port = 65536\n", r"\[web\] public_port must be a port, 1 to 65535"),
         ("[web]\nport = 9000\npublic_port = 9000\n", r"\[web\] public_port must differ from port"),
         ('[web]\npublic_url = "http://pc.ts.net"\n', r"\[web\] public_url must be"),  # not https
         ('[web]\npublic_url = "https://pc.ts.net/s"\n', r"\[web\] public_url must be"),  # a path
@@ -252,6 +252,12 @@ def test_public_url_and_port(home: Path) -> None:
     assert (cfg.port, cfg.public_port) == (9000, 9001)  # the next port up
     write(home, '[web]\npublic_url = "https://pc.ts.net"\npublic_port = "9100"\n')
     assert config.load(home).public_port == 9100  # coerced, as port is
+    for public_url in ("", "https://pc.ts.net"):  # the very top port loads, sharing on or off
+        write(home, f'[web]\nport = 65535\npublic_url = "{public_url}"\n')
+        cfg = config.load(home)
+        assert (cfg.port, cfg.public_port) == (65535, 65534)  # the next one down: in range
+    write(home, '[web]\nport = "65535"\n')  # as a string too
+    assert config.load(home).public_port == 65534
 
 
 def test_person(cfg: config.Config) -> None:

@@ -471,6 +471,46 @@ def test_xlsx_text_never_becomes_a_formula(fakes: None) -> None:
     assert (cells[6].value, cells[6].data_type, cells[6].quotePrefix) == ("=SUM(A1:A2)", "f", False)
 
 
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "=SUM(B2:B4)",
+        "ROUND(SUM(B2:B4) / COUNT(B2:B4), 2)",
+        "=IF(AND(A1>0, NOT(B1)), TODAY(), DATE(2026, 1, 1))",
+        '=sumif(a1:a9, ">5")',  # any case
+        "=Sheet2!A1*2",
+        "=A1+B1",
+    ],
+)
+def test_xlsx_formulas_may_use_arithmetic_aggregates_and_logic(formula: str, fakes: None) -> None:
+    sheet = load("xlsx").build({"sheets": [{"rows": [[{"formula": formula}]]}]}).sheets[0]
+    assert sheet.cells[(1, 1)].data_type == "f"
+
+
+@pytest.mark.parametrize(
+    ("formula", "named"),
+    [
+        ('=HYPERLINK("https://example.com", "click")', "HYPERLINK"),
+        ('=WEBSERVICE("https://example.com")', "WEBSERVICE"),
+        ('=SUM(A1, HYPERLINK("x"))', "HYPERLINK"),  # nested
+        ('=INDIRECT("A1")', "INDIRECT"),
+        ("=_xlfn.XLOOKUP(A1, B:B, C:C)", "_xlfn.XLOOKUP"),
+        ('=sum (A1:A2) + Info("osversion")', "Info"),
+        ("=cmd|' /C calc'!A0", "|"),  # DDE
+        ("=[Budget.xlsx]Sheet1!A1", "["),  # another workbook
+        ("='C:\\docs\\[Budget.xlsx]Sheet1'!A1", "["),
+    ],
+)
+def test_xlsx_refuses_other_formulas_naming_the_function(
+    formula: str, named: str, chat: Path, fakes: None, capsys: Any
+) -> None:
+    spec = {"sheets": [{"rows": [[{"formula": formula}]]}]}
+    assert load("xlsx").main([json.dumps(spec), "x.xlsx"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: formula ") and f"{named} is not allowed" in err
+    assert len(err.strip().splitlines()) == 1 and not (chat / "x.xlsx").exists()
+
+
 def test_xlsx_fitted_widths_stay_between_8_and_60(fakes: None) -> None:
     rows = [["x" * 200, "y"]]
     sheet = load("xlsx").build({"sheets": [{"rows": rows}]}).sheets[0]

@@ -4,6 +4,7 @@ a fake SMTP and a fake keyring. No server, password or keyring is touched."""
 from __future__ import annotations
 
 import email
+import hashlib
 import imaplib
 import importlib.util
 import json
@@ -746,6 +747,13 @@ def mail_py(home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any, fake: Fake
     return run
 
 
+def approve(home: Path, f: str) -> None:
+    """The core's ask on Send: the sha256 of the preview text it read and showed."""
+    shown = (home / ".approvals" / f"{f}.preview").read_text(encoding="utf-8")
+    seen = hashlib.sha256(shown.encode("utf-8")).hexdigest()
+    (home / ".approvals" / f).write_text(seen, encoding="utf-8")
+
+
 def test_draft_approve_and_send_through_mail_py(
     home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:
@@ -757,7 +765,7 @@ def test_draft_approve_and_send_through_mail_py(
     assert draft["id"].startswith("titan:") and draft["body"] == "Thursday works.\n"
     preview = (home / ".approvals" / f"{f}.preview").read_text(encoding="utf-8")
     assert preview.startswith("Send from titan (imap)\nTo: dan@example.com\nCc: sam@example.com\n")
-    (home / ".approvals" / f).touch()  # the owner's Send, as the core's ask writes it
+    approve(home, f)  # the owner's Send
     sent = run("send-draft", draft["id"], "--fingerprint", f)
     assert sent == {"ok": True, "sent": True, "id": "titan:" + imap.encode_id("Sent", 7, 1)}
     assert len(fake.sent) == 1 and not list((home / ".approvals").iterdir())
@@ -773,15 +781,26 @@ def test_a_titan_send_that_failed_after_smtp_is_not_sent_again(
     args = ["--account", "titan", "--to", "dan@example.com", "--subject", "Quote", "--body", "Yes."]
     draft = run("draft-new", *args)["draft"]
     f = draft["fingerprint"]
-    (home / ".approvals" / f).touch()
+    approve(home, f)
     fake.append_fails = OSError("connection reset by peer")
     first = run("send-draft", draft["id"], "--fingerprint", f)
-    assert "this may have been sent: check Sent before asking again" in first["error"]
+    assert first["error"] == "connection reset by peer; it may have been sent: check Sent first"
     fake.append_fails = None
-    (home / ".approvals" / f).touch()  # asked again, and the owner said yes again
+    approve(home, f)  # asked again, and the owner said yes again
     retry = run("send-draft", draft["id"], "--fingerprint", f)
-    assert retry["error"] == "this may already have been sent; check Sent before asking again"
-    (home / ".approvals" / f"{f}.sending").unlink()  # even with that marker gone by hand
-    third = run("send-draft", draft["id"], "--fingerprint", f)
-    assert third["error"].startswith("already sent at ")
-    assert len(fake.sent) == 1
+    assert retry["error"].startswith("already sent at ") and retry["error"].endswith("check Sent")
+    assert len(fake.sent) == 1  # the record in sent.jsonl, not the leftover marker, decides
+
+
+def test_a_titan_try_that_stopped_before_smtp_can_be_approved_again(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    fake = FakeIMAP()
+    run = mail_py(home, monkeypatch, capsys, fake)
+    args = ["--account", "titan", "--to", "dan@example.com", "--subject", "Quote", "--body", "Yes."]
+    draft = run("draft-new", *args)["draft"]
+    f = draft["fingerprint"]
+    (home / ".approvals" / f"{f}.sending").write_text("x", encoding="utf-8")  # killed mid-way
+    approve(home, f)
+    assert run("send-draft", draft["id"], "--fingerprint", f)["sent"]  # nothing was recorded
+    assert len(fake.sent) == 1 and not list((home / ".approvals").iterdir())

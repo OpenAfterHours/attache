@@ -44,10 +44,7 @@ SEARCHED = ["subject", "fromname", "fromemail"]  # a Table filter can't match th
 SWITCH = r"Software\Microsoft\Office\16.0\Outlook\Preferences"  # UseNewOutlook = 1: switched
 
 NOT_WINDOWS = 'Outlook classic (COM) works only on Windows: set backend = "graph" instead.'
-ELEVATED = (
-    "Attaché is running as administrator, and Windows refuses COM between elevated and normal "
-    "programs. Run it in your own normal session; `attache service install` sets that up."
-)
+ELEVATED = "Attaché runs as administrator, and Windows then refuses COM: run it unelevated."
 NEW_OUTLOOK = (
     "This PC uses the new Outlook app, which has no COM. Switch back to Outlook classic (turn "
     'off the "New Outlook" toggle), or set backend = "graph" for this account in accounts.toml.'
@@ -57,23 +54,27 @@ MOVED = "No such item. Outlook ids change when an item moves, so list the folder
 NOT_DRAFT = "That isn't an unsent draft."
 
 
+class UnreachableError(RuntimeError, ValueError):
+    """Outlook can't be reached, so nothing was sent: a ValueError, which mail.py reads so."""
+
+
 def connect() -> Any:
     """Outlook.Application: the Outlook already running, else one COM starts."""
     if sys.platform != "win32":
-        raise RuntimeError(NOT_WINDOWS)
+        raise UnreachableError(NOT_WINDOWS)
     if elevated():
-        raise RuntimeError(ELEVATED)
+        raise UnreachableError(ELEVATED)
     try:
         import win32com.client
     except ImportError:
-        raise RuntimeError(NO_PYWIN32) from None
+        raise UnreachableError(NO_PYWIN32) from None
     with contextlib.suppress(Exception):  # not running yet
         return win32com.client.GetActiveObject("Outlook.Application")
     try:
         return win32com.client.Dispatch("Outlook.Application")
     except Exception as error:
         problem = NEW_OUTLOOK if new_outlook() else f"Outlook classic didn't start: {error}"
-        raise RuntimeError(problem) from None
+        raise UnreachableError(problem) from None
 
 
 def elevated() -> bool:
@@ -433,8 +434,9 @@ class Backend:
 
     def _item(self, native: str) -> Any:
         """The item with this EntryID. A ValueError: mail.py knows nothing was sent."""
+        session = self.session  # outside the try: a connection error says what it is
         try:
-            return self.session.GetItemFromID(native)
+            return session.GetItemFromID(native)
         except Exception:
             raise ValueError(MOVED) from None
 

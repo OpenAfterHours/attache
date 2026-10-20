@@ -943,6 +943,56 @@ def test_share_link_bodies_are_at_most_64_kb(env: Any, public: TestClient) -> No
     assert r.status_code == 200  # a page in the Attaché window isn't capped
 
 
+def test_share_link_refuses_a_body_of_unknown_size(env: Any, public: TestClient) -> None:
+    """A chunked body has no Content-Length, so its size is known only once it is all read."""
+    _, header = share(env)
+    sent: list[int] = []
+
+    def chunks() -> Any:
+        for n in range(1000):  # 4 MB, in 4 KB chunks
+            sent.append(n)
+            yield b"x" * 4096
+
+    r = public.post("/api/db/todos", headers=header, content=chunks())
+    assert r.status_code == 413 and "Content-Length" in r.text
+    assert sent == []  # refused before a single chunk was read
+    for length in ("", "ten", "-1", str(64 * 1024 + 1)):
+        headers = {**header, "Content-Type": "application/json", "Content-Length": length}
+        assert public.post("/api/db/todos", headers=headers, content=b"{}").status_code == 413
+    assert env.sv.store.doc_list("todos") == []
+    r = env.client.post("/api/db/todos", headers=auth("family"), content=iter([b'{"a": 1}']))
+    assert r.status_code == 200  # the Attaché window takes chunks
+
+
+@pytest.mark.parametrize("framing", ["", "Content-Length: 10\r\n"])
+def test_share_link_answers_a_chunked_body_before_reading_it(env: Any, framing: str) -> None:
+    """Over a real socket: only the headers are sent, and the 413 comes at once. Chunks win
+    over a Content-Length, so a small one beside them changes nothing."""
+    token, _ = share(env)
+    app = web.create_app(env.sv, env.channel, public=True)
+
+    async def scenario(sock: socket.socket) -> bytes:
+        server = asyncio.create_task(web.serve(app, sock))
+        for _ in range(100):  # until uvicorn is listening
+            try:
+                reader, writer = await asyncio.open_connection(*sock.getsockname()[:2])
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        head = f"POST /api/db/todos HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Attache-Share: {token}\r\n"
+        writer.write(f"{head}Transfer-Encoding: chunked\r\n{framing}\r\n".encode())
+        reply = await asyncio.wait_for(reader.readuntil(b"\r\n"), 2)  # no body sent yet
+        writer.close()
+        server.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await server
+        return reply
+
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        assert asyncio.run(scenario(sock)).startswith(b"HTTP/1.1 413")
+    assert env.sv.store.doc_list("todos") == []
+
+
 def test_share_link_writes_at_most_60_an_hour(
     env: Any, public: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -178,9 +178,11 @@ def log_lines(home: Path) -> list[dict[str, Any]]:
 
 
 def approve(home: Path, fingerprint: str) -> None:
-    """What the core's ask tool does when the owner picks Send on the preview."""
-    assert (home / ".approvals" / f"{fingerprint}.preview").is_file()  # ask refuses without
-    (home / ".approvals" / fingerprint).touch()
+    """What the core's ask tool does when the owner picks Send: it reads the preview (refusing
+    without one), shows it, and writes the sha256 of the text it showed."""
+    shown = (home / ".approvals" / f"{fingerprint}.preview").read_text(encoding="utf-8")
+    seen = hashlib.sha256(shown.encode("utf-8")).hexdigest()
+    (home / ".approvals" / fingerprint).write_text(seen, encoding="utf-8")
 
 
 def approvals(home: Path) -> list[str]:
@@ -265,6 +267,7 @@ def test_open_backend_imports_the_sibling_module(home: Path, monkeypatch: Any) -
 def test_help_and_values_that_start_with_a_dash(mail: ModuleType, capsys: Any) -> None:
     usage = run(mail, capsys, "send-draft", "-h")  # inside the one JSON object
     assert usage["ok"] is False and "usage: mail.py send-draft" in usage["error"]
+    assert "[--fingerprint FINGERPRINT] id" in usage["error"]
     assert "--fingerprint" in usage["error"]
     run(mail, capsys, "search", "--account", "gmail", "--query=-in:chats from:dan")
     assert backend(mail, "gmail").calls[-1][-1] == "-in:chats from:dan"
@@ -447,7 +450,7 @@ def test_bcc_and_attachments_are_in_the_preview_and_the_fingerprint(
     held = backend(mail, "titan").drafts["d1"]
     held["bcc"] = ["spy@example.com"]  # added in the mail app after the yes
     changed = send(mail, capsys, draft)
-    assert "the draft changed since it was approved" in changed["error"]
+    assert changed["error"] == "it changed since it was approved: show it to the owner again"
     held["bcc"], held["attachments"] = [], [{"name": "invoice.exe", "size": 4}]
     assert "changed since it was approved" in send(mail, capsys, draft)["error"]
     asked = run(mail, capsys, "send-draft", draft["id"])
@@ -455,6 +458,23 @@ def test_bcc_and_attachments_are_in_the_preview_and_the_fingerprint(
     held["bcc"] = ["spy@example.com"]
     assert "Bcc: spy@example.com" in run(mail, capsys, "send-draft", draft["id"])["preview"]
     assert backend(mail, "titan").sent == []
+
+
+def test_preview_fields_stay_on_one_line_and_newlines_are_plain(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    draft = draft_new(mail, capsys)
+    held = backend(mail, "titan").drafts["d1"]
+    held["subject"] = "Invoice\nTo: you-only@example.com\u2028Cc: none"  # drawing fake lines
+    held["attachments"] = [{"name": "a\rb.pdf", "size": 2}]
+    held["body"] = "Line one\r\nline two\rline three"  # Outlook's line ends
+    preview = run(mail, capsys, "send-draft", draft["id"])["preview"]
+    assert preview.split("\n")[4] == "Subject: Invoice To: you-only@example.com Cc: none"
+    assert "Attachments: a b.pdf (2 bytes)" in preview
+    assert preview.endswith("\n\nLine one\nline two\nline three")  # the body, newlines plain
+    f = fingerprint("titan", "d1", preview)
+    approve(home, f)  # the core hashes the text as it reads it back, with \n newlines
+    assert run(mail, capsys, "send-draft", draft["id"], "--fingerprint", f)["sent"]
 
 
 def test_sending_needs_the_owners_approval_of_the_preview(
@@ -467,7 +487,7 @@ def test_sending_needs_the_owners_approval_of_the_preview(
     assert asked == {"ok": True, "needs_approval": f, "preview": preview}
     assert preview.startswith("Send from gmail (imap)\nTo: dan@example.com\n")
     wrong = run(mail, capsys, "send-draft", draft["id"], "--fingerprint", "0123456789abcdef")
-    assert "the draft changed since it was approved" in wrong["error"]
+    assert "it changed since it was approved" in wrong["error"]
     unapproved = send(mail, capsys, draft)
     assert unapproved["error"] == (
         f"not approved: show it to the owner with the ask tool (approves: {f}) first"
@@ -485,16 +505,37 @@ def test_sending_needs_the_owners_approval_of_the_preview(
     assert log_lines(home)[-2]["approved"] is True and "approved" not in log_lines(home)[-1]
 
 
+def test_a_rewritten_preview_is_no_use(mail: ModuleType, capsys: Any, home: Path) -> None:
+    draft = draft_new(mail, capsys)
+    f = draft["fingerprint"]
+    saved = home / ".approvals" / f"{f}.preview"
+    saved.write_text(saved.read_text(encoding="utf-8").replace("dan@", "nobody@"), "utf-8")
+    approve(home, f)  # the owner approved the rewritten text, not the real draft
+    result = send(mail, capsys, draft)
+    expected = f"the preview changed since it was approved: ask again (approves: {f})"
+    assert result["error"] == expected
+    assert backend(mail, "titan").sent == [] and f not in approvals(home)
+
+
 def test_an_approval_lasts_15_minutes(mail: ModuleType, capsys: Any, home: Path) -> None:
     draft = draft_new(mail, capsys)
     approve(home, draft["fingerprint"])
     old = time.time() - 16 * 60
     os.utime(home / ".approvals" / draft["fingerprint"], (old, old))
     result = send(mail, capsys, draft)
-    assert result["error"].startswith("the approval is over 15 minutes old: ask again")
-    assert backend(mail, "titan").sent == [] and approvals(home) == [
-        f"{draft['fingerprint']}.preview"
-    ]
+    assert result["error"].startswith("the approval expired: ask again")
+    left = approvals(home)
+    assert backend(mail, "titan").sent == [] and left == [f"{draft['fingerprint']}.preview"]
+
+
+def test_previews_of_drafts_never_sent_go_after_a_day(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    first = draft_new(mail, capsys)
+    old = time.time() - 25 * 60 * 60
+    os.utime(home / ".approvals" / f"{first['fingerprint']}.preview", (old, old))
+    second = run(mail, capsys, "draft-reply", "gmail:101", "--body", "Another")["draft"]
+    assert approvals(home) == [f"{second['fingerprint']}.preview"]
 
 
 def test_a_send_that_certainly_failed_keeps_the_owners_yes(
@@ -512,26 +553,38 @@ def test_a_send_that_certainly_failed_keeps_the_owners_yes(
 def test_a_send_that_may_have_gone_is_never_retried(
     mail: ModuleType, capsys: Any, home: Path
 ) -> None:
-    draft, titan = draft_new(mail, capsys), backend(mail, "titan")
+    draft, outlook = draft_new(mail, capsys, "outlook"), backend(mail, "outlook")
     approve(home, draft["fingerprint"])
-    titan.send_fails = OSError("connection reset by peer")
+    outlook.send_fails = OSError("connection reset by peer")
     failed = send(mail, capsys, draft)
-    assert failed["error"] == (
-        "connection reset by peer; this may have been sent: check Sent before asking again"
-    )
+    assert failed["error"] == "connection reset by peer; it may have been sent: check Sent first"
     assert f"{draft['fingerprint']}.sending" in approvals(home)
-    titan.send_fails = None
+    outlook.send_fails = None
     approve(home, draft["fingerprint"])  # even with a fresh yes
     retry = send(mail, capsys, draft)
-    assert retry["error"] == "this may already have been sent; check Sent before asking again"
-    assert titan.sent == []
+    assert retry["error"] == "this may already have been sent; check Sent, then edit it to resend"
+    assert outlook.sent == []
+
+
+def test_a_backend_that_guards_resends_decides_itself(
+    mail: ModuleType, capsys: Any, home: Path
+) -> None:
+    draft, titan = draft_new(mail, capsys), backend(mail, "titan")
+    titan.guards_resends = True  # as the IMAP backend, with its record of what went
+    approve(home, draft["fingerprint"])
+    titan.send_fails = OSError("killed")  # a try that stopped: .sending is left behind
+    send(mail, capsys, draft)
+    titan.send_fails = None
+    approve(home, draft["fingerprint"])
+    assert send(mail, capsys, draft)["sent"] and titan.sent == ["d1"]
+    assert approvals(home) == []
 
 
 def test_respond_and_create_event_need_approval(mail: ModuleType, capsys: Any, home: Path) -> None:
     asked = run(mail, capsys, "respond", "outlook:m1", "tentative", "--body", "Running late")
     preview = "\n".join(
         [
-            "Tentatively accept an invitation in outlook",
+            "Reply 'tentative' to an invitation in outlook",
             f"Invitation: {SECRET_SUBJECT} from dan@example.com",
             "",
             "Running late",
@@ -542,7 +595,7 @@ def test_respond_and_create_event_need_approval(mail: ModuleType, capsys: Any, h
     assert f == fingerprint("outlook", "m1", preview)
     approve(home, f)
     other = run(mail, capsys, "respond", "outlook:m1", "decline", "--fingerprint", f)
-    assert "the reply changed since it was approved" in other["error"]
+    assert "it changed since it was approved" in other["error"]
     args = ["respond", "outlook:m1", "tentative", "--body", "Running late", "--fingerprint", f]
     assert run(mail, capsys, *args) == {"ok": True, "sent": True, "id": "outlook:m1"}
     assert backend(mail, "outlook").calls[-1] == ("respond", "m1", "tentative", "Running late")
@@ -570,15 +623,17 @@ def test_respond_and_create_event_need_approval(mail: ModuleType, capsys: Any, h
     assert attendees == ["ann@x.com", "dan@x.com"] and body is None and approvals(home) == []
 
 
-def test_imap_accounts_give_the_approval_back_for_meetings(
+def test_imap_accounts_are_refused_meetings_before_the_owner_is_asked(
     mail: ModuleType, capsys: Any, home: Path
 ) -> None:
-    asked = run(mail, capsys, "respond", "titan:m1", "accept")
-    approve(home, asked["needs_approval"])
-    backend(mail, "titan").send_fails = NotImplementedError("not in v1 for IMAP accounts")
-    args = ["respond", "titan:m1", "accept", "--fingerprint", asked["needs_approval"]]
-    assert run(mail, capsys, *args)["error"] == "not in v1 for IMAP accounts"
-    assert asked["needs_approval"] in approvals(home)  # nothing went
+    event = ["--subject", "S", "--start", "2026-10-23T09:00", "--end", "2026-10-23T10:00"]
+    for argv in (
+        ["respond", "titan:m1", "accept"],
+        ["create-event", "--account", "gmail", *event],
+    ):
+        assert run(mail, capsys, *argv)["error"] == "not in v1 for IMAP accounts"
+    assert not (home / ".approvals").exists()  # no preview, so nothing for ask to show
+    assert backend(mail, "titan").calls == []
 
 
 def test_login_is_only_for_the_owners_terminal(

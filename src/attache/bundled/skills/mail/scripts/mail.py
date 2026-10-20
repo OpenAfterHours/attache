@@ -28,15 +28,19 @@ yes for exactly what will happen:
    A draft's preview and F come back with the draft itself.
 2. The core's `ask {approves: F}` shows that file to the owner, verbatim, with Send and Not
    now. Send writes <home>/.approvals/<F>.
+   The core writes the sha256 of the text it showed into that file.
 3. The command with --fingerprint F checks that F is still the item's fingerprint, then claims
-   the approval by renaming it to <F>.sending (atomic, so it is used once). Approvals older
-   than 15 minutes are refused. After the action <F>.sending and <F>.preview are deleted.
+   the approval by renaming it to <F>.sending (atomic, so it is used once). It refuses one
+   whose hash isn't that of its own preview made afresh (so a rewritten .preview file is no
+   use), or that is older than 15 minutes. After the action <F>.sending and <F>.preview are
+   deleted; previews of drafts never sent go after a day.
 
 The backends are sibling modules (imap_backend, com_backend, graph_backend), imported only when
 an account uses one, each with `Backend(account, settings, home)` and plain-dict results. A
 ValueError (or NotImplementedError) from send_draft, respond or create_event means that nothing
 left this machine, so the approval is put back. Any other exception means it may have gone:
-<F>.sending stays, and a retry is refused until the owner checks Sent.
+<F>.sending stays, and a retry is refused, unless the backend has `guards_resends` (IMAP:
+it never sends a recorded Message-ID twice, and decides itself).
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -57,10 +62,8 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent  # <home>/skills/mail/scripts
 BACKENDS = ("imap", "com", "graph")
-MANY = 20  # moving more messages than this at once needs --many, after the owner's yes
-PREVIEW = 200  # characters of a summary's preview
 FRESH = 15 * 60  # seconds an approval stays good
-RESPONSES = {"accept": "Accept", "tentative": "Tentatively accept", "decline": "Decline"}
+DAY = 24 * 60 * 60  # previews of drafts never sent are cleared after this
 Json = dict[str, Any]
 
 
@@ -132,18 +135,13 @@ class Mail:
         return name, self.backend(name), native
 
 
-def between(value: int, most: int) -> int:
-    """A count from the agent, kept between 1 and `most`."""
-    return max(1, min(value, most))
-
-
 def tag(account: str, item: Json) -> Json:
     """A backend's item as the agent sees it: account-prefixed id, capped preview, untrusted."""
     out = {**item, "account": account, "untrusted": True}
     if item.get("id"):
         out["id"] = f"{account}:{item['id']}"
     if "preview" in item:
-        out["preview"] = " ".join(str(item["preview"]).split())[:PREVIEW]
+        out["preview"] = " ".join(str(item["preview"]).split())[:200]  # characters
     return out
 
 
@@ -186,31 +184,48 @@ def fingerprint(account: str, native: str, preview: str) -> str:
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
+def as_shown(lines: list[str], body: str) -> str:
+    """A preview: one line per field, a blank line, the body. In the fields, control characters
+    and line breaks become spaces, so a subject can't draw a fake To: line. Newlines are \\n,
+    as the core's ask reads the file back before hashing what it showed."""
+    fields = [re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", line) for line in lines]
+    return "\n".join([*fields, "", body]).replace("\r\n", "\n").replace("\r", "\n")
+
+
 def offer(mail: Mail, account: str, native: str, preview: str) -> str:
     """Write the preview for the core's ask to show; its fingerprint."""
     folder = mail.home / ".approvals"
     folder.mkdir(exist_ok=True)
+    for old in folder.glob("*.preview"):  # drafts that were never sent
+        if old.stat().st_mtime < time.time() - DAY:
+            old.unlink(missing_ok=True)
     approves = fingerprint(account, native, preview)
     (folder / f"{approves}.preview").write_text(preview, encoding="utf-8")
     return approves
 
 
-def claim(mail: Mail, expected: str, given: str, what: str) -> Path:
-    """Take the owner's approval of `expected` for this call: its <F>.sending file."""
+def claim(mail: Mail, backend: Any, account: str, native: str, preview: str, given: str) -> Path:
+    """Take the owner's approval of this preview for this call: its <F>.sending file. A
+    backend with `guards_resends` refuses what went before itself, so a <F>.sending left by
+    an earlier try is no bar there."""
+    expected = fingerprint(account, native, preview)
     if given != expected:
-        raise MailError(f"the {what} changed since it was approved: show it to the owner again")
+        raise MailError("it changed since it was approved: show it to the owner again")
     approval = mail.home / ".approvals" / expected
     sending = approval.with_suffix(".sending")
-    if sending.exists():
-        raise MailError("this may already have been sent; check Sent before asking again")
+    if sending.exists() and not getattr(backend, "guards_resends", False):
+        raise MailError("this may already have been sent; check Sent, then edit it to resend")
     try:
         os.replace(approval, sending)  # atomic: a second call finds no approval
     except FileNotFoundError:
         hint = f"show it to the owner with the ask tool (approves: {expected}) first"
         raise MailError(f"not approved: {hint}") from None
-    if time.time() - sending.stat().st_mtime > FRESH:
+    seen = sending.read_text(encoding="utf-8").strip()  # the core's hash of what it showed
+    stale = time.time() - sending.stat().st_mtime > FRESH
+    if stale or seen != hashlib.sha256(preview.encode("utf-8")).hexdigest():
         sending.unlink()
-        raise MailError(f"the approval is over 15 minutes old: ask again (approves: {expected})")
+        why = "the approval expired" if stale else "the preview changed since it was approved"
+        raise MailError(f"{why}: ask again (approves: {expected})")
     mail.log["approved"] = True
     return sending
 
@@ -223,8 +238,7 @@ def act(sending: Path, action: Callable[[], Any]) -> Any:
         os.replace(sending, sending.with_suffix(""))  # nothing went: the owner's yes stands
         raise
     except Exception as error:
-        maybe = "this may have been sent: check Sent before asking again"
-        raise MailError(f"{error}; {maybe}") from error
+        raise MailError(f"{error}; it may have been sent: check Sent first") from error
     sending.unlink(missing_ok=True)
     sending.with_suffix(".preview").unlink(missing_ok=True)
     return done
@@ -237,7 +251,7 @@ def draft_preview(account: str, backend: str, draft: Json) -> str:
     for key in ("to", "cc", "bcc"):
         lines.append(f"{key.title()}: {', '.join(draft.get(key) or []) or 'none'}")
     lines += [f"Subject: {draft['subject']}", f"Attachments: {', '.join(files) or 'none'}"]
-    return "\n".join([*lines, "", draft["body"]])
+    return as_shown(lines, draft["body"])
 
 
 # The commands: each takes (mail, args) and returns the result's fields.
@@ -276,13 +290,14 @@ def folders(mail: Mail, args: argparse.Namespace) -> Json:
     return each_account(mail, args.account, lambda backend: backend.folders())
 
 
-def newest(mail: Mail, args: argparse.Namespace, folder: str | None, query: str | None) -> Json:
-    """inbox and search: the newest messages across the accounts, at most --limit."""
-    limit = between(args.limit, 100)
+def search(mail: Mail, args: argparse.Namespace) -> Json:
+    """search, and inbox, which is a search of the inbox without a query: the newest messages
+    across the accounts, at most --limit."""
+    limit = max(1, min(args.limit, 100))
     since = args.since.astimezone(UTC) if args.since else None
 
     def call(backend: Any) -> list[Json]:
-        return backend.list(folder, args.unread, limit, since, query)
+        return backend.list(args.folder, args.unread, limit, since, args.query)
 
     result = each_account(mail, args.account, call)
     result["items"].sort(key=lambda item: item.get("received_utc") or "", reverse=True)
@@ -290,17 +305,9 @@ def newest(mail: Mail, args: argparse.Namespace, folder: str | None, query: str 
     return result
 
 
-def inbox(mail: Mail, args: argparse.Namespace) -> Json:
-    return newest(mail, args, None, None)
-
-
-def search(mail: Mail, args: argparse.Namespace) -> Json:
-    return newest(mail, args, args.folder, args.query)
-
-
 def read(mail: Mail, args: argparse.Namespace) -> Json:
     name, backend, native = mail.find(args.id)
-    cap = between(args.max_chars, 50000)
+    cap = max(1, min(args.max_chars, 50000))
     message = tag(name, backend.read(native, cap))
     body = str(message.get("body") or "")
     message.update(body=body[:cap], truncated=bool(message.get("truncated")) or len(body) > cap)
@@ -308,8 +315,7 @@ def read(mail: Mail, args: argparse.Namespace) -> Json:
 
 
 def agenda(mail: Mail, args: argparse.Namespace) -> Json:
-    days = between(args.days, 31)
-    result = each_account(mail, args.account, lambda backend: backend.agenda(days))
+    result = each_account(mail, args.account, lambda b: b.agenda(max(1, min(args.days, 31))))
     result["items"].sort(key=lambda event: str(event.get("start") or ""))
     return result
 
@@ -319,7 +325,7 @@ def tasks(mail: Mail, args: argparse.Namespace) -> Json:
 
 
 def move(mail: Mail, args: argparse.Namespace) -> Json:
-    if len(args.ids) > MANY and not args.many:
+    if len(args.ids) > 20 and not args.many:  # --many only after the owner's yes
         raise MailError(f"moving {len(args.ids)} needs the owner's yes: ask, then add --many")
     return each_id(mail, args.ids, "moved", lambda b, native: b.move([native], args.to))
 
@@ -352,48 +358,53 @@ def draft_new(mail: Mail, args: argparse.Namespace) -> Json:
 
 
 def send_draft(mail: Mail, args: argparse.Namespace) -> Json:
-    name, backend, native = mail.find(args.draft_id)
+    name, backend, native = mail.find(args.id)
     draft = backend.get_draft(native)  # as it is now, not as it was shown
     preview = draft_preview(name, mail.settings(name)["backend"], draft)
     if args.fingerprint is None:
         return {"needs_approval": offer(mail, name, native, preview), "preview": preview}
-    sending = claim(mail, fingerprint(name, native, preview), args.fingerprint, "draft")
+    sending = claim(mail, backend, name, native, preview, args.fingerprint)
     sent = act(sending, lambda: backend.send_draft(native))
     return {"sent": True, "id": f"{name}:{sent}" if sent else None}
 
 
 def respond(mail: Mail, args: argparse.Namespace) -> Json:
     name, backend, native = mail.find(args.id)
+    if mail.settings(name)["backend"] == "imap":  # before the owner is asked for nothing
+        raise MailError("not in v1 for IMAP accounts")
     invitation = backend.read(native, 200)
     sender = (invitation.get("from") or {}).get("smtp", "")
-    lines = [f"{RESPONSES[args.response]} an invitation in {name}"]
+    lines = [f"Reply '{args.response}' to an invitation in {name}"]
     lines.append(f"Invitation: {invitation.get('subject', '')} from {sender}")
-    preview = "\n".join([*lines, "", args.body or "(no message)"])
+    preview = as_shown(lines, args.body or "(no message)")
     if args.fingerprint is None:
         return {"needs_approval": offer(mail, name, native, preview), "preview": preview}
-    sending = claim(mail, fingerprint(name, native, preview), args.fingerprint, "reply")
+    sending = claim(mail, backend, name, native, preview, args.fingerprint)
     act(sending, lambda: backend.respond(native, args.response, args.body))
     return {"sent": True, "id": args.id}
 
 
 def create_event(mail: Mail, args: argparse.Namespace) -> Json:
     backend, attendees = mail.backend(args.account), sorted(args.attendees)
+    if mail.settings(args.account)["backend"] == "imap":  # before the owner is asked
+        raise MailError("not in v1 for IMAP accounts")
     lines = [f"Create an event in {args.account}", f"Subject: {args.subject}"]
     lines.append(f"Start: {args.start.isoformat(' ', 'minutes')}")
     lines.append(f"End: {args.end.isoformat(' ', 'minutes')}")
     lines.append(f"Invite: {', '.join(attendees) or 'nobody'}")
-    preview = "\n".join([*lines, "", args.body or ""])
+    preview = as_shown(lines, args.body or "")
     if args.fingerprint is None:
         return {"needs_approval": offer(mail, args.account, "event", preview), "preview": preview}
-    sending = claim(mail, fingerprint(args.account, "event", preview), args.fingerprint, "event")
+    sending = claim(mail, backend, args.account, "event", preview, args.fingerprint)
     event = (args.subject, args.start, args.end, attendees, args.body)
     native = act(sending, lambda: backend.create_event(*event))
     return {"created": True, "id": f"{args.account}:{native}"}
 
 
-HANDLERS = (doctor, setup, login, folders, inbox, search, read, agenda, tasks, move, flag)
+HANDLERS = (doctor, setup, login, folders, search, read, agenda, tasks, move, flag)
 HANDLERS += (mark_read, draft_reply, draft_new, send_draft, respond, create_event)
 COMMANDS = {handler.__name__.replace("_", "-"): handler for handler in HANDLERS}  # mark-read
+COMMANDS["inbox"] = search  # with no --query or --folder
 
 
 def parser() -> Parser:
@@ -404,7 +415,7 @@ def parser() -> Parser:
     commands = {name: sub.add_parser(name) for name in COMMANDS}
     for name in ("doctor", "folders", "inbox", "search", "agenda", "tasks"):
         commands[name].add_argument("--account", default="all")
-    for name in ("read", "draft-reply", "respond"):
+    for name in ("read", "draft-reply", "send-draft", "respond"):
         commands[name].add_argument("id")
     for name in ("move", "flag", "mark-read"):
         commands[name].add_argument("ids", nargs="+")
@@ -418,14 +429,14 @@ def parser() -> Parser:
         commands[name].add_argument("--off", action="store_true")
     commands["login"].add_argument("account")
     commands["search"].add_argument("--query", required=True)
+    commands["inbox"].set_defaults(query=None, folder=None)
     commands["search"].add_argument("--folder")
     commands["read"].add_argument("--max-chars", type=int, default=8000)
     commands["agenda"].add_argument("--days", type=int, default=7)
     commands["move"].add_argument("--to", required=True)
     commands["move"].add_argument("--many", action="store_true")
     commands["draft-reply"].add_argument("--all", action="store_true")
-    commands["send-draft"].add_argument("draft_id")
-    commands["respond"].add_argument("response", choices=list(RESPONSES))
+    commands["respond"].add_argument("response", choices=["accept", "tentative", "decline"])
     for name in ("draft-new", "draft-reply", "respond", "create-event"):
         commands[name].add_argument("--body", required=name.startswith("draft"))
     for name in ("draft-new", "create-event"):
@@ -441,7 +452,7 @@ def parser() -> Parser:
 
 def touched(args: argparse.Namespace | None, result: Json) -> list[str]:
     """The ids a call was given and the ids it gave back, each once."""
-    given = [getattr(args, key, None) for key in ("id", "draft_id")] + getattr(args, "ids", [])
+    given = [getattr(args, "id", None), *getattr(args, "ids", [])]
     items = [result, result.get("draft") or {}, *result.get("items", [])]
     returned = [item.get("id") for item in items] + result.get("moved", [])  # COM ids change
     return [item_id for item_id in dict.fromkeys(given + returned) if isinstance(item_id, str)]
@@ -452,14 +463,9 @@ def audit(mail: Mail, args: argparse.Namespace | None, result: Json) -> None:
     whose arguments didn't parse logs no error text: they might hold either."""
     ids = touched(args, result)
     account = getattr(args, "account", None) or (ids[0].partition(":")[0] if ids else None)
-    line = {
-        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
-        "command": getattr(args, "command", None),
-        "account": account,
-        "ids": ids,
-        "ok": result["ok"],
-        **mail.log,
-    }
+    when = datetime.now(UTC).isoformat(timespec="seconds")
+    line = {"ts": when, "command": getattr(args, "command", None), "account": account}
+    line |= {"ids": ids, "ok": result["ok"], **mail.log}
     if not result["ok"]:
         line["error"] = result["error"] if args else "invalid arguments"
     path = mail.home / "logs" / "mail.jsonl"
@@ -471,8 +477,8 @@ def audit(mail: Mail, args: argparse.Namespace | None, result: Json) -> None:
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):  # subjects in any script, even down a Windows pipe
         sys.stdout.reconfigure(encoding="utf-8")
-    home = os.environ.get("ATTACHE_HOME") or HERE.parents[2]  # else the home this is in
-    mail, args = Mail(Path(home)), None
+    # $ATTACHE_HOME, which Attaché sets; else the home this script is installed in
+    mail, args = Mail(Path(os.environ.get("ATTACHE_HOME") or HERE.parents[2])), None
     try:
         args = parser().parse_args(argv)
         result = {"ok": True, **COMMANDS[args.command](mail, args)}

@@ -46,7 +46,11 @@ Cells:
 - `"2026-11-02"` or `"2026-11-02T09:30"` becomes a real date.
 - `true` and `false` stay as they are, and `null` leaves a cell empty.
 - A formula is an object: `{"formula": "=SUM(B2:B9)"}`. Write formulas yourself, never from
-  someone's message.
+  someone's message. They may use only SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, MEDIAN,
+  PRODUCT, ROUND, ROUNDUP, ROUNDDOWN, ABS, IF, IFERROR, AND, OR, NOT, SUMIF, COUNTIF,
+  AVERAGEIF, TODAY and DATE, with cell references and arithmetic. Links to other programs
+  (`|`) or workbooks (`[`) are refused, as is every other function: work the value out
+  yourself instead.
 - Text is always text, even when it starts with `=`, `+`, `-` or `@`: `"=HYPERLINK(...)"`
   shows as those characters and never runs.
 
