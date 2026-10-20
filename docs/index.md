@@ -9,7 +9,7 @@ hide:
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is under 1,600 lines of Python, a cap that CI
+folder of skills it can edit itself. The core is under 1,800 lines of Python, a cap that CI
 enforces. Everything else is a skill.
 
 ```bash

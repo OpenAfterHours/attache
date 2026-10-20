@@ -58,7 +58,7 @@ src/attache/
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 1,600 lines of code in
+1. **Size is a test.** `tests/test_budget.py` fails above 1,800 lines of code in
    `src/attache` (the target is about 1,500). Blank lines, comments and docstrings don't
    count, so never make code denser to fit: write the readable version. If a feature doesn't
    fit, it belongs in a skill.
@@ -102,7 +102,7 @@ Bundled skills live in `src/attache/bundled/skills/` and are copied into a user'
 
 ## The size budget
 
-`tests/test_budget.py` fails when the core passes 1,600 lines of code. Blank lines, comments
+`tests/test_budget.py` fails when the core passes 1,800 lines of code. Blank lines, comments
 and docstrings don't count, so write the clearest version of the code, not the shortest.
 Bundled skills, static files and tests don't count toward it.
 

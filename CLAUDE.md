@@ -42,8 +42,8 @@ src/attache/
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 1,600 lines of code in
-   `src/attache` (target about 1,500). Blank lines, comments and docstrings don't count, so
+1. **Size is a test.** `tests/test_budget.py` fails above 1,800 lines of code in
+   `src/attache` (target about 1,700; raised from 1,600 for phase 2, issue #20). Blank lines, comments and docstrings don't count, so
    never make code denser to fit: write the readable version. Bundled skills are excluded;
    each bundled skill's scripts have a 300-line cap. If a feature doesn't fit, it belongs in a
    skill.

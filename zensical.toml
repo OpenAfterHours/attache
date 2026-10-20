@@ -33,6 +33,7 @@ nav = [
   { "Quickstart" = "quickstart.md" },
   { "Guides" = [
     { "Configuration" = "configuration.md" },
+    { "Channels" = "channels.md" },
     { "Skills" = "skills.md" },
     { "Pages" = "pages.md" },
     { "Security" = "security.md" },
