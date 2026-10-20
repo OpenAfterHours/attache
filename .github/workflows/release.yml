@@ -105,13 +105,18 @@ jobs:
         with:
           name: dist
           path: dist/
-      # Last, so a release never claims success for an upload that failed.
+      # Last, so a release never claims success for an upload that failed. A release someone
+      # already made by hand for this tag keeps its notes and just gets the files attached.
       - name: gh release create
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
           set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" --clobber dist/*
+            exit 0
+          fi
           flags=(--generate-notes --verify-tag --title "${GITHUB_REF_NAME}")
           if [ "${PRERELEASE}" = "true" ]; then
             flags+=(--prerelease)
