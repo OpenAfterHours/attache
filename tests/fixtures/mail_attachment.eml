@@ -1,0 +1,29 @@
+From: Ann Lee <ann@example.com>
+To: you@yourdomain.com
+Subject: Minutes
+Date: Tue, 20 Oct 2026 09:30:00 +0000
+Message-ID: <minutes-3@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: multipart/alternative; boundary="b2"
+
+--b2
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+The minutes are attached. Caf=E9 at noon?
+--b2
+Content-Type: text/html; charset=utf-8
+
+<p>The minutes are attached. Caf&eacute; at noon?</p>
+--b2--
+
+--b1
+Content-Type: application/pdf; name="minutes.pdf"
+Content-Disposition: attachment; filename="minutes.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcOkw7zDtsOfCg==
+--b1--

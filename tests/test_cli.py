@@ -78,6 +78,27 @@ def test_skills(
         assert exit.value.code == 2
 
 
+def test_skill_runs_the_skills_own_script(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = home / "skills" / "service" / "scripts" / "service.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('hi')\n", encoding="utf-8")
+    ran: list[list[str]] = []
+    monkeypatch.setattr(cli.subprocess, "run", lambda argv: ran.append(argv) or Done(3))
+    # Every argument after the name is the script's, options included: argparse never sees them.
+    assert cli.main(["skill", "service", "install", "--dry-run"]) == 3  # its exit code
+    assert ran == [["uv", "run", str(script), "install", "--dry-run"]]
+    for bad in (["skill"], ["skill", "nope"], ["skill", ".."], ["skill", "../service"]):
+        assert cli.main(bad) == 1 and "attache init" in capsys.readouterr().err
+    assert len(ran) == 1
+
+
+class Done:
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+
+
 def test_doctor(
     home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

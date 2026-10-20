@@ -57,7 +57,8 @@ class Pending(NamedTuple):
     future: asyncio.Future[str]
 
 
-Waiting = asyncio.Task[str | None]  # what ask() gives: the choice, or None after ask_seconds
+# What ask() gives: a task with the choice (None after ask_seconds), or None if nobody saw it.
+Waiting = asyncio.Task[str | None] | None
 
 
 def choose(options: list[str], text: str) -> str | None:
@@ -115,31 +116,21 @@ class ChannelManager:
             await channel.send(msg)
 
     async def ask(self, chat_key: str, person_id: str, text: str, options: list[str]) -> Waiting:
-        """Show the question, with native buttons where a channel has ask() and as numbered
-        text elsewhere, and return a task giving person_id's choice (None after ask_seconds).
-        Returns once it is shown, so the caller knows at once; LookupError when no surface
-        could show it. person_id is a config person id ("owner", "sam")."""
+        """Show the question on every channel of the chat and return a task giving person_id's
+        choice (None after ask_seconds). Returns once it is shown, so the caller knows at once;
+        None when no surface could show it. person_id is a config person id ("owner", "sam")."""
         ask_id = secrets.token_hex(8)
         chat_id = chat_key.split(":", 1)[1]
         future = asyncio.get_running_loop().create_future()
         self.pending[ask_id] = Pending(chat_key, person_id, text, options, future)
-        numbered = ", ".join(f"{n} for {option}" for n, option in enumerate(options, 1))
-        seen = False
         try:
-            for channel in self._targets(chat_key):
-                if hasattr(channel, "ask"):
-                    reached = await channel.ask(chat_id, ask_id, text, options)
-                else:
-                    await channel.send(Outbound(chat_key, f"{text}\nReply {numbered}."))
-                    reached = True
-                seen = seen or reached
+            shown = [await c.ask(chat_id, ask_id, text, options) for c in self._targets(chat_key)]
         except BaseException:
             del self.pending[ask_id]
             raise
-        waiting = self.spawn(self._wait(ask_id)) if seen else None
+        waiting = self.spawn(self._wait(ask_id)) if any(shown) else None
         if waiting is None:  # nobody could see it, or Attaché is stopping
             del self.pending[ask_id]
-            raise LookupError(f"nothing in {chat_key} could show the question")
         return waiting
 
     async def _wait(self, ask_id: str) -> str | None:
@@ -222,6 +213,12 @@ class TerminalChannel:
             return  # typed here, so it is already on screen
         who = f"{msg.author} (web)" if msg.author else "attaché"
         print(f"{who}> {msg.text}" + "".join(f"\n  file: {f}" for f in msg.files), flush=True)
+
+    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
+        """A question shows as numbered text here; a typed reply answers it."""
+        numbered = ", ".join(f"{n} for {option}" for n, option in enumerate(options, 1))
+        await self.send(Outbound(f"local:{chat_id}", f"{text}\nReply {numbered}."))
+        return True
 
     async def stop(self) -> None:
         self.lines.put_nowait("/quit")  # start() then sets done

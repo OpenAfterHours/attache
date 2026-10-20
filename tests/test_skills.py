@@ -98,6 +98,20 @@ def test_git_failure_and_no_repo(home: Path) -> None:
     assert skills.log(home) == []
 
 
+@needs_git
+def test_git_never_touches_a_repository_around_the_home(tmp_path: Path) -> None:
+    parent, home = tmp_path / "parent", tmp_path / "parent" / "home"
+    write_skill(home, "pdf", "name: pdf\ndescription: v1")
+    assert skills.git(parent, "init", "-b", "main") is not None  # a repository around the home
+    assert skills.commit(home, "add pdf") is None  # the home has none of its own: nothing done
+    assert skills.log(home) == [] and skills.undo(home, "pdf") is None
+    assert skills.git(parent, "status", "--porcelain") == "?? home/\n"  # nothing staged there
+    assert skills.git(home, "init", "-b", "main") is not None  # init still makes the home's own
+    assert "worktree" not in (home / ".git" / "config").read_text(encoding="utf-8")
+    assert skills.commit(home, "add pdf") is not None and len(skills.log(home)) == 1
+    assert skills.log(parent) == []  # still no commit in the outer repository
+
+
 @pytest.fixture
 def repo(home: Path) -> Path:
     skills.git(home, "init", "-b", "main")

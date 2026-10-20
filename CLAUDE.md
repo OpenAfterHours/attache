@@ -47,7 +47,7 @@ src/attache/
    `src/attache` (target about 2,000; 1,600 in phase 1, 1,900 in phase 2, raised by the owner
    for phase 3's sharing and page turns). Blank lines, comments and docstrings don't count, so
    never make code denser to fit: write the readable version. Bundled skills are excluded;
-   each bundled skill's scripts have a 300-line cap (1,200 for `mail`, which has three
+   each bundled skill's scripts have a 300-line cap (1,350 for `mail`, which has three
    backends). If a feature doesn't fit, it belongs in a skill.
 2. **No new runtime dependencies** without discussion. Skill scripts declare their own with
    PEP 723 headers and run through `uv run`.

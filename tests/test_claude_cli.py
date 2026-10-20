@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -350,3 +352,36 @@ def test_default_runner_leaves_error_results_to_the_parser(tmp_path: Path) -> No
     lines = asyncio.run(_collect([sys.executable, "-c", script], "", tmp_path, dict(os.environ)))
     with pytest.raises(RuntimeError, match="No conversation found"):
         parse_events(lines)
+
+
+def alive(pid: int) -> bool:
+    if os.name == "nt":
+        found = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True)
+        return str(pid).encode() in found.stdout
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
+def test_a_turn_that_times_out_ends_what_claude_started(tmp_path: Path) -> None:
+    # claude's Bash tool starts a command that outlives it unless the whole tree is killed
+    marker = tmp_path / "command.pid"
+    command = f"import os, time; open({str(marker)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+    claude = "import subprocess, sys, time; "
+    claude += f"subprocess.Popen([sys.executable, '-c', {command!r}]); time.sleep(60)"
+    argv = [sys.executable, "-c", claude]
+
+    async def main() -> None:
+        with pytest.raises(TimeoutError):  # the router's wait_for cancels the turn
+            await asyncio.wait_for(_collect(argv, "", tmp_path, dict(os.environ)), 5)
+
+    asyncio.run(main())
+    pid = int(marker.read_text(encoding="utf-8"))
+    for _ in range(50):  # killed at once; reaping can take a moment
+        if not alive(pid):
+            break
+        time.sleep(0.1)
+    assert not alive(pid)

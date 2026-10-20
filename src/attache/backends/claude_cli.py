@@ -23,6 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from attache.channels import PIPE, SPAWN, kill_tree
 from attache.types import Endpoint, Reply, Turn
 
 OWNER_BUILTINS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"]
@@ -38,10 +39,9 @@ class StaleSessionError(RuntimeError):
 
 
 async def _spawn(argv: list[str], text: str, cwd: Path, env: dict[str, str]) -> AsyncIterator[str]:
-    pipe = asyncio.subprocess.PIPE
-    proc = await asyncio.create_subprocess_exec(
-        *argv, cwd=cwd, env=env, stdin=pipe, stdout=pipe, stderr=pipe, limit=2**24
-    )
+    # Its own process group, like a sidecar's (channels.SPAWN: piped stdin and stdout, long
+    # lines), so kill_tree also ends the commands its Bash tool started.
+    proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=env, stderr=PIPE, **SPAWN)
     try:
         stderr = asyncio.ensure_future(proc.stderr.read())  # drain so a full pipe can't block it
         with contextlib.suppress(ConnectionError):  # it exited early; stderr says why
@@ -57,9 +57,8 @@ async def _spawn(argv: list[str], text: str, cwd: Path, env: dict[str, str]) -> 
         if code and not got_result:
             tail = (await stderr).decode("utf-8", "replace").strip()[-2000:]
             raise RuntimeError(f"claude exited with code {code}: {tail}")
-    finally:
-        if proc.returncode is None:
-            proc.kill()
+    finally:  # done, failed, or cancelled (the turn timed out): nothing it started lives on
+        await kill_tree(proc)
 
 
 def _env() -> dict[str, str]:

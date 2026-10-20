@@ -1,0 +1,26 @@
+# The mail skill's accounts: `attache skill mail setup` copies this file to accounts.toml.
+# Each [table] is an account; its name starts every id from it ("gmail:1801234..."). Delete the
+# ones you don't use. No passwords here: `attache skill mail login <account>` keeps an IMAP
+# password in the system keyring, and Graph keeps an encrypted token cache in <home>/.mail.
+# Then run `attache skill mail doctor`. The guide is docs/mail.md.
+
+[outlook]
+backend = "com"  # Outlook classic on this PC, nothing to set up. Or "graph", which also needs:
+# client_id = "<your app's Application (client) ID>"
+# user = "you@outlook.com"  # optional: the account to sign in with
+# tenant = "consumers"      # optional, default "common": "consumers" for a personal account
+
+[gmail]
+backend = "imap"
+kind = "gmail"  # labels as folders, X-GM-MSGID ids; Gmail files sent mail itself
+imap = "imap.gmail.com:993"
+smtp = "smtp.gmail.com:465"
+user = "you@gmail.com"
+
+[titan]
+backend = "imap"
+imap = "imap.titan.email:993"
+smtp = "smtp.titan.email:465"
+user = "you@yourdomain.com"
+sent_folder = "Sent"  # Titan doesn't file sent mail, so the skill copies it here
+send_limit_hour = 50  # recipients an hour, counted in logs/mail.jsonl; your plan's limit

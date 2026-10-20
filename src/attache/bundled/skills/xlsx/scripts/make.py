@@ -1,0 +1,159 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["openpyxl>=3.1"]
+# ///
+"""Make an Excel workbook from a small JSON spec (SKILL.md describes it).
+
+    make.py <spec> <out.xlsx>
+
+<spec> is the spec itself, as JSON text starting with "{", or the name of a .json file. Both
+files must be in the current folder, the chat's files folder when the script tool runs this:
+absolute paths, drives, ":", ".." and hidden names are refused, and so is anything that
+resolves outside the folder (through a link, say). The output must end in .xlsx. On success
+the file's path relative to the Attaché home is printed, ready for `send`.
+
+openpyxl is imported inside the functions that use it, so the checks work (and are tested)
+without it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path, PureWindowsPath
+from typing import Any
+
+SHEET = {"name", "rows", "header", "widths", "formats"}
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?")  # becomes a real date
+FIT = (8, 60)  # the narrowest and widest fitted column, in characters
+
+
+def inside(name: str, suffix: str) -> Path:
+    """`name` as a file in the current folder with the given suffix, or ValueError."""
+    here = Path.cwd().resolve()
+    windows = PureWindowsPath(name)  # splits on / and \ and sees drives, on every system
+    hidden = any(part.startswith(".") for part in windows.parts)  # also ".."
+    if not name or ":" in name or windows.anchor or hidden:
+        raise ValueError(f"{name!r}: give a file name in this folder, such as budget{suffix}")
+    path = here.joinpath(*windows.parts).resolve()
+    if not path.is_relative_to(here):
+        raise ValueError(f"{name!r} is outside this folder")
+    if path.suffix.lower() != suffix:
+        raise ValueError(f"{name!r}: the file must end in {suffix}")
+    return path
+
+
+def load(spec: str) -> dict[str, Any]:
+    """The spec: JSON text, or the name of a .json file in the current folder."""
+    if spec.lstrip().startswith("{"):
+        text = spec
+    else:
+        text = inside(spec, ".json").read_text(encoding="utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("the spec must be a JSON object")
+    return data
+
+
+def shown(path: Path) -> str:
+    """The path relative to the Attaché home (files/<chat>/budget.xlsx), as `send` takes it."""
+    home = os.environ.get("ATTACHE_HOME")
+    if home and path.is_relative_to(Path(home).resolve()):
+        return path.relative_to(Path(home).resolve()).as_posix()
+    base = next((parent.parent for parent in path.parents if parent.name == "files"), None)
+    return (path.relative_to(base) if base else path).as_posix()
+
+
+def check_keys(found: dict[str, Any], allowed: set[str], where: str) -> None:
+    if unknown := sorted(set(found) - allowed):
+        raise ValueError(f"{where}: unknown key {', '.join(unknown)}; known: {sorted(allowed)}")
+
+
+def cell(value: Any) -> Any:
+    """A JSON value as a cell value: ISO dates become dates, and text starting with "=" is
+    a formula (openpyxl reads it so); numbers, true/false, text and null stay as they are."""
+    if isinstance(value, str) and DATE.fullmatch(value):
+        moment = datetime.fromisoformat(value)
+        return moment if "T" in value else moment.date()
+    if value is None or isinstance(value, str | int | float):
+        return value
+    raise ValueError(f"cell {value!r}: use text, a number, true/false or null")
+
+
+def by_column(table: Any, what: str) -> dict[int, Any]:
+    """{"B": value} as {2: value}; ValueError for anything but column letters."""
+    from openpyxl.utils import column_index_from_string
+
+    if not isinstance(table, dict):
+        raise ValueError(f'"{what}" maps column letters to values, like {{"A": 20}}')
+    return {column_index_from_string(str(key).upper()): value for key, value in table.items()}
+
+
+def fill(sheet: Any, spec: dict[str, Any]) -> None:
+    """Write one sheet: its rows, then the bold frozen header, widths and number formats."""
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    rows = spec.get("rows", [])
+    if not isinstance(rows, list) or not all(isinstance(row, list) for row in rows):
+        raise ValueError(f"sheet {sheet.title!r}: rows is a list of rows, each a list of cells")
+    for row in rows:
+        sheet.append([cell(value) for value in row])
+    header = bool(spec.get("header", True)) and bool(rows)
+    if header:
+        for column in range(1, len(rows[0]) + 1):
+            sheet.cell(row=1, column=column).font = Font(bold=True)
+        sheet.freeze_panes = "A2"  # the header stays in view when scrolling
+    widths = by_column(spec.get("widths", {}), "widths")
+    for column in range(1, max(map(len, rows), default=0) + 1):
+        values = [row[column - 1] for row in rows if len(row) >= column]
+        longest = max((len(str(value)) for value in values if value is not None), default=0)
+        fitted = min(max(longest + 2, FIT[0]), FIT[1])
+        width = widths.get(column, fitted)  # "widths" wins
+        sheet.column_dimensions[get_column_letter(column)].width = float(width)
+    for column, number_format in by_column(spec.get("formats", {}), "formats").items():
+        for row in range(2 if header else 1, len(rows) + 1):
+            sheet.cell(row=row, column=column).number_format = str(number_format)
+
+
+def build(spec: dict[str, Any]) -> Any:
+    """The openpyxl Workbook for `spec`."""
+    import openpyxl
+
+    check_keys(spec, {"sheets"}, "the spec")
+    sheets = spec.get("sheets")
+    if not isinstance(sheets, list) or not sheets:
+        raise ValueError('"sheets" is a list of at least one sheet')
+    book = openpyxl.Workbook()
+    book.remove(book.active)  # a new workbook starts with an empty sheet
+    for number, sheet in enumerate(sheets, 1):
+        if not isinstance(sheet, dict):
+            raise ValueError(f"sheet {number}: a sheet is an object with rows")
+        check_keys(sheet, SHEET, f"sheet {number}")
+        fill(book.create_sheet(title=str(sheet.get("name") or f"Sheet{number}")), sheet)
+    return book
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Make an Excel workbook from a JSON spec.")
+    parser.add_argument("spec", help='the spec as JSON text ("{...}"), or a .json file here')
+    parser.add_argument("out", help="the .xlsx file to write in the current folder")
+    args = parser.parse_args(argv)
+    try:
+        out = inside(args.out, ".xlsx")
+        book = build(load(args.spec))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        book.save(str(out))
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(shown(out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

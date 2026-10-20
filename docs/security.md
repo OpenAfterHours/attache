@@ -7,9 +7,9 @@ icon: lucide/shield-check
 Attaché runs on your machine, as you, with access to your files, a shell and your accounts.
 This page says who can make it do what, and where the limits are.
 
-In phase 1 the only person who can talk to Attaché is you, in the terminal and on the local
-web page. The rules for other people below are already in place, ready for group chats in
-phase 2.
+You talk to Attaché in the terminal, on the local web page and in your direct messages. The
+people and group chats you list in `attache.toml` can talk to it too, with fewer rights. With
+sharing on, anyone with a share link can open that one page, and nothing else.
 
 ## Roles
 
@@ -85,7 +85,54 @@ Each one is served with a Content Security Policy sandbox, which gives it an opa
 and blocks every request to the internet, pop-ups, dialogs, form posts, and framing by other
 sites. A page reaches Attaché only through the bridge, with a token for that page alone, and
 only the collections named in its `attache-collections` meta tag. It opens only inside the
-Attaché window. The details are in [Pages](pages.md#the-sandbox).
+Attaché window, except from a snapshot link (for the `render` skill) or a share link. The
+details are in [Pages](pages.md#the-sandbox).
+
+## Pages that ask
+
+A page in the Attaché window can ask the assistant with `attache.ask`. That turn belongs to
+the page, not to you:
+
+- Its prompt reaches the model quoted as data from the page, like another person's message.
+- It runs on the `group_chats` endpoint, never `claude-cli`, with no history.
+- Its only tool is `db`, on the page's declared collections, through the member rules: the
+  docs shared with the page's chat, or with `local:me` for one of your own pages. Owner
+  rights never reach a page turn, even on your own page.
+- It counts against the guests' daily budget and the per-chat limits, and nothing is stored
+  in the chat's history.
+
+Only a page's own token can ask (the web page's token alone can't), and never a share link.
+
+## Share links
+
+When `[web] public_url` is set, a page made in a chat gets a share link,
+`<public_url>/s/<token>`, that anyone can open. See [Pages](pages.md#sharing-a-page).
+
+- **Never your access.** Only pages tied to a chat can be shared. A link reaches the
+  documents shared with that chat, in the collections the page declared when the link was
+  made, under the member rules (add and edit, no delete). It can't use `attache.ask`.
+- **Short-lived.** A link lasts 7 days, and dies at once if the page changes or is deleted.
+- **Kept as a hash.** The token is 24 random bytes, and Attaché stores only its SHA-256 (in
+  the read-only `_shares` collection), so the database holds no working links.
+- **Not passed on.** The page opens top-level with `Referrer-Policy: no-referrer` and
+  `frame-ancestors 'none'`, so the link doesn't reach other sites in a `Referer` header and
+  no site can frame the page. The bridge sends the token in a header (the live event stream,
+  in its query string), and the web server keeps no access log.
+
+## The public port
+
+Tailscale Funnel connects to Attaché from `127.0.0.1`, like everything on this machine, so a
+local request and one from the internet look alike. Attaché doesn't tell them apart by
+address or `Host` header. Instead, share links get a web server of their own:
+
+- It listens on `127.0.0.1:<public_port>` (by default the web page's port plus one), only
+  when `public_url` is set. Funnel forwards to that port; the web page's own port is never
+  exposed.
+- It serves only share links (`/s/<token>`), the bridge script, the fonts, and the
+  document and live-event routes for share links. The chat page, other pages, chat, answers,
+  `attache.ask` and the MCP endpoint don't exist there.
+- It answers only requests whose `Host` is the host of `public_url`.
+- On the local web server, share tokens are refused, and `/s/` doesn't exist.
 
 ## Tokens
 
@@ -97,19 +144,27 @@ Attaché window. The details are in [Pages](pages.md#the-sandbox).
   cookie.
 - **Each page's token** is an HMAC of the web page's token and the page's name, so it changes
   every run too, and one page's token is no use to another.
+- **Each snapshot link** (for the `render` skill) carries a random token for one page, kept
+  only in memory and valid for 10 minutes.
+- **Each share link** carries a random token that lasts 7 days, stored only as a hash (see
+  [Share links](#share-links)).
 - **Each Claude Code turn** gets its own MCP token, valid only while that turn runs and only
   for that turn's tools.
 
-Attaché compares tokens with `hmac.compare_digest`, in constant time.
+Attaché compares the web page's and each page's token with `hmac.compare_digest`, in
+constant time. The random tokens (snapshot, share and MCP) are looked up instead; share links
+by their hash.
 
 ## Loopback only
 
-In phase 1 the web server serves this machine only:
+The web servers serve this machine only (Funnel reaches the public port from this machine
+too):
 
 - `[web] host` must be `127.0.0.1`, `localhost` or `::1`. Attaché refuses to start on any
-  other address, including `0.0.0.0`.
+  other address, including `0.0.0.0`. The public port is always on `127.0.0.1`.
 - Requests whose `Host` header isn't a loopback name are refused, so a web site can't reach
-  the server by pointing its own domain name at `127.0.0.1` (DNS rebinding).
+  the server by pointing its own domain name at `127.0.0.1` (DNS rebinding). The public
+  port takes only the host of `public_url`.
 - Only the bridge routes answer cross-origin requests, for the sandboxed pages. The MCP
   endpoint refuses any request that comes with an `Origin` header, so a web page can't post
   to it.
@@ -141,8 +196,9 @@ limits:
 - **Your key, if one is set.** If `ANTHROPIC_API_KEY` is set where Attaché starts, Claude
   Code uses it instead of your login.
 
-## Still to come
+## Limits and approvals
 
-The design proposal plans more safeguards for when other people can reach Attaché: rate
-limits per sender and per chat, a daily cost cap for other people's turns, and your approval
-before Attaché sends to a different chat. See [Design and roadmap](design.md).
+Turns from anyone but you, page turns included, are rate limited per sender, per chat and
+per day; see [Channels](channels.md#limits). When a member asks for something only you can
+do, the assistant asks you first, and acts only on your yes. See
+[Design and roadmap](design.md) for what comes next.

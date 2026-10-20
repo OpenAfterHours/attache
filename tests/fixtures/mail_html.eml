@@ -1,0 +1,11 @@
+From: "Shop" <orders@shop.example>
+To: you@gmail.com
+Subject: =?utf-8?q?Your_order_has_shipped_=F0=9F=93=A6?=
+Date: Mon, 19 Oct 2026 08:00:00 +0100
+Message-ID: <order-77@shop.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>p { color: red }</style><script>alert("hidden")</script></head>
+<body><p>Your order&nbsp;#77 has <b>shipped</b>.</p><p>Track it &amp; relax.</p>
+<div>Questions? <a href="https://shop.example/help">Ask us</a></div></body></html>

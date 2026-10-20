@@ -101,10 +101,7 @@ class Store:
         self, collection: str, doc_id: str | None, data: dict[str, Any], by: str = ""
     ) -> dict[str, Any]:
         """Replace (not merge) the doc. doc_id None makes a new short id. Returns the stored doc."""
-        if not doc_id:
-            doc_id = secrets.token_hex(4)
-            while self.doc_get(collection, doc_id) is not None:  # taken: pick another
-                doc_id = secrets.token_hex(4)
+        doc_id = doc_id or secrets.token_hex(8)  # 64 random bits: a clash needs no check
         now = time.time()
         doc = {**data, "id": doc_id, "_updated": now, "_by": by}
         self._write(UPSERT_DOC, collection, doc_id, json.dumps(doc), now, now)

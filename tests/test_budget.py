@@ -14,7 +14,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src" / "attache"
 CORE_LIMIT = 2050  # 1,600 in phase 1, 1,900 in phase 2, then sharing and page turns in phase 3
 SKILL_SCRIPT_LIMIT = 300
-SKILL_LIMITS = {"mail": 1200}  # three mail backends: shared ~200, IMAP ~250, COM ~300, Graph ~400
+SKILL_LIMITS = {"mail": 1350}  # shared and IMAP ~600, Outlook COM and Graph ~700 (owner's call)
 
 
 def code_lines(path: Path) -> int:

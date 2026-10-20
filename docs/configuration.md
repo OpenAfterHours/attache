@@ -8,6 +8,9 @@ Attaché reads its settings from `attache.toml` in the home folder: `~/.attache/
 or the folder that `--home` or `ATTACHE_HOME` points to. `attache init` writes a commented
 starting file.
 
+After upgrading Attaché, run `attache init` to add new bundled skills; it never overwrites
+your files.
+
 Attaché reads the file once, when it starts, so restart `attache` or `attache run` after you
 change it. Run `attache doctor` to check your edits; a mistyped key is reported with the keys
 that section accepts:
@@ -41,6 +44,10 @@ group_chats = "claude-api"  # group chats, and anyone but you
 [web]
 host = "127.0.0.1"  # only this machine can reach the web page
 port = 8765
+# Share links, for people off this machine, through Tailscale Funnel (docs/configuration.md).
+# Off until public_url is set; then run `tailscale funnel --bg <public_port>`.
+# public_url = "https://pc.tailnet.ts.net"  # https:// and your machine's name, no path
+# public_port = 8766                        # serves share links only; default port + 1
 
 # Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
 # max_tokens, are passed to the backend as options.
@@ -263,15 +270,46 @@ port = 8765
 
 | Key | Meaning |
 |---|---|
-| `host` | `127.0.0.1` (the default), `localhost` or `::1`. Phase 1 serves this machine only, and refuses to start with any other address. |
+| `host` | `127.0.0.1` (the default), `localhost` or `::1`. Attaché serves this machine only, and refuses to start with any other address. |
 | `port` | The port for the web page. Default `8765`. Change it if something else uses that port. |
+| `public_url` | Optional. The `https://` address where people off this machine open share links, such as `https://pc.tailnet.ts.net`: a host and perhaps a port, no path. Empty or left out, sharing is off. |
+| `public_port` | The port on `127.0.0.1` that serves share links when `public_url` is set. Default `port + 1`, so `8766`. |
 
-If the port is taken when you start, Attaché stops with a message saying so:
+If a port is taken when you start, Attaché stops with a message saying so:
 
 ```console
 $ attache run
 Port 8765 is in use. Is `attache run` already running?
 ```
+
+### Share links through Tailscale Funnel
+
+A page a member made, or one made in a group chat, can be shared with a link that works off
+this machine, for 7 days and while the page stays as it is. Attaché still listens on this
+machine only: [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) carries the requests
+from the internet to it.
+
+1. Install Tailscale, log in, and allow Funnel for this machine in your tailnet's settings.
+2. Set `public_url` to the machine's Funnel address:
+
+    ```toml
+    [web]
+    port = 8765
+    public_url = "https://pc.tailnet.ts.net"
+    # public_port = 8766   # the default: port + 1
+    ```
+
+3. Restart Attaché, then point Funnel at `public_port`, which serves share links only:
+
+    ```console
+    $ tailscale funnel --bg 8766
+    ```
+
+Point Funnel at `public_port`, never at `port`. The server on `public_port` has only the
+share link routes and what a shared page needs to run (its data and live updates); your
+chat, your own pages and Claude Code's MCP endpoint are not there at all, and it answers only
+requests for the `public_url` host. `tailscale funnel reset` turns it off. What a share link
+can reach is in [Pages](pages.md) and [Security](security.md).
 
 ## `[assistant]` and `[owner]`
 

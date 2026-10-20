@@ -222,6 +222,7 @@ def test_render_checks_the_page_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(render.urllib.request, "build_opener", lambda *handlers: Opener())
     problem = render.check(SNAPSHOT)
     assert problem and problem.startswith("the page answered 403") and seen == ["document"]
+    assert "lasts 10 minutes" in problem  # so the agent publishes again for a fresh link
 
 
 def test_render_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:

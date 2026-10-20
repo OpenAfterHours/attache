@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from attache import app, config, skills, tools
+from attache.config import ChatConfig
 from attache.scheduler import Scheduler
 from attache.store import Store
 from attache.types import Outbound, Person, TurnContext
@@ -26,26 +27,31 @@ Body.
 """
 
 
+UNSEEN = object()  # a scripted answer: no surface showed the question
+
+
 class Channels:
     """Records what is sent. ask() takes the next scripted answer: an option, None (no answer
-    in time) or LookupError (no surface showed it, raised at once); otherwise it returns a
-    future for it, as the real one returns a task. spawn() keeps the coroutine unstarted, so a
-    test sees the tool return first and runs it after."""
+    in time) or UNSEEN (no surface showed it: None at once), which is also what it gives once
+    the script runs out; otherwise it returns a future for it, as the real one returns a task.
+    spawn() keeps the coroutine unstarted, so a test sees the tool return first and runs it
+    after."""
 
     def __init__(self) -> None:
         self.sent: list[Outbound] = []
         self.asked: list[tuple[str, str, str, list[str]]] = []
         self.answers: list[Any] = []
         self.spawned: list[Coroutine[Any, Any, Any]] = []
+        self.ask_seconds = 600.0
 
     async def send(self, msg: Outbound) -> None:
         self.sent.append(msg)
 
     async def ask(self, chat_key: str, person_id: str, text: str, options: list[str]) -> Any:
         self.asked.append((chat_key, person_id, text, options))
-        answer = self.answers.pop(0)
-        if answer is LookupError:
-            raise LookupError(f"no surface showed the question in {chat_key}")
+        answer = self.answers.pop(0) if self.answers else UNSEEN
+        if answer is UNSEEN:
+            return None
         future = asyncio.get_running_loop().create_future()
         future.set_result(answer)
         return future
@@ -53,10 +59,15 @@ class Channels:
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         self.spawned.append(coro)
 
+    def run_spawned(self) -> None:
+        while self.spawned:
+            asyncio.run(self.spawned.pop(0))
+
 
 @pytest.fixture
 def services(home: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[app.Services]:
     monkeypatch.setattr(tools.web, "snapshot_url", lambda services, name: f"snap:{name}")
+    monkeypatch.setattr(tools.web, "share_url", lambda services, name: f"share:{name}")
     (home / "attache.toml").write_text('[owner]\nname = "Alex"\n', encoding="utf-8")
     db = Store(home / "attache.db")
     cfg, scheduler = config.load(home), Scheduler(db)
@@ -135,6 +146,8 @@ def test_resolve_allows_plain_relative_paths(services: app.Services) -> None:
         ".claude/settings.json",
         "CLAUDE.md",
         "skills/x/claude.md",
+        ".mail/gmail.json",
+        ".approvals/abc12345",
     ],
 )
 def test_resolve_denies_private_files(services: app.Services, private: str) -> None:
@@ -249,6 +262,15 @@ def test_script_member_gating(services: app.Services, monkeypatch: pytest.Monkey
         call(ctx(services), "script", skill="nope", script="hello.py")
     with pytest.raises(FileNotFoundError):
         call(ctx(services), "script", skill="private", script="missing.py")
+    for arg in ["../x.txt", "/etc/passwd", "C:x", "a\\b", "file:///etc/passwd", "\\\\host\\s"]:
+        with pytest.raises(PermissionError, match="file name"):  # could name a path elsewhere
+            call(member, "script", skill="shared", script="hello.py", args=[arg])
+    spec = '{"title": "Trip 3/4: Paris", "rows": ["a/b", "../c"]}'  # inline JSON: data
+    fine = ["list.xlsx", "https://example.com/a/b", spec]
+    call(member, "script", skill="shared", script="hello.py", args=fine)
+    assert seen[-1][0][3:] == fine
+    call(ctx(services), "script", skill="shared", script="hello.py", args=["../notes/x.md"])
+    assert seen[-1][0][3:] == ["../notes/x.md"]  # the owner may name any path
     monkeypatch.setattr(tools.shutil, "which", lambda name: None)
     with pytest.raises(RuntimeError, match="uv is not installed"):
         call(ctx(services), "script", skill="shared", script="hello.py")
@@ -293,6 +315,29 @@ def test_db_member_rules(services: app.Services) -> None:
     assert len(json.loads(call(owner, "db", op="list", collection="lists"))) == 3
 
 
+def page(services: app.Services, chat: str) -> TurnContext:
+    """A page turn's context (Router.page_turn), for the page "trip" with collections lists."""
+    sender = Person("page:trip", "page trip", "page")
+    return TurnContext(chat, sender, False, services, collections=frozenset({"lists"}))
+
+
+def test_db_for_a_page_turn(services: app.Services) -> None:
+    owner = ctx(services)
+    call(owner, "db", op="put", collection="lists", id="trip", data={"x": 1, "_shared": [GROUP]})
+    call(owner, "db", op="put", collection="lists", id="secret", data={"x": 2})
+    call(owner, "db", op="put", collection="notes", id="n", data={"_shared": [GROUP]})
+    chats = page(services, GROUP)
+    assert [t.name for t in tools.build(chats)] == ["db"]  # no other tool
+    listed = json.loads(call(chats, "db", op="list", collection="lists"))
+    assert [d["id"] for d in listed] == ["trip"]  # as the chat's members see it
+    with pytest.raises(PermissionError, match="uses only lists"):
+        call(chats, "db", op="get", collection="notes", id="n")  # shared, but not its collection
+    mine = page(services, "local:me")  # an owner's page still has no owner rights
+    assert json.loads(call(mine, "db", op="list", collection="lists")) == []
+    with pytest.raises(PermissionError):
+        call(mine, "db", op="get", collection="lists", id="secret")
+
+
 def test_artifact(services: app.Services) -> None:
     store = services.store
     html = '<html><head><meta name="attache-collections" content="trip"></head></html>'
@@ -312,6 +357,12 @@ def test_artifact(services: app.Services) -> None:
     assert record is not None and record["chat_key"] == GROUP
     schema = next(t for t in tools.build(member) if t.name == "artifact").schema
     assert schema["required"] == ["name", "html"] and "collections" not in schema["properties"]
+    assert "link" not in json.loads(call(member, "artifact", name="family board", html="<p/>"))
+    services.config.public_url = "https://pc.example.ts.net"  # sharing on
+    shared = json.loads(call(member, "artifact", name="family board", html="<p>v3</p>"))
+    assert shared["link"] == "share:family-board"  # web.share_url, stubbed here
+    mine = json.loads(call(ctx(services), "artifact", name="Trip List", html=html))
+    assert "link" not in mine  # the owner's own pages are not shared
 
 
 def test_schedule(services: app.Services) -> None:
@@ -397,7 +448,7 @@ def test_quote() -> None:
 
 def test_ask(services: app.Services) -> None:
     hub = services.channels
-    hub.answers = ["Yes", "Later", None, LookupError]
+    hub.answers = ["Yes", "Later", None, UNSEEN]
     assert call(ctx(services), "ask", question="Send the email?") == "Yes"
     assert call(ctx(services), "ask", question="When?", options=["Now", "Later"]) == "Later"
     assert call(ctx(services), "ask", question="Still there?") == "no answer"
@@ -426,7 +477,15 @@ def test_request(services: app.Services) -> None:
     assert hub.asked == [(owner_chat, "owner", question, ["Approve", "Decline"])]
     assert [(m["role"], m["text"]) for m in store.history(owner_chat)] == [("assistant", question)]
     assert len(hub.spawned) == 1  # waiting for the answer runs apart from the turn
-    asyncio.run(hub.spawned.pop())
+    (waiting,) = store.doc_list("_requests")  # kept until answered, so a restart can ask again
+    assert (waiting["member_chat"], waiting["sender_id"], waiting["summary"]) == (
+        GROUP,
+        "sam",
+        summary,
+    )
+    assert abs(waiting["until"] - time.time() - 600) < 5
+    hub.run_spawned()
+    assert store.doc_list("_requests") == []
     (task,) = store.task_list()
     assert (task["chat_key"], task["kind"], task["by"]) == ("local:me", "turn", "owner")
     assert abs(task["due"] - time.time()) < 5 and services.scheduler._wake.is_set()
@@ -436,11 +495,9 @@ def test_request(services: app.Services) -> None:
         == f"You approved this request from Sam (member) in {GROUP}. Do it, within your rules:"
     )
     assert lines[1:] == ["<<<", f"[Sam (member)]: {tools.quote(summary)}", ">>>"]  # one line
-    hub.answers = ["Decline", None, LookupError]  # None: no answer in time; then nobody saw it
+    hub.answers = ["Decline", None, UNSEEN]  # None: no answer in time; then nobody saw it
     results = [call(member, "request", summary=what) for what in ("x", "y", "z")]
-    for waiting in hub.spawned:
-        asyncio.run(waiting)
-    hub.spawned.clear()
+    hub.run_spawned()
     # Nobody could see the last one: the turn's own reply says so, so nothing contradicts it.
     assert results[2] == "Couldn't reach Alex just now; try again later."
     notices = [(m.chat_key, m.text) for m in hub.sent]
@@ -452,6 +509,7 @@ def test_request(services: app.Services) -> None:
     stored = [(m["role"], m["text"]) for m in store.history(GROUP)]
     assert stored == [("assistant", text) for _, text in notices]  # kept in the member's chat
     assert len(store.task_list()) == 1  # only the approved one
+    assert store.doc_list("_requests") == []  # each one forgotten once settled
     # A question nobody saw is not kept, so a later typed "Approve" there is just a message.
     kept = [m["text"] for m in store.history(owner_chat)]
     assert len(kept) == 3 and not any(text.endswith('"z"') for text in kept)
@@ -461,3 +519,56 @@ def test_request(services: app.Services) -> None:
     assert call(member, "request", summary="x" * 300).startswith("Asked")
     hub.spawned.pop().close()
     assert "request" not in [t.name for t in tools.build(ctx(services))]  # the owner just asks
+
+
+def test_ask_writes_an_approval_only_for_the_first_option(services: app.Services) -> None:
+    hub, folder = services.channels, services.home / ".approvals"
+    hub.answers = ["Send", "Keep", None]
+    options = ["Send", "Keep"]
+    for fingerprint, choice in [("abc12345", "Send"), ("def67890", "Keep"), ("ghi13579", None)]:
+        out = call(ctx(services), "ask", question="Send it?", options=options, approves=fingerprint)
+        assert out == (choice or "no answer")
+    assert [p.name for p in folder.iterdir()] == ["abc12345"]  # only for the first option
+    assert (folder / "abc12345").read_bytes() == b""
+    for bad in ("short1", "../../etc/x", "a" * 65, "abc-12345"):
+        with pytest.raises(ValueError, match="8 to 64 letters and digits"):
+            call(ctx(services), "ask", question="Send it?", approves=bad)
+    assert len(hub.asked) == 3  # a bad fingerprint is refused before anyone is asked
+
+
+def test_an_approval_checks_the_requester_is_still_a_member(services: app.Services) -> None:
+    services.config.chats[GROUP] = ChatConfig(GROUP, "Family", members=["sam"])
+    hub, store = services.channels, services.store
+    hub.answers = ["Approve", "Approve"]
+    call(ctx(services, "member", GROUP), "request", summary="a chores list")
+    services.config.chats[GROUP].members = []  # Sam left the chat before the owner answered
+    hub.run_spawned()
+    assert hub.sent[-1] == Outbound(GROUP, "declined: no longer a member here")
+    assert store.task_list() == [] and store.doc_list("_requests") == []
+    call(ctx(services, "member", "slack:DSAM"), "request", summary="a chores list")
+    hub.run_spawned()  # a direct chat has no member list: the approval goes ahead
+    assert hub.sent[-1].text == "Alex approved the request from Sam." and store.task_list()
+
+
+def test_requests_are_asked_again_after_a_restart(services: app.Services) -> None:
+    store, hub, now = services.store, services.channels, time.time()
+    asked = {"member_chat": GROUP, "sender_id": "sam", "sender_name": "Sam"}
+    asked |= {"who": "Sam (member)", "where": "Family"}
+    store.doc_put("_requests", "live", {**asked, "summary": "a chores list", "until": now + 60})
+    store.doc_put("_requests", "late", {**asked, "summary": "a rota", "until": now - 1})
+    store.doc_put("_requests", "unseen", {**asked, "summary": "a map", "until": now + 1})
+    hub.answers = [UNSEEN, UNSEEN, "Approve"]  # just after a start, nothing can show it yet
+    asyncio.run(tools.resume_requests(services, retry=0.05))
+    questions = [text for _, _, text, _ in hub.asked]
+    assert questions[:3] == ['Sam in Family asks: "a chores list"'] * 3  # tried until shown
+    assert set(questions[3:]) == {'Sam in Family asks: "a map"'}  # the late one: not asked
+    assert len(questions) > 5  # the map was tried again and again until its time was up
+    hub.run_spawned()
+    assert [m.text for m in hub.sent] == [
+        "Alex approved the request from Sam.",
+        "Alex did not answer the request from Sam.",  # past its time already
+        "Alex did not answer the request from Sam.",  # never shown before its time was up
+    ]
+    (task,) = store.task_list()
+    assert task["text"].endswith('\n<<<\n[Sam (member)]: "a chores list"\n>>>')
+    assert store.doc_list("_requests") == []
