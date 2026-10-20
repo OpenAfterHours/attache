@@ -6,11 +6,13 @@ name = "Attaché"  # how the assistant names itself; also its trigger word in gr
 
 [owner]
 name = "{owner}"
+# approvals = "slack:D0ALEXDM"  # the chat where approval requests reach you; default "local:me"
 
 # Your own sender id on each chat app, so your direct messages there reach you as the owner.
 # Ids can also go straight in [owner] (or [people.<id>]), like slack = "U0123".
 [owner.ids]
-slack = ""
+# slack = "U0ALEX"
+# signal = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"  # your Signal account id (ACI uuid)
 
 [routing]
 own_chats = "{endpoint}"    # your own chat (terminal and web) and your direct messages
@@ -19,6 +21,22 @@ group_chats = "claude-api"  # group chats, and anyone but you
 [web]
 host = "127.0.0.1"  # only this machine can reach the web page
 port = 8765
+
+# Chat apps. Each one is a skill that runs a small program, and is off until enabled here.
+# Secrets never go in this file: the skill's setup command keeps them in your system keychain,
+# for example `uv run ~/.attache/skills/slack/channel.py setup`.
+# [channels.slack]
+# enabled = true
+
+# [channels.signal]
+# enabled = true
+# number = "+447700900123"  # every other key reaches the program as ATTACHE_<KEY>
+
+# Turns from anyone but you are rate limited. These are the defaults.
+# [limits]
+# per_sender_hour = 20  # turns per person per hour
+# per_chat_hour = 60    # turns per chat per hour
+# member_daily = 200    # turns per day across everyone but you
 
 # Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
 # max_tokens, are passed to the backend as options.

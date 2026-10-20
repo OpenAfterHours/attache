@@ -22,16 +22,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from attache import skills, store
+from attache import skills, store, web
 from attache.types import Outbound, Tool, TurnContext
 
-OWNER, BOTH = frozenset({"owner"}), frozenset({"owner", "member"})
+OWNER, MEMBER, BOTH = frozenset({"owner"}), frozenset({"member"}), frozenset({"owner", "member"})
 OUTPUT_CAP = 20_000  # characters of command output kept: the end, where errors are
 SHELL = "cmd.exe" if os.name == "nt" else "sh"
 PRIVATE = {".secret", ".git", ".claude", "claude.md"}  # and attache.db*; any case, any depth
 NUM, ARRAY = {"type": "number"}, {"type": "array", "items": {"type": "string"}}
 TYPES = {"timeout": NUM, "in_minutes": NUM, "all": {"type": "boolean"}, "data": {"type": "object"}}
-TYPES |= {"args": ARRAY, "files": ARRAY}  # every other argument is a string
+TYPES |= {"args": ARRAY, "files": ARRAY, "options": ARRAY}  # every other argument is a string
 TOOLS: list[Tool] = []
 
 
@@ -43,8 +43,7 @@ def slug(text: str) -> str:
 
 def chat_slug(chat_key: str) -> str:
     """A folder name for a chat: readable, and distinct even when two keys slug alike."""
-    digest = hashlib.sha256(chat_key.encode("utf-8")).hexdigest()[:8]
-    return f"{slug(chat_key)[:40].strip('-')}-{digest}"
+    return f"{slug(chat_key)[:40].strip('-')}-{hashlib.sha256(chat_key.encode()).hexdigest()[:8]}"
 
 
 def chat_files(ctx: TurnContext) -> Path:
@@ -171,8 +170,7 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
         raise FileNotFoundError(f"skill {name!r} has no script {file!r}")
     if access(ctx.role, ctx.is_group) != "owner" and not for_members(skill):
         raise PermissionError(f"skill {name!r} is not available in this chat")
-    uv = shutil.which("uv")
-    if uv is None:
+    if not (uv := shutil.which("uv")):
         raise RuntimeError("uv is not installed: see https://docs.astral.sh/uv/")
     argv = [uv, "run", str(path), *map(str, args.get("args") or [])]
     return await _exec(argv, chat_files(ctx), 600)
@@ -182,16 +180,15 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
 async def send(args: dict[str, Any], ctx: TurnContext) -> str:
     """Send a message to this chat now, with optional files (paths relative to home; in shared
     chats, only files from this chat's files folder)."""
-    owner = access(ctx.role, ctx.is_group) == "owner"
-    folder = (ctx.services.home if owner else chat_files(ctx)).resolve()
+    folder = ctx.services.home if access(ctx.role, ctx.is_group) == "owner" else chat_files(ctx)
     files = [resolve(ctx, f) for f in args.get("files") or []]
     for path in files:
-        if not path.is_relative_to(folder) or not path.is_file():
+        if not path.is_relative_to(folder.resolve()) or not path.is_file():
             raise PermissionError(f"{path.name}: not a file in {folder}")
     text = str(args.get("text") or "")
     await ctx.services.channels.send(Outbound(ctx.chat_key, text, [str(p) for p in files]))
-    if text:  # so it is in the chat's history
-        ctx.services.store.add_message(ctx.chat_key, "assistant", text)
+    shown = text or f"(sent {', '.join(p.name for p in files)})"  # kept in the chat's history
+    ctx.services.store.add_message(ctx.chat_key, "assistant", shown)
     return "sent"
 
 
@@ -200,8 +197,8 @@ async def db(args: dict[str, Any], ctx: TurnContext) -> str:
     """Documents in named collections, e.g. lists and trackers. op: list (all docs) | get (by
     id) | put (replace the doc with `data`; no id creates one) | delete (by id)."""
     chat = None if access(ctx.role, ctx.is_group) == "owner" else ctx.chat_key
-    request = (args["op"], args["collection"], args.get("id"), args.get("data"))
-    found = store.db_access(ctx.services.store, *request, by=ctx.sender.id, chat=chat)
+    call = (args["op"], args["collection"], args.get("id"), args.get("data"))
+    found = store.db_access(ctx.services.store, *call, by=ctx.sender.id, chat=chat)
     return json.dumps(found, default=str, ensure_ascii=False)
 
 
@@ -220,7 +217,36 @@ async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
     await write_file({"path": f"artifacts/{name}.html", "content": args["html"]}, ctx)
     if shared:
         services.store.doc_put("_artifacts", name, {"chat_key": ctx.chat_key}, by=ctx.sender.id)
-    return json.dumps({"url": f"{services.web_url}/#page={name}"})  # opens in Attaché's window
+    url = f"{services.web_url}/#page={name}"  # opens in Attaché's window
+    return json.dumps({"url": url, "snapshot": web.snapshot_url(services, name)})  # for render
+
+
+@_tool("question options?")
+async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
+    """Ask the owner a question in this chat and wait for the answer; options default to Yes
+    and No. Returns the chosen option, or "no answer"."""
+    options = list(args.get("options") or ["Yes", "No"])
+    choice = await ctx.services.approvals.ask(ctx.chat_key, "owner", args["question"], options)
+    return choice or "no answer"
+
+
+@_tool("summary", MEMBER)
+async def request(args: dict[str, Any], ctx: TurnContext) -> str:
+    """Ask the owner to approve something only they can do, such as changing a skill or how a
+    shared list works. Returns "approved; it will be done", "declined" or "no answer yet"."""
+    services, chat = ctx.services, ctx.services.config.chat(ctx.chat_key)
+    who, where = f"{ctx.sender.name} ({ctx.role})", (chat and chat.name) or ctx.chat_key
+    question = f"{ctx.sender.name} in {where} asks: {args['summary']}"
+    owner_chat = services.config.approvals  # where approvals are asked, and the work happens
+    choice = await services.approvals.ask(owner_chat, "owner", question, ["Approve", "Decline"])
+    if choice != "Approve":
+        return "declined" if choice == "Decline" else "no answer yet"
+    # The owner said yes, but the member's words reach the turn only as quoted data, fenced as
+    # the router fences group messages. json.dumps escapes every line break, so one line.
+    fenced = f"<<<\n[{who}]: {json.dumps(args['summary'])}\n>>>"
+    text = f"You approved this request from {who} in {where}. Do it, within your rules:\n{fenced}"
+    services.scheduler.add(owner_chat, text, at=datetime.now().timestamp(), kind="turn", by="owner")
+    return "approved; it will be done"
 
 
 @_tool("op text? at? in_minutes? cron? kind? id? all?", BOTH)
@@ -247,8 +273,7 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
     at = datetime.fromisoformat(args["at"]).timestamp() if args.get("at") else None  # naive: local
     if at is None and args.get("in_minutes") not in (None, ""):
         at = datetime.now().timestamp() + 60 * float(args["in_minutes"])
-    cron = args.get("cron") or None
-    scheduler = ctx.services.scheduler
+    scheduler, cron = ctx.services.scheduler, args.get("cron") or None
     task = scheduler.add(ctx.chat_key, args["text"], at=at, cron=cron, kind=kind, by=ctx.sender.id)
     return json.dumps(task)
 

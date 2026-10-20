@@ -112,6 +112,8 @@
   .msg a { color: var(--link); }
   .msg a:hover { color: var(--accent); }
   .files { margin-top: 4px; font: 12px/1.5 var(--font-mono); color: var(--muted); }
+  .choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
+  .choices button:disabled { opacity: 0.5; cursor: default; }
   .empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
   form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
   textarea, button { color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -171,6 +173,7 @@
   const KEY = "attache-token";
   let TOKEN = null, current = null, wanted = null, pages = [];
   let thinking = null, loading = false, early = [];
+  const asks = new Map(); // ask_id -> the bubble of a question still waiting for your answer
 
   // Links look like http://127.0.0.1:<port>/#t=<token>&page=<name>; either part may be missing.
   // The token is random per run of Attaché: keep it for other tabs, and out of the address bar.
@@ -232,16 +235,36 @@
     });
   }
 
-  function add(who, text, files) {
+  function add(who, text, files, note) {
     hello.remove();
     const msg = el("div", `msg ${who}`);
     writeText(msg, text);
     if (files && files.length) {
       msg.append(el("div", "files", "Files: " + files.map((f) => f.split(/[\\/]/).pop()).join(", ")));
     }
+    if (note) msg.append(el("div", "files", note));
     log.append(msg);
     log.scrollTop = log.scrollHeight;
     return msg;
+  }
+
+  // A question for you (an approval, say): one button per option. The first answer counts.
+  function showAsk({ ask_id, text, options }) {
+    const msg = add("bot", text);
+    const choices = el("div", "choices");
+    for (const option of options) {
+      const button = el("button", "", option);
+      button.type = "button";
+      button.addEventListener("click", async () => {
+        choices.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        const res = await api("POST", "/api/answer", { ask_id, choice: option }).catch(() => null);
+        asks.delete(ask_id);
+        choices.replaceChildren(el("span", "files", res?.ok ? `You chose: ${option}` : "No longer open."));
+      });
+      choices.append(button);
+    }
+    msg.append(choices);
+    asks.set(ask_id, msg);
   }
 
   function setThinking(on) {
@@ -262,8 +285,9 @@
       const mine = (m) => m.role === "user" && m.sender_name !== "Reminder"; // reminders are ours
       for (const m of past) add(mine(m) ? "you" : "bot", m.text);
       if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
-      const fresh = past.filter((m) => !mine(m) && m.ts >= since).map((m) => m.text);
-      early = early.filter((msg) => !fresh.includes(msg.text));
+      log.append(...asks.values()); // questions still open stay below the chat
+      const fresh = past.filter((m) => m.ts >= since).map((m) => m.text);
+      early = early.filter((msg) => msg.ask_id || !fresh.includes(msg.text));
     }
     loading = false;
     early.splice(0).forEach(receive);
@@ -271,6 +295,11 @@
 
   function receive(msg) {
     if (loading) return void early.push(msg);
+    if (msg.ask_id) return showAsk(msg);
+    if (msg.author) { // you typed this in the terminal: same chat, shown here too
+      add("you", msg.text || "", msg.files, `from ${msg.origin || "elsewhere"}`);
+      return setThinking(true);
+    }
     setThinking(false);
     add("bot", msg.text || "", msg.files);
     loadPages(); // the reply may come with a new page
@@ -351,6 +380,7 @@
       const msg = JSON.parse(event.data);
       if (msg.chat_key === "local:me") receive(msg);
     });
+    events.addEventListener("ask", (event) => receive(JSON.parse(event.data)));
   }
 
   addEventListener("hashchange", () => {

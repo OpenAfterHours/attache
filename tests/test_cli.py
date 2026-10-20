@@ -91,6 +91,26 @@ def test_doctor(
     assert cli.main(["doctor"]) == 1 and "✗ git installed" in capsys.readouterr().out
 
 
+def test_doctor_checks_enabled_channels(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    channels = "\n[channels.slack]\nenabled = true\n[channels.signal]\nenabled = true\n"
+    channels += "[channels.matrix]\nenabled = false\n"
+    (home / "attache.toml").write_text(
+        LOCAL.format(port=free_port(), group="local") + channels, "utf-8"
+    )
+    skill = "---\nname: {0}\ndescription: The {0} channel.\n{1}---\n"
+    for name, meta in [("slack", "metadata:\n  attache-channel: channel.py\n"), ("signal", "")]:
+        (home / "skills" / name).mkdir(parents=True)
+        (home / "skills" / name / "SKILL.md").write_text(skill.format(name, meta), "utf-8")
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "✓ channel slack: skills/slack declares attache-channel" in out
+    assert "✗ channel signal: skills/signal declares attache-channel" in out
+    assert "matrix" not in out  # not enabled: not checked
+
+
 def test_doctor_warnings_and_notes(
     home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

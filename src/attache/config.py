@@ -12,9 +12,10 @@ from attache import skills
 from attache.types import Endpoint, Person
 
 BUNDLED = Path(__file__).parent / "bundled"
-PERSON_KEYS = ("name", "role", "ids")  # any other key is a channel id, like slack = "U0123"
+PERSON_KEYS = ("name", "role", "ids", "approvals")  # others are channel ids, like slack = "U01"
 # The [routing], [web] and [assistant] keys, which are all Config fields.
 SECTIONS = {"routing": ["own_chats", "group_chats"], "web": ["host", "port"], "assistant": ["name"]}
+LIMITS = {"per_sender_hour": 20, "per_chat_hour": 60, "member_daily": 200}  # turns, non-owners
 
 
 @dataclass
@@ -39,6 +40,9 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8765
     name: str = "Attaché"  # how the assistant names itself; also its default trigger word
+    channels: dict[str, dict[str, Any]] = field(default_factory=dict)  # [channels.<name>]
+    approvals: str = "local:me"  # the chat where approval requests reach the owner
+    limits: dict[str, int] = field(default_factory=lambda: dict(LIMITS))
 
     def person(self, channel: str, sender_id: str) -> Person | None:
         """Who sent this? Senders on the `local` channel (terminal and web) are the owner."""
@@ -96,7 +100,15 @@ def load(home: Path | None = None) -> Config:
         api, model = table.pop("api", ""), table.pop("model", "")
         base_url, key_env = table.pop("base_url", None), table.pop("key_env", None)
         endpoints[name] = Endpoint(name, api, model, base_url, key_env, options=table)
-    settings: dict[str, Any] = {}
+    channels = raw.get("channels", {})
+    for name, table in channels.items():
+        table.setdefault("enabled", False)
+        wrong = [k for k, v in table.items() if not isinstance(v, bool if k == "enabled" else str)]
+        if wrong:  # enabled is true or false; the rest reach the sidecar as text
+            raise ValueError(f"{path}: [channels.{name}] {', '.join(wrong)}: wrong type of value")
+    limits = {**LIMITS, **_check(path, "limits", raw.get("limits", {}), list(LIMITS))}
+    settings: dict[str, Any] = {"channels": channels, "limits": limits}
+    settings["approvals"] = own.get("approvals", "local:me")
     for section, keys in SECTIONS.items():
         settings.update(_check(path, section, raw.get(section, {}), keys))
     try:

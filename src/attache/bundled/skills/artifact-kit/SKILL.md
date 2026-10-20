@@ -96,12 +96,13 @@ templates themselves unless the owner asks for a new look.
 {"name": "trip-checklist", "html": "<!doctype html>..."}
 ```
 
-- The `artifact` tool takes only `name` and `html`, and returns `{"url": ...}`, a link such as
-  `http://127.0.0.1:8765/#page=trip-checklist`. Give the person that link: it opens the page
-  in the Pages panel of the Attaché window, the only place pages run.
+- The `artifact` tool takes only `name` and `html`, and returns `{"url", "snapshot"}`. `url`,
+  such as `http://127.0.0.1:8765/#page=trip-checklist`, opens the page in the Pages panel of
+  the Attaché window, the only place pages run: give it to the owner in their own chat.
+- Anyone else (Slack, Signal, a group) gets a picture: render the `snapshot` with the render
+  skill (`render.py <snapshot> page.png`) and `send` the PNG. Never send the snapshot link.
 - Publishing the same name again replaces the page; it shows the new version when opened.
-- Names become lowercase-and-hyphens slugs, shown under Pages as words ("trip-checklist" is
-  "Trip checklist"); choose short, clear ones.
+- Names become slugs, shown under Pages as words ("trip-checklist" is "Trip checklist").
 
 ## Before you publish
 

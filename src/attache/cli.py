@@ -33,7 +33,6 @@ def main(argv: list[str] | None = None) -> int:
     """Run the `attache` command and return a process exit code."""
     with suppress(AttributeError, ValueError, OSError):  # Windows consoles and pipes: UTF-8
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    with suppress(AttributeError, ValueError, OSError):
         if not sys.stdin.isatty():  # a console already reads Unicode; a pipe or file may not
             sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     raw = argparse.RawDescriptionHelpFormatter
@@ -70,9 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parser.error("use: attache skills list | log [NAME] | undo NAME")
         return 0
-    if args.command == "doctor":
-        return _doctor(home)
-    return _run(home, terminal=args.command != "run")
+    return _doctor(home) if args.command == "doctor" else _run(home, terminal=args.command != "run")
 
 
 def _doctor(home: Path) -> int:
@@ -97,6 +94,10 @@ def _doctor(home: Path) -> int:
         checks.append((mark, f"endpoint {name}" + ("" if ok else f" needs {need}")))
     checks += [("✓" if shutil.which(tool) else "✗", f"{tool} installed") for tool in ("git", "uv")]
     if cfg:
+        found = {s.name: s.meta.get("metadata") or {} for s in skills.discover(home)}
+        for name in [n for n, settings in cfg.channels.items() if settings.get("enabled")]:
+            mark = "✓" if "attache-channel" in found.get(name, {}) else "✗"
+            checks.append((mark, f"channel {name}: skills/{name} declares attache-channel"))
         from attache import app  # the web stack, for the same bind check as `attache run`
 
         try:

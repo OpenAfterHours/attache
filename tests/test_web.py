@@ -6,14 +6,18 @@ import re
 import shutil
 import socket
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from attache import __version__, config, skills, web
@@ -44,6 +48,17 @@ class FakeRouter:
         self.seen.append(msg)
 
 
+class FakeApprovals:
+    """Stands in for approvals.Approvals: accepts "Approve" for the ask "a1" only."""
+
+    def __init__(self) -> None:
+        self.answers: list[tuple[str, str, str]] = []
+
+    def answer(self, ask_id: str, person_id: str, choice: str) -> bool:
+        self.answers.append((ask_id, person_id, choice))
+        return ask_id == "a1" and choice == "Approve"
+
+
 @pytest.fixture
 def services(home: Path) -> Any:
     (home / "attache.toml").write_text('[owner]\nname = "Alex"\n', encoding="utf-8")
@@ -55,6 +70,7 @@ def services(home: Path) -> Any:
         gateway={},
         ui_token=UI_TOKEN,
         web_url=BASE,
+        approvals=FakeApprovals(),
     )
     store.close()
 
@@ -325,6 +341,7 @@ def test_chat_hands_an_owner_message_to_the_router(env: Any) -> None:
         "Alex",
     )
     assert msg.text == "hello" and msg.chat_key == "local:me"
+    assert msg.origin == "web"  # so the reply's echo of it is not shown twice
     page(env.sv, "home")
     assert env.client.post("/api/chat", headers=auth("home"), json={"text": "x"}).status_code == 403
     assert env.client.post("/api/chat", json={"text": "x"}).status_code == 401
@@ -503,8 +520,7 @@ def test_ui_and_page_kit_carry_the_tokens_and_fonts() -> None:
 
 def test_bundled_fonts_are_woff2_and_small() -> None:
     fonts = sorted((web.STATIC / "fonts").glob("*.woff2"))
-    if not fonts:
-        pytest.skip("the font files have not been added to static/fonts/ yet")
+    assert len(fonts) == 7  # Inter 400-700, Space Grotesk, JetBrains Mono 400 and 600
     for font in fonts:
         assert re.fullmatch(r"[a-z0-9-]+\.woff2", font.name)
         assert font.read_bytes()[:4] == b"wOF2", font.name
@@ -515,15 +531,9 @@ def test_bundled_fonts_are_woff2_and_small() -> None:
         assert (web.STATIC / "fonts" / f"OFL-{family}.txt").is_file()
 
 
-def test_fonts_are_served_to_sandboxed_pages(
-    env: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (tmp_path / "fonts").mkdir()
-    (tmp_path / "fonts" / "inter-latin-400-normal.woff2").write_bytes(b"wOF2 test font")
-    (tmp_path / "fonts" / "OFL-Inter.txt").write_text("licence", encoding="utf-8")
-    monkeypatch.setattr(web, "STATIC", tmp_path)
+def test_fonts_are_served_to_sandboxed_pages(env: Any) -> None:
     r = env.client.get("/fonts/inter-latin-400-normal.woff2", headers={"Origin": "null"})
-    assert r.status_code == 200 and r.content == b"wOF2 test font"
+    assert r.status_code == 200 and r.content[:4] == b"wOF2"
     assert r.headers["access-control-allow-origin"] == "*"
     assert "max-age=31536000" in r.headers["cache-control"]
     for name in ("OFL-Inter.txt", "Inter-latin.woff2", "missing.woff2", "x.ttf", "..%5Cui.html"):
@@ -594,8 +604,87 @@ def test_events_reach_only_the_streams_whose_scope_covers_them(services: Any) ->
     assert summary["home"] == [("doc", "p"), ("doc", "s"), ("doc", "p")]
     assert summary["notes"] == []
     assert summary["family"] == [("doc", "s")]  # only the doc shared with its chat
-    assert seen["ui"][-1][1] == {"chat_key": "local:me", "text": "hello", "files": ["files/a.txt"]}
+    message = {"chat_key": "local:me", "text": "hello", "files": ["files/a.txt"], "author": None}
+    assert message.items() <= seen["ui"][-1][1].items()
     assert seen["home"][1][1]["doc"]["title"] == "x"
+
+
+def ui_events(services: Any, action: Any) -> list[tuple[str, dict[str, Any]]]:
+    """The events a UI stream and a page stream get while `action(channel)` runs."""
+    channel = web.WebChannel()
+
+    async def scenario() -> list[tuple[str, dict[str, Any]]]:
+        ui, page = channel.stream(web.Scope("_ui", None)), channel.stream(web.Scope("home", None))
+        await anext(ui)
+        await anext(page)
+        await action(channel)
+        assert await drain(page) == []  # messages and asks are for the Attaché page only
+        return await drain(ui)
+
+    return asyncio.run(scenario())
+
+
+def test_send_skips_the_pages_own_message_and_marks_mirrored_ones(services: Any) -> None:
+    async def action(channel: web.WebChannel) -> None:
+        await channel.send(Outbound("local:me", "typed in this page", origin="web"))
+        await channel.send(
+            Outbound("local:me", "typed in the terminal", author="Alex", origin="terminal")
+        )
+        await channel.send(Outbound("local:me", "a reply"))
+
+    events = ui_events(services, action)
+    assert [(e["text"], e["author"], e["origin"]) for _, e in events] == [
+        (
+            "typed in the terminal",
+            "Alex",
+            "terminal",
+        ),  # the page shows it as yours, "from terminal"
+        ("a reply", None, ""),
+    ]
+
+
+def test_ask_reaches_the_page_as_an_ask_event(services: Any) -> None:
+    async def action(channel: web.WebChannel) -> None:
+        await channel.ask("me", "a1", "Sam asked: share the packing list?", ["Approve", "Decline"])
+
+    question = {"ask_id": "a1", "text": "Sam asked: share the packing list?"}
+    assert ui_events(services, action) == [("ask", {**question, "options": ["Approve", "Decline"]})]
+
+
+def test_answer_goes_to_approvals_as_the_owner(env: Any) -> None:
+    r = env.client.post("/api/answer", headers=UI, json={"ask_id": "a1", "choice": "Approve"})
+    assert r.json() == {"ok": True}
+    r = env.client.post("/api/answer", headers=UI, json={"ask_id": "a1", "choice": "Maybe"})
+    assert r.json() == {"ok": False}  # not an option, or the ask is no longer open
+    assert env.sv.approvals.answers == [("a1", "owner", "Approve"), ("a1", "owner", "Maybe")]
+    page(env.sv, "home")
+    assert env.client.post("/api/answer", headers=auth("home"), json={}).status_code == 403
+    assert env.client.post("/api/answer", json={}).status_code == 401
+    bad = {**UI, "Content-Type": "application/json"}
+    assert env.client.post("/api/answer", headers=bad, content=b"[1]").status_code == 400
+    assert len(env.sv.approvals.answers) == 2
+
+
+def test_snapshot_url_lets_the_render_browser_open_the_page(env: Any) -> None:
+    page(env.sv, "home")
+    url = web.snapshot_url(env.sv, "home")
+    render = web.artifact_token(KEY, "render:home")
+    assert url == f"{BASE}/a/home?t={web.artifact_token(KEY, 'home')}&r={render}"
+    top = {"Sec-Fetch-Dest": "document"}
+    r = env.client.get(url.removeprefix(BASE), headers=top)
+    assert r.status_code == 200 and 'data-artifact="home"' in r.text
+    assert r.headers["content-security-policy"] == CSP  # still sandboxed when top-level
+    page(env.sv, "trip")
+    for query in (
+        f"?t={web.artifact_token(KEY, 'home')}",  # no r: top-level stays refused
+        f"?t={web.artifact_token(KEY, 'home')}&r=wrong",
+        f"?t={web.artifact_token(KEY, 'home')}&r={web.artifact_token(KEY, 'render:trip')}",
+        f"?t=wrong&r={render}",
+    ):
+        assert env.client.get(f"/a/home{query}", headers=top).status_code == 403, query
+    assert env.client.get(src("home"), headers={"Sec-Fetch-Dest": "iframe"}).status_code == 200
+    next_run = SimpleNamespace(ui_token="the-next-run", web_url=BASE)
+    assert web.snapshot_url(next_run, "home") != url  # tokens rotate with the run
 
 
 def test_stream_pings_when_idle(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -655,3 +744,40 @@ def test_serve_answers_on_the_socket_it_is_given(services: Any) -> None:
     with socket.create_server(("127.0.0.1", 0)) as sock:
         reply = asyncio.run(scenario(sock))
     assert reply.startswith(b"HTTP/1.1 200") and b"window.attache" in reply
+
+
+def test_serve_lets_running_requests_finish_when_cancelled() -> None:
+    """A turn started by /api/chat runs in the request; cancelling serve waits for it (up to
+    about 2 s, then it is cancelled), so app.run can close the store after."""
+
+    async def slow(request: Request) -> Any:
+        await asyncio.sleep(float(request.query_params["s"]))
+        return PlainTextResponse("finished")
+
+    app = Starlette(routes=[Route("/slow", slow)])
+
+    async def ask_then_cancel(sock: socket.socket, seconds: float) -> tuple[bytes, float]:
+        server = asyncio.create_task(web.serve(app, sock))
+        for _ in range(100):  # until uvicorn is listening
+            try:
+                reader, writer = await asyncio.open_connection(*sock.getsockname()[:2])
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        writer.write(f"GET /slow?s={seconds} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+        await asyncio.sleep(0.2)  # the request is running
+        start = time.monotonic()
+        server.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await server
+        elapsed = time.monotonic() - start
+        reply = await asyncio.wait_for(reader.read(), 1)
+        writer.close()
+        return reply, elapsed
+
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        reply, elapsed = asyncio.run(ask_then_cancel(sock, 0.5))
+    assert b"200 OK" in reply and reply.endswith(b"finished") and elapsed < 2
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        reply, elapsed = asyncio.run(ask_then_cancel(sock, 30))
+    assert b"finished" not in reply and 1.5 < elapsed < 4  # bounded: cancelled after about 2 s
