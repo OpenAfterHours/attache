@@ -11,7 +11,12 @@ uv sync                      # install dev environment
 uv run pytest                # all tests, including the size budget
 uv run ruff check . && uv run ruff format --check .
 uv run attache --help
+uv run --group docs zensical serve   # docs site (zensical.toml, docs/); build with --strict
 ```
+
+The web UI, the bundled page kit and the docs site all use the OpenAfterHours design tokens
+(`src/attache/static/oah-tokens.css`, vendored from rwa_calculator; a test guards drift). Fonts
+are self-hosted in `src/attache/static/fonts/` (SIL OFL), so nothing loads from the internet.
 
 ## Layout
 

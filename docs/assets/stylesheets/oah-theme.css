@@ -1,0 +1,167 @@
+/* ==========================================================================
+   OpenAfterHours night-sky theme for the Attaché docs.
+
+   The brand tokens below are copied unchanged from rwa_calculator's
+   docs/assets/stylesheets/tokens.css, the single source of truth for the
+   OpenAfterHours palette. Change them there first, then copy them here.
+   The rest maps them onto the theme's md-* variables, as mooring's
+   oah-theme.css does: night-sky slate surfaces, a dark header, orange
+   accents and Space Grotesk headings.
+   ========================================================================== */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@300..700&family=JetBrains+Mono:wght@400;600;700&display=swap");
+
+/* ---------- Design tokens (brand), from rwa_calculator ------ */
+:root {
+  --oah-orange:           #ff9100;
+  --oah-orange-bright:    #ffa724;
+  --oah-orange-hover:     #e68200;
+  --oah-orange-soft:      #ffb74d;
+  --oah-owl-body:         #c9442a;
+  --oah-owl-eye:          #ffc857;
+  --oah-terminal-green:   #3dd68c;
+
+  --oah-slate-900:        #0d0e11;
+  --oah-slate-850:        #11141a;
+  --oah-slate-800:        #161719;
+  --oah-slate-700:        #1f2430;
+  --oah-slate-600:        #2a3142;
+  --oah-slate-500:        #3b4356;
+  --oah-slate-400:        #64748b;
+  --oah-slate-300:        #a0a4ab;
+  --oah-slate-200:        #cbd0d8;
+  --oah-slate-100:        #e2e4e8;
+  --oah-slate-050:        #f1f5f9;
+
+  --font-sans:    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                  Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Space Grotesk", "Inter", -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", "Roboto Mono", "Fira Code",
+                  ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---------- Site helpers (borders, radii), from mooring ----- */
+:root {
+  --oah-border: rgba(216, 222, 233, 0.12);
+  --oah-border-soft: rgba(216, 222, 233, 0.08);
+  --oah-radius-md: 8px;
+  --oah-radius-lg: 12px;
+}
+
+/* ---------- Display headings across the whole site ---------- */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-header__title,
+.md-nav__title {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.md-typeset h1 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* ---------- Dark (default) scheme: night-sky surfaces ------- */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--oah-slate-900);
+  --md-default-bg-color--light: var(--oah-slate-850);
+  --md-default-bg-color--lighter: var(--oah-slate-800);
+  --md-default-fg-color: var(--oah-slate-100);
+  --md-default-fg-color--light: var(--oah-slate-300);
+  --md-default-fg-color--lighter: var(--oah-slate-400);
+  --md-default-fg-color--lightest: rgba(216, 222, 233, 0.08);
+
+  /* A dark header, not an orange one: orange is for accents and links. */
+  --md-primary-fg-color: var(--oah-slate-900);
+  --md-primary-fg-color--light: var(--oah-slate-850);
+  --md-primary-fg-color--dark: var(--oah-slate-900);
+  --md-primary-bg-color: var(--oah-slate-100);
+  --md-primary-bg-color--light: var(--oah-slate-300);
+
+  --md-accent-fg-color: var(--oah-orange);
+  --md-accent-fg-color--transparent: rgba(255, 145, 0, 0.1);
+
+  --md-typeset-a-color: var(--oah-orange-soft);
+  --md-code-bg-color: var(--oah-slate-850);
+  --md-code-fg-color: var(--oah-slate-100);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+  border-bottom: 1px solid var(--oah-border-soft);
+}
+
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: var(--oah-orange);
+}
+
+/* Inline code in orange. */
+[data-md-color-scheme="slate"] .md-typeset code {
+  color: var(--oah-orange-soft);
+  background: rgba(216, 222, 233, 0.06);
+}
+
+/* Code blocks keep the normal text colour; only inline code is orange. */
+[data-md-color-scheme="slate"] .md-typeset pre > code {
+  color: var(--md-code-fg-color);
+  background: var(--md-code-bg-color);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-typeset__table th {
+  background: var(--oah-slate-850);
+}
+
+/* ---------- Light scheme: clean, with orange accents -------- */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--oah-slate-900);
+  --md-primary-bg-color: #ffffff;
+  --md-accent-fg-color: var(--oah-orange-hover);
+  --md-typeset-a-color: var(--oah-orange-hover);
+}
+
+[data-md-color-scheme="default"] .md-typeset code {
+  color: var(--oah-orange-hover);
+}
+
+[data-md-color-scheme="default"] .md-typeset pre > code {
+  color: var(--md-code-fg-color);
+}
+
+/* ---------- Header logo --------------------------------------- */
+/* The OpenAfterHours icon is round: give it room and an orange ring,
+   as the rwa_calculator landing page does. */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
+  width: auto;
+  border-radius: 999px;
+}
+
+/* ---------- Screenshots: a framed window ---------------------- */
+.md-typeset img.oah-shot {
+  display: block;
+  border: 1px solid var(--oah-border);
+  border-radius: var(--oah-radius-lg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 4px 20px rgba(255, 145, 0, 0.08);
+}
+
+[data-md-color-scheme="default"] .md-typeset img.oah-shot {
+  border-color: var(--oah-slate-200);
+  box-shadow: 0 8px 28px rgba(13, 14, 17, 0.12);
+}
+
+/* ---------- Grid cards: an orange edge on hover --------------- */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border-radius: var(--oah-radius-lg);
+  transition: border-color 200ms var(--ease-std), box-shadow 200ms var(--ease-std);
+}
+
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid > .card:hover {
+  border-color: var(--oah-orange);
+  box-shadow: 0 4px 20px rgba(255, 145, 0, 0.12);
+}

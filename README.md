@@ -8,6 +8,8 @@ cap CI enforces; everything else is a skill.
 > **Status:** phase 1 of the [roadmap](docs/proposal.html): the local core, terminal and web
 > chat. Slack and Signal arrive in phase 2, email (Outlook, Gmail, Titan) in phase 3.
 
+**Documentation:** <https://openafterhours.github.io/attache/>.
+
 ## Try it
 
 ```

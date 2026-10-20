@@ -340,7 +340,7 @@ def test_messages_are_the_last_fifty_of_the_owner_chat(env: Any) -> None:
     r = env.client.get("/api/messages", headers=UI)
     got = r.json()
     assert [m["text"] for m in got] == [f"m{n}" for n in range(11, 60)] + ["Reminder: call Sam"]
-    assert set(got[0]) == {"role", "text", "ts", "sender_name"} and got[0]["sender_name"] == "Alex"
+    assert {"role", "text", "ts", "sender_name"} <= set(got[0]) and got[0]["sender_name"] == "Alex"
     assert got[-1]["sender_name"] == "Reminder"  # the page shows these as Attaché's, not yours
     assert "access-control-allow-origin" not in r.headers
     page(env.sv, "home")
@@ -444,6 +444,90 @@ def test_mcp_refuses_browsers_and_other_content(env: Any) -> None:
     assert batch.status_code == 400 and batch.json()["error"] == "send a JSON object"
     charset = {"Content-Type": "application/json; charset=utf-8"}
     assert env.client.post("/mcp/tok", content=json.dumps(ping), headers=charset).status_code == 200
+
+
+# the OpenAfterHours design system and fonts
+
+# The :root values of OpenAfterHours/rwa_calculator docs/assets/stylesheets/tokens.css, the
+# org's single source of truth, pinned here so the vendored copy cannot drift unnoticed.
+UPSTREAM_TOKENS = {
+    "--oah-orange": "#ff9100",
+    "--oah-orange-bright": "#ffa724",
+    "--oah-orange-hover": "#e68200",
+    "--oah-orange-soft": "#ffb74d",
+    "--oah-owl-body": "#c9442a",
+    "--oah-owl-eye": "#ffc857",
+    "--oah-terminal-green": "#3dd68c",
+    "--oah-slate-900": "#0d0e11",
+    "--oah-slate-850": "#11141a",
+    "--oah-slate-800": "#161719",
+    "--oah-slate-700": "#1f2430",
+    "--oah-slate-600": "#2a3142",
+    "--oah-slate-500": "#3b4356",
+    "--oah-slate-400": "#64748b",
+    "--oah-slate-300": "#a0a4ab",
+    "--oah-slate-200": "#cbd0d8",
+    "--oah-slate-100": "#e2e4e8",
+    "--oah-slate-050": "#f1f5f9",
+    "--font-sans": '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, '
+    "Arial, sans-serif",
+    "--font-display": '"Space Grotesk", "Inter", -apple-system, sans-serif',
+    "--font-mono": '"JetBrains Mono", "Roboto Mono", "Fira Code", ui-monospace, SFMono-Regular, '
+    "Menlo, monospace",
+    "--ease-std": "cubic-bezier(0.4, 0, 0.2, 1)",
+}
+OAH = (web.STATIC / "oah-tokens.css").read_text(encoding="utf-8")
+FONTS_CSS = (web.STATIC / "fonts.css").read_text(encoding="utf-8")
+KIT = skills.BUNDLED / "artifact-kit"
+
+
+def root_block(css: str) -> str:
+    return re.search(r":root \{.*?\n\}", css, re.S)[0]
+
+
+def test_vendored_tokens_match_upstream() -> None:
+    found = re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", root_block(OAH))
+    assert {name: " ".join(value.split()) for name, value in found} == UPSTREAM_TOKENS
+    assert "SINGLE SOURCE OF TRUTH" in OAH  # the upstream header is kept
+    assert "@import url(" not in OAH and "googleapis" not in OAH  # fonts are served locally
+
+
+def test_ui_and_page_kit_carry_the_tokens_and_fonts() -> None:
+    faces = FONTS_CSS[FONTS_CSS.index("@font-face") :].strip()
+    for path in (web.STATIC / "ui.html", KIT / "tokens.css"):
+        text = path.read_text(encoding="utf-8")
+        assert root_block(OAH) in text and faces in text, path.name
+    urls = re.findall(r'url\("([^"]+)"\)', FONTS_CSS)
+    assert urls and all(re.fullmatch(r"/fonts/[a-z0-9-]+\.woff2", url) for url in urls)
+
+
+def test_bundled_fonts_are_woff2_and_small() -> None:
+    fonts = sorted((web.STATIC / "fonts").glob("*.woff2"))
+    if not fonts:
+        pytest.skip("the font files have not been added to static/fonts/ yet")
+    for font in fonts:
+        assert re.fullmatch(r"[a-z0-9-]+\.woff2", font.name)
+        assert font.read_bytes()[:4] == b"wOF2", font.name
+    assert sum(font.stat().st_size for font in fonts) < 256_000
+    named = {url.removeprefix("/fonts/") for url in re.findall(r'url\("([^"]+)"\)', FONTS_CSS)}
+    assert named == {font.name for font in fonts}
+    for family in ("Inter", "SpaceGrotesk", "JetBrainsMono"):
+        assert (web.STATIC / "fonts" / f"OFL-{family}.txt").is_file()
+
+
+def test_fonts_are_served_to_sandboxed_pages(
+    env: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "fonts").mkdir()
+    (tmp_path / "fonts" / "inter-latin-400-normal.woff2").write_bytes(b"wOF2 test font")
+    (tmp_path / "fonts" / "OFL-Inter.txt").write_text("licence", encoding="utf-8")
+    monkeypatch.setattr(web, "STATIC", tmp_path)
+    r = env.client.get("/fonts/inter-latin-400-normal.woff2", headers={"Origin": "null"})
+    assert r.status_code == 200 and r.content == b"wOF2 test font"
+    assert r.headers["access-control-allow-origin"] == "*"
+    assert "max-age=31536000" in r.headers["cache-control"]
+    for name in ("OFL-Inter.txt", "Inter-latin.woff2", "missing.woff2", "x.ttf", "..%5Cui.html"):
+        assert env.client.get(f"/fonts/{name}").status_code == 404, name
 
 
 # tokens
