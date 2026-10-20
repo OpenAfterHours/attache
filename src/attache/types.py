@@ -69,13 +69,16 @@ class Outbound:
     origin: str = ""
 
 
+# What a channel's start() is given: it hands the message to the router and returns at once.
 OnMessage = Callable[[Inbound], Awaitable[None]]
-OnAnswer = Callable[[str, str, str], bool]  # (ask_id, platform sender_id, choice) -> accepted
+# (channel, ask_id, platform sender_id, choice) -> accepted
+OnAnswer = Callable[[str, str, str, str], bool]
 
 
 class Channel(Protocol):
-    """A chat surface. It may also define `async ask(chat_id, ask_id, text, options)` to show
-    a question with native buttons or reactions; ChannelManager falls back to numbered text."""
+    """A chat surface. It may also define `async ask(chat_id, ask_id, text, options) -> bool`
+    to show a question with native buttons or reactions, returning whether anyone could see
+    it; ChannelManager falls back to numbered text."""
 
     name: str
 

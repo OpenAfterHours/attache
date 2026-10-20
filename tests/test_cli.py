@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import builtins
 import io
+import logging
 import shutil
 import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -172,9 +174,35 @@ def test_run_without_a_home_or_with_a_bad_config(
     assert err.count("\n") == 2 and "attache.toml:" in err and "Traceback" not in err
 
 
-def test_stdin_from_a_pipe_is_read_as_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("stdout", [None, io.StringIO()])  # StringIO has no reconfigure()
+def test_stdin_from_a_pipe_is_read_as_utf8(
+    stdout: io.StringIO | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     raw = io.BytesIO("café, Ágnes\n".encode())
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(raw, encoding="cp1252"))
+    if stdout:
+        monkeypatch.setattr(sys, "stdout", stdout)  # a stdout that can't change keeps stdin's
     with pytest.raises(SystemExit):
         cli.main(["--version"])
     assert sys.stdin.encoding == "utf-8" and sys.stdin.readline() == "café, Ágnes\n"
+
+
+def test_run_logs_attache_news_but_only_library_warnings(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured: list[dict[str, Any]] = []
+
+    async def fake_run(where: Path, *, terminal: bool) -> None: ...
+
+    monkeypatch.setattr(app, "run", fake_run)
+    monkeypatch.setattr(cli.logging, "basicConfig", lambda **kw: configured.append(kw))
+    write_config(home, free_port())
+    assert cli.main(["run"]) == 0
+    assert configured == [{"level": logging.WARNING}]  # the root logger, so httpx and the rest
+    assert logging.getLogger("attache.channels").getEffectiveLevel() == logging.INFO
+
+
+@pytest.fixture(autouse=True)
+def default_logging() -> Iterator[None]:
+    yield
+    logging.getLogger("attache").setLevel(logging.NOTSET)  # as it was before _run set INFO

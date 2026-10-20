@@ -48,8 +48,8 @@ class FakeRouter:
         self.seen.append(msg)
 
 
-class FakeApprovals:
-    """Stands in for approvals.Approvals: accepts "Approve" for the ask "a1" only."""
+class FakeChannels:
+    """Stands in for ChannelManager's answer(): accepts "Approve" for the ask "a1" only."""
 
     def __init__(self) -> None:
         self.answers: list[tuple[str, str, str]] = []
@@ -70,7 +70,7 @@ def services(home: Path) -> Any:
         gateway={},
         ui_token=UI_TOKEN,
         web_url=BASE,
-        approvals=FakeApprovals(),
+        channels=FakeChannels(),
     )
     store.close()
 
@@ -78,7 +78,8 @@ def services(home: Path) -> Any:
 @pytest.fixture
 def env(services: Any) -> Any:
     router, channel = FakeRouter(), web.WebChannel()
-    client = TestClient(web.create_app(services, router, channel), base_url=BASE)
+    channel.on_message = router.handle  # what start() keeps; ChannelManager's returns at once
+    client = TestClient(web.create_app(services, channel), base_url=BASE)
     return SimpleNamespace(client=client, router=router, channel=channel, sv=services)
 
 
@@ -197,7 +198,7 @@ def test_artifact_list_gives_each_page_with_its_token(env: Any) -> None:
     ],
 )
 def test_only_loopback_hosts_are_served(services: Any, base: str, status: int) -> None:
-    app = web.create_app(services, FakeRouter(), web.WebChannel())
+    app = web.create_app(services, web.WebChannel())
     assert TestClient(app, base_url=base).get("/").status_code == status
 
 
@@ -575,7 +576,7 @@ async def drain(stream: AsyncIterator[str]) -> list[tuple[str, dict[str, Any]]]:
 
 def test_events_reach_only_the_streams_whose_scope_covers_them(services: Any) -> None:
     channel = web.WebChannel()
-    web.create_app(services, FakeRouter(), channel)  # registers the store listener
+    web.create_app(services, channel)  # registers the store listener
     scopes = {
         "ui": web.Scope("_ui", None),
         "home": web.Scope("home", frozenset({"todos"})),
@@ -651,18 +652,36 @@ def test_ask_reaches_the_page_as_an_ask_event(services: Any) -> None:
     assert ui_events(services, action) == [("ask", {**question, "options": ["Approve", "Decline"]})]
 
 
-def test_answer_goes_to_approvals_as_the_owner(env: Any) -> None:
+def test_ask_says_whether_an_attache_page_saw_it() -> None:
+    channel = web.WebChannel()
+
+    async def scenario() -> list[bool]:
+        seen = [await channel.ask("me", "a1", "Approve?", ["Yes", "No"])]  # no page open
+        page = channel.stream(web.Scope("home", None))  # an artifact page shows no asks
+        await anext(page)
+        seen.append(await channel.ask("me", "a2", "Approve?", ["Yes", "No"]))
+        ui = channel.stream(web.Scope("_ui", None))
+        await anext(ui)
+        seen.append(await channel.ask("me", "a3", "Approve?", ["Yes", "No"]))
+        await page.aclose()
+        await ui.aclose()
+        return seen
+
+    assert asyncio.run(scenario()) == [False, False, True]
+
+
+def test_answer_goes_to_the_channel_manager_as_the_owner(env: Any) -> None:
     r = env.client.post("/api/answer", headers=UI, json={"ask_id": "a1", "choice": "Approve"})
     assert r.json() == {"ok": True}
     r = env.client.post("/api/answer", headers=UI, json={"ask_id": "a1", "choice": "Maybe"})
     assert r.json() == {"ok": False}  # not an option, or the ask is no longer open
-    assert env.sv.approvals.answers == [("a1", "owner", "Approve"), ("a1", "owner", "Maybe")]
+    assert env.sv.channels.answers == [("a1", "owner", "Approve"), ("a1", "owner", "Maybe")]
     page(env.sv, "home")
     assert env.client.post("/api/answer", headers=auth("home"), json={}).status_code == 403
     assert env.client.post("/api/answer", json={}).status_code == 401
     bad = {**UI, "Content-Type": "application/json"}
     assert env.client.post("/api/answer", headers=bad, content=b"[1]").status_code == 400
-    assert len(env.sv.approvals.answers) == 2
+    assert len(env.sv.channels.answers) == 2
 
 
 def test_snapshot_url_lets_the_render_browser_open_the_page(env: Any) -> None:
@@ -710,7 +729,7 @@ def test_web_channel_runs_until_stopped() -> None:
 
         task = asyncio.create_task(channel.start(on_message))
         await asyncio.sleep(0)
-        assert not task.done()
+        assert not task.done() and channel.on_message is on_message  # kept for /api/chat
         await channel.stop()
         await asyncio.wait_for(task, 1)
 
@@ -718,11 +737,35 @@ def test_web_channel_runs_until_stopped() -> None:
     assert web.WebChannel.name == "local"
 
 
+def test_stop_ends_every_open_stream() -> None:
+    """So stopping with a page open doesn't leave uvicorn a stream to cancel (and log)."""
+    channel = web.WebChannel()
+
+    async def scenario() -> list[list[str]]:
+        streams = [channel.stream(web.Scope("_ui", None)), channel.stream(web.Scope("home", None))]
+        for stream in streams:
+            await anext(stream)
+        waiting = [asyncio.create_task(anext(stream)) for stream in streams]  # like a live page
+        await asyncio.sleep(0.05)
+        await channel.stop()
+        ends = [
+            [await task] + [chunk async for chunk in stream]
+            for task, stream in zip(waiting, streams, strict=True)
+        ]
+        late = channel.stream(web.Scope("_ui", None))
+        ends.append([chunk async for chunk in late])  # one opened after stop ends straight away
+        return ends
+
+    ends = asyncio.run(asyncio.wait_for(scenario(), 2))
+    assert ends == [["event: bye\ndata: {}\n\n"], ["event: bye\ndata: {}\n\n"], [": connected\n\n"]]
+    assert channel.subs == []
+
+
 # serving
 
 
 def test_serve_answers_on_the_socket_it_is_given(services: Any) -> None:
-    app = web.create_app(services, FakeRouter(), web.WebChannel())
+    app = web.create_app(services, web.WebChannel())
 
     async def scenario(sock: socket.socket) -> bytes:
         server = asyncio.create_task(web.serve(app, sock))
@@ -781,3 +824,38 @@ def test_serve_lets_running_requests_finish_when_cancelled() -> None:
     with socket.create_server(("127.0.0.1", 0)) as sock:
         reply, elapsed = asyncio.run(ask_then_cancel(sock, 30))
     assert b"finished" not in reply and 1.5 < elapsed < 4  # bounded: cancelled after about 2 s
+
+
+def test_stopping_with_a_page_open_shuts_down_at_once(
+    services: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The channels stop before the server (app.run's order): the open event stream ends, so
+    uvicorn has no task to cancel, and logs no "Cancel 1 running task(s)" with a traceback."""
+    channel = web.WebChannel()
+    app = web.create_app(services, channel)
+
+    async def scenario(sock: socket.socket) -> tuple[bytes, float]:
+        server = asyncio.create_task(web.serve(app, sock))
+        for _ in range(100):
+            try:
+                reader, writer = await asyncio.open_connection(*sock.getsockname()[:2])
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        writer.write(
+            f"GET /api/events?token={UI_TOKEN} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode()
+        )
+        await reader.readuntil(b": connected\n\n")  # the page is connected
+        start = time.monotonic()
+        await channel.stop()
+        server.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await server
+        rest = await asyncio.wait_for(reader.read(), 1)
+        writer.close()
+        return rest, time.monotonic() - start
+
+    with socket.create_server(("127.0.0.1", 0)) as sock:
+        rest, elapsed = asyncio.run(scenario(sock))
+    assert b"event: bye" in rest and elapsed < 1
+    assert "Cancel" not in caplog.text and "Traceback" not in caplog.text

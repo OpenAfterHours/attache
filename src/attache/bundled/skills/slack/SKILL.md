@@ -15,9 +15,12 @@ metadata:
 public URL is needed. Through it Attaché:
 
 - answers direct messages, and messages in channels it has been invited to;
-- receives files people share (saved under `files/inbox/slack/`) and sends files back;
+- receives files shared in a direct message or with a mention of the bot, up to 25 MB each
+  (saved under `files/inbox/slack/`), and sends files back;
 - replies in a thread in channels, and inline in direct messages;
-- shows approval requests as buttons. A typed reply naming an option also works.
+- shows approval requests as buttons. Once Attaché takes an answer, the buttons give way to
+  the choice and who made it. Anyone else who presses one, or a press after the question has
+  closed, gets a note only they can see. A typed reply naming an option also works.
 
 The tokens live in the operating system's keychain (service `attache-slack`), never in
 `attache.toml` or in chat. If someone pastes a token into a chat, tell them to revoke it in
@@ -39,11 +42,8 @@ the app's settings and run `setup` again.
 
    In PowerShell, write `$HOME` instead of `~`. Use your own home folder if Attaché lives
    somewhere else.
-5. Test them. With your member id, `check` also prints your DM's chat key for approvals:
-
-   ```
-   uv run ~/.attache/skills/slack/channel.py check U0123ABCD
-   ```
+5. Test them: `uv run ~/.attache/skills/slack/channel.py check` prints the bot's user id.
+6. Restart `attache run`. Until the tokens work, the sidecar waits and Attaché's log says why.
 
 The agent may run `check` for the owner, but `setup` needs the owner at a terminal.
 
@@ -69,15 +69,17 @@ engage = "mention"
 members = ["sam"]
 ```
 
-`[owner]` and `[owner.ids]` are already in the file: add the lines to them. Restart
-`attache run` after editing.
+`[owner]` and `[owner.ids]` are already in the file: add the lines to them. For
+`approvals`, open your DM with the bot, choose a message's ⋯ → **Copy link**, and take the
+`D…` part of the link. Restart `attache run` after editing.
 
 ## Using it
 
 - Invite the bot to each channel with `/invite @attache` (or pick **Attaché** from the list).
   It sees only channels it is in, and answers only in chats listed under `[chats]`.
 - Direct messages: open **Attaché** under **Apps** in the sidebar. Only the owner and people
-  in `[people]` get answers.
+  in `[people]` with the role `member` (the default) get answers. People with
+  `role = "guest"`, and anyone not listed, are ignored there.
 - Members of a channel reach only the docs shared with that chat, and never the owner's files,
   shell or memory. Owner messages inside a channel get member tools too.
 - With `engage = "mention"`, Attaché answers an `@attache` mention, a reply in a thread it
@@ -88,12 +90,15 @@ members = ["sam"]
 - On the free plan Slack shows only 90 days of history. Attaché keeps its own history, so its
   memory is not limited by that.
 - The bot cannot read channels it is not in, or other people's direct messages.
-- Slack has no typing indicator for bots, so none is shown while Attaché thinks.
+- Files in channels are downloaded only when the message mentions the bot, and never above
+  25 MB.
 
 ## Troubleshooting
 
-- `check` says `invalid_auth` or `not_authed`: the token was revoked or mistyped. Run `setup`
-  again (press Enter to keep a token that still works).
+- Attaché's log says "Slack tokens are missing" or "Slack refused a token", or `check` says
+  `invalid_auth`: run `setup` again (press Enter to keep a token that still works), then
+  restart `attache run`. `check` names `auth.test` for the `xoxb-` token and
+  `apps.connections.open` for the `xapp-` one.
 - Nothing arrives: check that **Socket Mode** is on and **Event Subscriptions** lists the bot
   events from the manifest. After changing scopes, reinstall the app.
 - Files don't download: the app needs the `files:read` scope; reinstall after adding it.

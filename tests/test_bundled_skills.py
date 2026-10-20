@@ -118,7 +118,14 @@ def load_render() -> ModuleType:
     return module
 
 
-SNAPSHOT = "http://127.0.0.1:8765/a/home?t=abc&r=def"
+WEB_URL = "http://127.0.0.1:8765"
+SNAPSHOT = f"{WEB_URL}/a/home?t=abc&r=def"
+
+
+@pytest.fixture(autouse=True)
+def attache_web_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What `attache run` sets for skill scripts."""
+    monkeypatch.setenv("ATTACHE_WEB_URL", WEB_URL)
 
 
 def test_render_script_has_a_pep_723_header_and_no_dependencies() -> None:
@@ -135,12 +142,35 @@ def test_render_arguments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert (args.width, args.height, args.wait) == (390, 844, 4)
     for bad in (
         ["file:///C:/Users/you/.ssh/id_rsa", "x.png"],  # only web pages
-        ["https://example.com/", "x.png"],  # only this machine
-        ["http://127.0.0.1.attacker.example/", "x.png"],
+        ["https://example.com/a/home?t=abc&r=def", "x.png"],  # only this Attaché
+        ["http://127.0.0.1:8080/a/home?t=abc&r=def", "x.png"],  # another local server
+        ["http://localhost:8765/a/home?t=abc&r=def", "x.png"],  # the same origin, exactly
+        ["http://me@127.0.0.1:8765/a/home?t=abc&r=def", "x.png"],
+        [f"{WEB_URL}/admin?t=abc&r=def", "x.png"],  # only /a/<page>
+        [f"{WEB_URL}/a/home/../../api/messages?t=abc&r=def", "x.png"],
+        [f"{WEB_URL}/a/home?t=abc", "x.png"],  # a snapshot carries both tokens
+        [f"{WEB_URL}/a/home?r=def", "x.png"],
+        [f"{WEB_URL}/a/home?t=abc&t=xyz&r=def", "x.png"],
         [SNAPSHOT, "page.html"],  # only a picture or a PDF
+        [SNAPSHOT, "x.png", "--width", "4001"],  # capped sizes and wait
+        [SNAPSHOT, "x.png", "--height", "0"],
+        [SNAPSHOT, "x.png", "--wait", "31"],
+        [SNAPSHOT, "x.png", "--wait", "-1"],
     ):
         with pytest.raises(SystemExit):
             render.parse(bad)
+    big = render.parse([SNAPSHOT, "x.png", "--width", "4000", "--height", "4000", "--wait", "30"])
+    assert (big.width, big.height, big.wait) == (4000, 4000, 30)
+
+
+def test_render_refuses_without_attache_web_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    render = load_render()
+    monkeypatch.delenv("ATTACHE_WEB_URL")
+    with pytest.raises(SystemExit):
+        render.parse([SNAPSHOT, "x.png"])
+    assert "ATTACHE_WEB_URL" in capsys.readouterr().err
 
 
 def test_render_finds_edge_or_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +221,7 @@ def test_render_checks_the_page_first(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_render_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     render = load_render()
-    chat = tmp_path / "home" / "files" / "slack-c0123"
+    chat = tmp_path / "home" / "files" / "slack-c0123-7a947790"
     chat.mkdir(parents=True)
     monkeypatch.chdir(chat)
     monkeypatch.setattr(render, "find_browser", lambda: None)
@@ -210,7 +240,7 @@ def test_render_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: An
     assert "403" in capsys.readouterr().err and not (chat / "page.png").exists()
     monkeypatch.setattr(render, "check", lambda url: None)
     assert render.main([SNAPSHOT, "page.png"]) == 0
-    assert capsys.readouterr().out.strip() == "files/slack-c0123/page.png"  # what `send` takes
+    assert capsys.readouterr().out.strip() == "files/slack-c0123-7a947790/page.png"  # for `send`
     monkeypatch.setattr(
         render.subprocess, "run", lambda argv, **o: SimpleNamespace(stdout="", stderr="crashed")
     )

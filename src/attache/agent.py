@@ -26,15 +26,12 @@ class Step:
 class Adapter(Protocol):
     def start(self, turn: Turn) -> Any:
         """Build the native message list from turn.history and turn.text."""
-        ...
 
     async def step(self, state: Any, turn: Turn) -> Step:
         """One model call with turn.system and turn.tools. Appends the model's message to state."""
-        ...
 
     def add_results(self, state: Any, results: list[tuple[ToolCall, str]]) -> None:
         """Append tool results in the protocol's native form."""
-        ...
 
 
 def api_key(endpoint: Endpoint) -> str | None:

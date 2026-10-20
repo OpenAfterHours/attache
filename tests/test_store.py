@@ -122,12 +122,14 @@ def test_tasks(store: Store) -> None:
     assert [t["text"] for t in store.task_list(FAMILY)] == ["later"]
     store.task_reschedule(soon["id"], 300.0)
     assert store.task_next() == 200.0
-    store.task_finish(later["id"])
+    assert store.task_end(later["id"]) is True  # "done" by default
     assert [t["text"] for t in store.task_list()] == ["soon"]
-    assert store.task_cancel(soon["id"]) is True
-    assert store.task_cancel(soon["id"]) is False
-    assert store.task_cancel(later["id"]) is False  # already done
+    assert store.task_end(soon["id"], "cancelled") is True
+    assert store.task_end(soon["id"], "cancelled") is False
+    assert store.task_end(later["id"], "cancelled") is False  # already done
     assert store.task_next() is None and store.task_due(1e12) == []
+    statuses = [row[0] for row in store._db.execute("SELECT status FROM tasks ORDER BY id")]
+    assert statuses == ["done", "cancelled"]
 
 
 def test_sessions(store: Store) -> None:
@@ -222,7 +224,7 @@ def test_tasks_virtual_list(docs: Store) -> None:
     docs.task_add(FAMILY, "family reminder", 100.0)
     docs.task_add(WORK, "work reminder", 50.0)
     done = docs.task_add(FAMILY, "done", 10.0)
-    docs.task_finish(done["id"])
+    docs.task_end(done["id"])
     everything = db_access(docs, "list", "_tasks")
     assert [t["text"] for t in everything] == ["work reminder", "family reminder"]
     assert [t["text"] for t in db_access(docs, "list", "_tasks", chat=FAMILY)] == [

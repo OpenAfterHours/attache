@@ -3,38 +3,95 @@
 Several channels may share a name: the terminal and the web page are both "local", the owner's
 one conversation (chat key "local:me"), so a reply reaches both. A sidecar is a skill's program
 that speaks JSON lines on stdin and stdout; docs/channels.md has the protocol.
+
+ChannelManager also asks questions and takes their answers. A question goes to one person in a
+chat: Slack shows buttons, Signal a reaction prompt, the web page buttons, and every channel
+accepts a typed reply naming an option or its number. Only the person asked can answer. Open
+questions live in memory, keyed by a random ask_id; one that outlives its timeout, or
+Attaché, is simply gone.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import re
+import secrets
 import shutil
+import signal
+import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Coroutine
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from attache import skills
 from attache.config import Config
 from attache.types import Channel, Inbound, OnAnswer, OnMessage, Outbound
 
 logger = logging.getLogger(__name__)
-MESSAGE_KEYS = {f.name for f in fields(Inbound)} - {"channel", "ts", "origin"}  # from a sidecar
+MESSAGE_KEYS = {f.name for f in fields(Inbound)} - {"channel", "ts", "origin", "files"}
 STEADY_SECONDS = 60.0  # a sidecar up this long starts its restart delays from the beginning
+PLAIN_NAME = re.compile(r"(?!\.\.?$)[\w.-]+")  # a file name, not "." or ".."
+SDK_KEYS = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY"}  # SDK defaults
+# A sidecar's own process group: Ctrl+C reaches it only through `stop`, and kill_tree can find
+# its children. start_new_session is ignored on Windows, where the flag does the same.
+PIPE = asyncio.subprocess.PIPE
+SPAWN: dict[str, Any] = {"stdin": PIPE, "stdout": PIPE, "limit": 2**24, "start_new_session": True}
+SPAWN["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
+class Pending(NamedTuple):
+    """A question waiting for one person's answer."""
+
+    chat_key: str
+    person_id: str
+    options: list[str]
+    future: asyncio.Future[str]
+
+
+def choose(options: list[str], text: str) -> str | None:
+    """The option `text` names, case-insensitively, or by its 1-based number; else None."""
+    typed = text.strip().strip(".!").casefold()
+    for number, option in enumerate(options, 1):
+        if typed in (option.casefold(), str(number)):
+            return option
+    return None
+
+
+async def kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill a process and every process it started, then reap it. On POSIX it must lead its
+    own session (start_new_session=True), so its children share its process group."""
+    if proc.returncode is None:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+    await proc.wait()
 
 
 class ChannelManager:
     def __init__(self) -> None:
         self.channels: dict[str, list[Channel]] = {}
+        self.pending: dict[str, Pending] = {}  # open questions by ask_id, oldest first
+        self.tasks: set[asyncio.Task[Any]] = set()
 
     def add(self, channel: Channel) -> None:
         self.channels.setdefault(channel.name, []).append(channel)
+
+    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        """Run coro in a task that is kept until it is done; stop() cancels it."""
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
 
     def _targets(self, chat_key: str) -> list[Channel]:
         """The channels named by the part of chat_key before the first ":"; none is logged."""
@@ -47,21 +104,65 @@ class ChannelManager:
         for channel in self._targets(msg.chat_key):
             await channel.send(msg)
 
-    async def ask(self, chat_key: str, ask_id: str, text: str, options: list[str]) -> None:
-        """Show a question with native buttons where a channel has ask(), else as numbered text."""
+    async def ask(
+        self, chat_key: str, person_id: str, text: str, options: list[str], timeout: float = 600
+    ) -> str | None:
+        """Show the question, with native buttons where a channel has ask() and as numbered
+        text elsewhere, and wait for person_id's choice. None at once when no surface showed
+        it, and None on timeout. person_id is a config person id ("owner", "sam")."""
+        ask_id, chat_id = secrets.token_hex(8), chat_key.split(":", 1)[1]
+        future = asyncio.get_running_loop().create_future()
+        self.pending[ask_id] = Pending(chat_key, person_id, options, future)
         numbered = ", ".join(f"{n} for {option}" for n, option in enumerate(options, 1))
-        for channel in self._targets(chat_key):
-            if hasattr(channel, "ask"):
-                await channel.ask(chat_key.split(":", 1)[1], ask_id, text, options)
-            else:
-                await channel.send(Outbound(chat_key, f"{text}\nReply {numbered}."))
+        try:
+            seen = False
+            for channel in self._targets(chat_key):
+                if hasattr(channel, "ask"):
+                    seen = await channel.ask(chat_id, ask_id, text, options) or seen
+                else:
+                    await channel.send(Outbound(chat_key, f"{text}\nReply {numbered}."))
+                    seen = True
+            return await asyncio.wait_for(future, timeout) if seen else None
+        except TimeoutError:
+            return None
+        finally:
+            del self.pending[ask_id]
 
-    async def start(self, on_message: OnMessage) -> list[asyncio.Task[None]]:
-        return [asyncio.create_task(c.start(on_message)) for g in self.channels.values() for c in g]
+    def answer(self, ask_id: str, person_id: str, choice: str) -> bool:
+        """Resolve an open question when person_id is the person asked and choice an option."""
+        pending = self.pending.get(ask_id)
+        if pending is None or pending.person_id != person_id or pending.future.done():
+            return False
+        option = choose(pending.options, choice)
+        if option is not None:
+            pending.future.set_result(option)
+        return option is not None
+
+    def match(self, chat_key: str, person_id: str, text: str) -> bool:
+        """Typed-reply fallback: when a question in chat_key waits for person_id and text names
+        one of its options, answer it (the newest question first) and return True. The router
+        then treats the message as an answer, not a request."""
+        for ask_id, pending in reversed(list(self.pending.items())):
+            if pending.chat_key == chat_key and self.answer(ask_id, person_id, text):
+                return True
+        return False
+
+    async def start(self, handler: OnMessage) -> list[asyncio.Task[None]]:
+        """Start every channel. Each gets a callback that runs handler in a task of its own
+        and returns at once, so a turn never holds up its channel (or an answer behind it)."""
+
+        async def deliver(msg: Inbound) -> None:
+            self.spawn(handler(msg))
+
+        return [asyncio.create_task(c.start(deliver)) for g in self.channels.values() for c in g]
 
     async def stop(self) -> None:
-        for channel in [c for group in self.channels.values() for c in group]:
-            await channel.stop()
+        """Cancel the turns still running and wait for them, then stop every channel at once."""
+        for task in list(self.tasks):
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        everything = [c.stop() for group in self.channels.values() for c in group]
+        await asyncio.gather(*everything, return_exceptions=True)
 
 
 class TerminalChannel:
@@ -86,6 +187,8 @@ class TerminalChannel:
 
     def _read(self, loop: asyncio.AbstractEventLoop) -> None:
         """Queue lines until EOF ("") or a quit line; that last one start() still waits for."""
+        # Keep sys.stdin.readline: a daemon thread blocked in sys.stdin.buffer crashes the
+        # interpreter's exit on Windows.
         while (line := sys.stdin.readline() or "/quit").strip() not in ("/quit", "/exit"):
             loop.call_soon_threadsafe(self.lines.put_nowait, line)
         loop.call_soon_threadsafe(self.lines.put_nowait, "/quit")
@@ -103,7 +206,8 @@ class TerminalChannel:
 
 @dataclass
 class SidecarChannel:
-    """A skill's sidecar program (docs/channels.md). Its stderr goes to Attaché's stderr."""
+    """A skill's sidecar program (docs/channels.md). Its stderr goes to Attaché's stderr; its
+    env's ATTACHE_FILES is the only folder its messages' files may come from."""
 
     name: str
     argv: list[str]
@@ -113,61 +217,68 @@ class SidecarChannel:
     backoff: tuple[float, float] = (1.0, 60.0)  # the first and the longest restart delay
     proc: asyncio.subprocess.Process | None = field(default=None, init=False)
     stopping: bool = field(default=False, init=False)
-    turns: set[asyncio.Task[None]] = field(default_factory=set, init=False)
 
     async def start(self, on_message: OnMessage) -> None:
         """Run the sidecar until stop(), restarting it when it exits. Never raises."""
         delay = self.backoff[0]
         while not self.stopping:
-            began, pipe = time.monotonic(), asyncio.subprocess.PIPE
+            began = time.monotonic()
             try:
                 self.proc = await asyncio.create_subprocess_exec(
-                    *self.argv, cwd=self.cwd, env=self.env, stdin=pipe, stdout=pipe
+                    *self.argv, cwd=self.cwd, env=self.env, **SPAWN
                 )
                 async for line in self.proc.stdout:
                     try:
-                        self._handle(json.loads(line), on_message)
+                        await self._handle(json.loads(line), on_message)
                     except Exception as e:  # not JSON, or not a valid event: ignored
                         logger.warning("channel %s ignored %.200r (%s)", self.name, line, e)
-                await self.proc.wait()
             except Exception:
                 logger.exception("channel %s failed", self.name)
             if self.stopping:
                 return
+            if self.proc:  # after a reader error it may still run: never leave it behind
+                await kill_tree(self.proc)
             if time.monotonic() - began >= STEADY_SECONDS:
                 delay = self.backoff[0]
             logger.warning("channel %s exited; restarting in %s s", self.name, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.backoff[1])
 
-    def _handle(self, event: dict[str, Any], on_message: OnMessage) -> None:
+    async def _handle(self, event: dict[str, Any], on_message: OnMessage) -> None:
         """Act on one event from the sidecar; unknown types are ignored."""
         kind = event.get("type")
-        if kind == "message":  # a task, so that a turn waiting for an answer can still read it
-            inbound = Inbound(self.name, **{k: v for k, v in event.items() if k in MESSAGE_KEYS})
-            turn = asyncio.create_task(on_message(inbound))
-            self.turns.add(turn)  # held until done, so it is not garbage-collected
-            turn.add_done_callback(self.turns.discard)
+        if kind == "message":
+            inbox = Path(self.env["ATTACHE_FILES"]).resolve()
+            files = [f for f in event.get("files", []) if Path(f).resolve().is_relative_to(inbox)]
+            known = {k: v for k, v in event.items() if k in MESSAGE_KEYS}
+            await on_message(Inbound(self.name, **known, files=files))  # others are dropped
         elif kind == "answer":
-            self.on_answer(event["ask_id"], event["sender_id"], event["choice"])
+            ask_id, sender_id = event["ask_id"], event["sender_id"]
+            accepted = self.on_answer(self.name, ask_id, sender_id, event["choice"])
+            result = {"ask_id": ask_id, "sender_id": sender_id, "accepted": accepted}
+            await self._write(type="answered", **result)  # Slack updates its buttons on this
         elif kind in ("ready", "log"):
-            level = logging.WARNING if event.get("level") in ("warning", "error") else logging.INFO
-            logger.log(level, "channel %s %s: %s", self.name, kind, event.get("text", event))
+            logger.info("channel %s %s: %s", self.name, kind, event.get("text", event))
 
-    async def _write(self, **event: Any) -> None:
-        try:
-            self.proc.stdin.write(json.dumps(event).encode() + b"\n")
-            await self.proc.stdin.drain()
-        except (AttributeError, OSError):  # not started yet, or it just exited
-            logger.warning("channel %s is not running; dropped a %s", self.name, event["type"])
+    async def _write(self, **event: Any) -> bool:
+        """Send one command; False, with a warning, when the sidecar is not running."""
+        if self.proc and self.proc.returncode is None:
+            with contextlib.suppress(OSError):  # it exited meanwhile; start() restarts it
+                self.proc.stdin.write(json.dumps(event).encode() + b"\n")
+                await self.proc.stdin.drain()
+                return True
+        logger.warning("channel %s is not running; dropped a %s", self.name, event["type"])
+        return False
 
     async def send(self, msg: Outbound) -> None:
         files = [str(Path(f).resolve()) for f in msg.files]  # the protocol wants absolute paths
         event = {"chat_id": msg.chat_key.split(":", 1)[1], "text": msg.text, "files": files}
         await self._write(type="send", **event, reply_to=msg.reply_to)
 
-    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> None:
-        await self._write(type="ask", chat_id=chat_id, ask_id=ask_id, text=text, options=options)
+    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
+        """True when the question reached the sidecar."""
+        event = {"chat_id": chat_id, "ask_id": ask_id, "text": text, "options": options}
+        return await self._write(type="ask", **event)
 
     async def stop(self) -> None:
         """Ask the sidecar to stop, close its stdin, and kill it if it is still up after 5 s."""
@@ -179,27 +290,30 @@ class SidecarChannel:
         try:
             await asyncio.wait_for(self.proc.wait(), 5)
         except TimeoutError:
-            self.proc.kill()
+            await kill_tree(self.proc)
 
 
-def sidecars(config: Config, on_answer_for: Callable[[str], OnAnswer]) -> list[SidecarChannel]:
-    """A SidecarChannel for each enabled [channels.<name>] whose skill names its script in
-    metadata["attache-channel"]. Others, and all of them when uv is missing, are logged."""
+def sidecars(config: Config, on_answer: OnAnswer) -> list[SidecarChannel]:
+    """A SidecarChannel for each enabled [channels.<name>] whose skill names its script, a file
+    in the skill's folder, in metadata["attache-channel"]. Others are logged and skipped. A
+    sidecar's environment has no model API keys."""
     found = {skill.name: skill for skill in skills.discover(config.home)}
+    secret = {e.key_env.upper() for e in config.endpoints.values() if e.key_env} | SDK_KEYS
+    clean = {k: v for k, v in os.environ.items() if k.upper() not in secret}
     uv, made = shutil.which("uv"), []
     for name, settings in config.channels.items():
         skill = found.get(name)
-        script = (skill.meta.get("metadata") or {}).get("attache-channel") if skill else None
+        script = str((skill.meta.get("metadata") or {}).get("attache-channel", "")) if skill else ""
         if not settings["enabled"]:
             continue
-        if not script or not uv:
-            why = "uv is not installed" if script else f"skills/{name} has no attache-channel"
+        if not (PLAIN_NAME.fullmatch(script) and (skill.path / script).is_file()) or not uv:
+            why = "uv is not installed" if not uv else f"no attache-channel file in skills/{name}"
             logger.warning("channel %s skipped: %s", name, why)
             continue
         inbox = config.home / "files" / "inbox" / name
         inbox.mkdir(parents=True, exist_ok=True)
-        env = {**os.environ, **{f"ATTACHE_{k.upper()}": str(v) for k, v in settings.items()}}
+        env = {**clean, **{f"ATTACHE_{k.upper()}": str(v) for k, v in settings.items()}}
         env.update(ATTACHE_HOME=str(config.home), ATTACHE_CHANNEL=name, ATTACHE_FILES=str(inbox))
         argv = [uv, "run", str(skill.path / script)]
-        made.append(SidecarChannel(name, argv, skill.path, env, on_answer_for(name)))
+        made.append(SidecarChannel(name, argv, skill.path, env, on_answer))
     return made

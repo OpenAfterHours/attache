@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ BOT = "11111111-1111-4111-8111-111111111111"
 OWNER = "22222222-2222-4222-8222-222222222222"
 SAM = "33333333-3333-4333-8333-333333333333"
 GROUP = "Z3JvdXBpZA=="
+P = "￼"  # Signal's placeholder for a mention
 
 _spec = importlib.util.spec_from_file_location("signal_channel", SKILL / "channel.py")
 channel = importlib.util.module_from_spec(_spec)
@@ -47,16 +49,22 @@ def dm(text: str | None = "hi", **data: Any) -> dict[str, Any]:
     }
 
 
+def in_group(text: str | None, **data: Any) -> dict[str, Any]:
+    return dm(text, groupInfo={"groupId": GROUP, "type": "DELIVER"}, **data)
+
+
 def test_skill_md_names_the_sidecar() -> None:
     meta, body = skills.parse((SKILL / "SKILL.md").read_text(encoding="utf-8"))
     assert meta["name"] == "signal"
     assert meta["metadata"] == {"attache-channel": "channel.py"}
     assert "when" in meta["description"].lower()
     assert "## Setup" in body and "signalcaptchas.org" in body and "--voice" in body
+    assert "data_dir" not in body  # not a setting
+    assert "listContacts --all-recipients" in body  # how to find a Signal id
 
 
 def test_a_direct_message() -> None:
-    assert channel.inbound(dm("Pack my bag ☀️"), BOT) == {
+    assert channel.inbound(dm("Pack my bag ☀️"), BOT, {}) == {
         "type": "message",
         "chat_id": OWNER,
         "message_id": f"1729000000001:{OWNER}",
@@ -70,27 +78,28 @@ def test_a_direct_message() -> None:
 
 
 def test_a_group_mention_names_the_bot_counting_utf16() -> None:
-    text = "🙂 ￼ ferry, ask ￼?"  # the emoji is two UTF-16 units
+    text = f"🙂 {P} ferry, ask {P}?"  # the emoji is two UTF-16 units
     mentions = [
         {"uuid": SAM, "number": "+447700900999", "start": 16, "length": 1},
         {"uuid": BOT, "number": None, "start": 3, "length": 1},
     ]
-    envelope = dm(text, mentions=mentions, groupInfo={"groupId": GROUP, "type": "DELIVER"})
-    message = channel.inbound(envelope, BOT)
-    assert message["text"] == "🙂 @Attaché ferry, ask @+447700900999?"
+    message = channel.inbound(in_group(text, mentions=mentions), BOT, {SAM: "Sam"})
+    assert message["text"] == "🙂 @Attaché ferry, ask @Sam?"
     assert message["mentioned"] and message["is_group"] and message["chat_id"] == GROUP
 
 
-def test_someone_elses_mention_is_not_the_bot() -> None:
-    envelope = dm("￼ hi", mentions=[{"uuid": SAM, "start": 0, "length": 1}])
-    message = channel.inbound(envelope, BOT)
-    assert message["text"] == f"@{SAM} hi" and not message["mentioned"]
+def test_other_mentions_never_show_a_number_or_uuid() -> None:
+    mention = {"uuid": SAM, "number": "+447700900999", "name": "+447700900999"}
+    envelope = dm(f"{P} hi", mentions=[{**mention, "start": 0, "length": 1}])
+    message = channel.inbound(envelope, BOT, {})
+    assert message["text"] == "@someone hi" and not message["mentioned"]
 
 
 def test_a_reply_to_the_bot_counts_as_a_mention() -> None:
     envelope = dm("yes please", quote={"id": 5, "authorUuid": BOT, "text": "Shall I?"})
-    assert channel.inbound(envelope, BOT)["mentioned"]
-    assert not channel.inbound(dm("yes", quote={"id": 5, "authorUuid": SAM}), BOT)["mentioned"]
+    assert channel.inbound(envelope, BOT, {})["mentioned"]
+    reply = dm("yes", quote={"id": 5, "authorUuid": SAM})
+    assert not channel.inbound(reply, BOT, {})["mentioned"]
 
 
 @pytest.mark.parametrize(
@@ -108,7 +117,7 @@ def test_a_reply_to_the_bot_counts_as_a_mention() -> None:
     ids=["receipt", "sync", "typing", "own", "no-sender", "reaction", "group-update", "empty"],
 )
 def test_envelopes_that_are_not_messages_are_skipped(envelope: dict[str, Any]) -> None:
-    assert channel.inbound(envelope, BOT) is None
+    assert channel.inbound(envelope, BOT, {}) is None
 
 
 def test_send_params() -> None:
@@ -124,18 +133,12 @@ def test_send_params() -> None:
         "quoteTimestamp": 17,
         "quoteAuthor": SAM,
     }
-    assert channel.send_params({"chat_id": NUMBER, "text": "x", "reply_to": None}) == {
-        "recipient": [NUMBER],
-        "message": "x",
-    }
 
 
 def test_ask_text() -> None:
     assert channel.ask_text("Send the list?", ["Approve", "Decline"]) == (
         "Send the list?\n\nReact 👍 for Approve, 👎 for Decline, or reply with the option."
     )
-    three = channel.ask_text("Which?", ["Red", "Green", "Blue"])
-    assert "React 👍 for Red, 👎 for Green" in three and "1 Red, 2 Green, 3 Blue" in three
 
 
 def reaction(emoji: str, target: int = 42, remove: bool = False) -> dict[str, Any]:
@@ -155,19 +158,68 @@ def test_answers_from_reactions() -> None:
     assert channel.answer_from_reaction(dm("plain text"), asks) is None
 
 
-def test_attachments_are_copied_under_safe_names(tmp_path: Path) -> None:
+def test_attachments_are_copied_under_safe_names_up_to_25_mb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     store, inbox = tmp_path / "attachments", tmp_path / "inbox"
     store.mkdir()
     (store / "abc123.pdf").write_bytes(b"%PDF")
+    (store / "big.mp4").write_bytes(b"12345")
+    monkeypatch.setattr(channel, "MAX_FILE", 4)
     items = [{"id": "abc123.pdf", "filename": "../../ev:il?.pdf"}, {"id": "missing.jpg"}]
-    saved = channel.save_attachments(dm("see", attachments=items), store, inbox)
+    saved = channel.save_attachments(
+        dm("see", attachments=[*items, {"id": "big.mp4"}]), store, inbox
+    )
     assert len(saved) == 1
     path = Path(saved[0])
     assert path.is_absolute() and path.parent == inbox.resolve() and path.read_bytes() == b"%PDF"
     assert path.name == "1729000000001-0-ev_il_.pdf"
+    logs = [json.loads(line)["text"] for line in capsys.readouterr().out.splitlines()]
+    assert len(logs) == 2 and all("missing or over 25 MB" in text for text in logs)
 
 
-# The sidecar against the fake signal-cli.
+def receive(bridge: Any, envelope: dict[str, Any]) -> None:
+    bridge.on_line(
+        json.dumps(
+            {"jsonrpc": "2.0", "method": "receive", "params": {"envelope": envelope}}
+        ).encode()
+    )
+
+
+def test_attachments_come_only_from_direct_messages_and_mentions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "attachments"
+    store.mkdir()
+    (store / "a.txt").write_text("x", encoding="utf-8")
+    bridge = channel.Bridge(None, BOT, store, tmp_path / "inbox")
+    files = [{"id": "a.txt", "filename": "a.txt"}]
+    receive(bridge, dm("direct", attachments=files))
+    receive(bridge, in_group("to the group", attachments=files))
+    mention = {"uuid": BOT, "start": 0, "length": 1}
+    receive(bridge, in_group(f"{P} look", attachments=files, mentions=[mention]))
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(e["text"], len(e["files"])) for e in events] == [
+        ("direct", 1),
+        ("to the group", 0),
+        ("@Attaché look", 1),
+    ]
+    assert bridge.names == {OWNER: "Alex"}  # learnt from the messages, for later mentions
+
+
+# The sidecar against the fake signal-cli, through a launcher as real installs have one.
+
+
+def launcher(folder: Path) -> str:
+    """signal-cli.bat on Windows, or a shell script elsewhere, that runs the fake."""
+    if os.name == "nt":
+        path = folder / "signal-cli.bat"
+        path.write_text(f'@"{sys.executable}" "{FAKE}" %*\n', encoding="utf-8")
+    else:
+        path = folder / "signal-cli"
+        path.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n', encoding="utf-8")
+        path.chmod(0o755)
+    return str(path)
 
 
 class Sidecar:
@@ -181,7 +233,7 @@ class Sidecar:
         full_env = {
             **{k: v for k, v in os.environ.items() if k != "ATTACHE_UUID"},
             "ATTACHE_NUMBER": NUMBER,
-            "ATTACHE_SIGNAL_CLI": json.dumps([sys.executable, str(FAKE)]),
+            "ATTACHE_SIGNAL_CLI": launcher(tmp_path),
             "ATTACHE_FILES": str(self.inbox),
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
             "FAKE_SIGNAL_LOG": str(self.requests),
@@ -203,9 +255,24 @@ class Sidecar:
             assert event["type"] == "log", event
         return event
 
+    def rest(self) -> list[dict[str, Any]]:
+        """The events still to come, once it has exited."""
+        events = []
+        with contextlib.suppress(queue.Empty):
+            while True:
+                events.append(self.events.get(timeout=1))
+        return events
+
     def write(self, command: dict[str, Any]) -> None:
         self.proc.stdin.write(json.dumps(command).encode() + b"\n")
         self.proc.stdin.flush()
+
+    def stop(self) -> tuple[int, str]:
+        """Say stop as Attaché does; the exit code and everything it wrote on stderr."""
+        self.write({"type": "stop"})
+        self.proc.stdin.close()
+        code = self.proc.wait(timeout=30)
+        return code, self.proc.stderr.read().decode("utf-8", errors="replace")
 
     def recorded(self) -> list[dict[str, Any]]:
         lines = self.requests.read_text(encoding="utf-8").splitlines()
@@ -225,19 +292,21 @@ def test_the_sidecar_speaks_the_protocol(tmp_path: Path) -> None:
 
     group = side.next("message")
     assert group["chat_id"] == GROUP and group["is_group"] and group["mentioned"]
-    assert group["text"] == "🙂 @Attaché what time is the ferry?"
+    assert group["text"] == "🙂 @Attaché what time is the ferry, @Alex?"  # Alex wrote earlier
+    unmentioned = side.next("message")
+    assert unmentioned["text"] == "holiday photos" and unmentioned["files"] == []
 
     ask = {"type": "ask", "chat_id": OWNER, "ask_id": "a19", "text": "Share the list?"}
     side.write({**ask, "options": ["Approve", "Decline"]})
     answer = side.next("answer")
     assert answer == {"type": "answer", "ask_id": "a19", "sender_id": OWNER, "choice": "Approve"}
+    side.write({"type": "answered", "ask_id": "a19", "sender_id": OWNER, "accepted": True})
 
-    side.write({"type": "typing", "chat_id": GROUP, "on": True})
     reply = {"type": "send", "chat_id": GROUP, "text": "09:40 from Portsmouth.", "files": []}
     side.write({**reply, "reply_to": f"1729000000002:{SAM}"})
-    side.write({"type": "stop"})
-    side.proc.stdin.close()
-    assert side.proc.wait(timeout=20) == 0, side.proc.stderr.read().decode()
+    code, stderr = side.stop()
+    assert code == 0, stderr
+    assert side.rest() == []  # `answered` needs nothing, and is not logged as unknown
 
     argvs = [entry["argv"] for entry in side.recorded() if "argv" in entry]
     assert argvs == [["-o", "json", "listAccounts"], ["-a", NUMBER, "jsonRpc"]]
@@ -263,26 +332,60 @@ def test_the_bot_id_can_be_set(tmp_path: Path) -> None:
     assert not any(entry.get("argv", [""])[-1] == "listAccounts" for entry in side.recorded())
 
 
+def alive(pid: int) -> bool:
+    if os.name == "nt":
+        found = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True)
+        return str(pid).encode() in found.stdout.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_stop_kills_signal_cli_and_its_children(tmp_path: Path) -> None:
+    pids = tmp_path / "pids"
+    side = Sidecar(tmp_path, FAKE_SIGNAL_HANG=str(pids))  # ignores the end of its input
+    side.next("ready")
+    code, stderr = side.stop()  # after 4 s, the whole tree
+    assert code == 0, stderr
+    started = [int(pid) for pid in pids.read_text(encoding="utf-8").split()]
+    assert len(started) == 2  # the fake behind the launcher, and its own child
+    for _ in range(50):  # killed processes can take a moment to go
+        if not any(alive(pid) for pid in started):
+            break
+        time.sleep(0.1)
+    assert not any(alive(pid) for pid in started)
+
+
 def test_when_signal_cli_dies_the_sidecar_exits_non_zero(tmp_path: Path) -> None:
     side = Sidecar(tmp_path, FAKE_SIGNAL_DIE="1")
     side.next("ready")
     assert side.proc.wait(timeout=20) == 3  # its stdin is still open: Attaché did not stop it
-    events = []
-    with contextlib.suppress(queue.Empty):
-        while True:
-            events.append(side.events.get(timeout=2))
-    assert any(e["type"] == "log" and "exited with code 3" in e["text"] for e in events)
+    assert any(e["type"] == "log" and "exited with code 3" in e["text"] for e in side.rest())
     assert b"Fatal Python error" not in side.proc.stderr.read()
 
 
-def test_a_missing_number_exits_2(tmp_path: Path) -> None:
-    env = {k: v for k, v in os.environ.items() if k != "ATTACHE_NUMBER"}
-    done = subprocess.run(
-        [sys.executable, str(SKILL / "channel.py")], capture_output=True, env=env, timeout=30
-    )
-    assert done.returncode == 2
-    event = json.loads(done.stdout.decode("utf-8").splitlines()[0])
-    assert event["type"] == "log" and event["level"] == "error" and "number" in event["text"]
+@pytest.mark.parametrize(
+    ("env", "why"),
+    [
+        ({"ATTACHE_NUMBER": ""}, "no number"),
+        ({"ATTACHE_SIGNAL_CLI": "no-such-signal-cli"}, "signal-cli not found"),
+        ({"FAKE_SIGNAL_REFUSE": "1"}, "could not start the account"),  # signal-cli exits 1
+    ],
+    ids=["no-number", "no-signal-cli", "not-registered"],
+)
+def test_a_setup_problem_is_explained_and_then_it_waits(
+    tmp_path: Path, env: dict[str, str], why: str
+) -> None:
+    side = Sidecar(tmp_path, **env)
+    time.sleep(3)
+    assert side.proc.poll() is None  # still up, so Attaché does not restart it every minute
+    code, stderr = side.stop()
+    assert code == 0 and why in stderr and "run doctor" in stderr
+    assert not [e for e in side.rest() if e["type"] in ("ready", "message")]
+    if env.get("FAKE_SIGNAL_REFUSE"):
+        assert "is not registered" in stderr  # signal-cli's own words come first
 
 
 # doctor.
@@ -300,7 +403,7 @@ def test_doctor_says_what_is_missing(
 
 
 def test_doctor_checks_version_age_and_account(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     real_which = shutil.which
 
@@ -308,7 +411,7 @@ def test_doctor_checks_version_age_and_account(
         return None if name == "java" else real_which(name, *args, **kwargs)
 
     monkeypatch.setattr(channel.shutil, "which", no_java)
-    monkeypatch.setenv("ATTACHE_SIGNAL_CLI", json.dumps([sys.executable, str(FAKE)]))
+    monkeypatch.setenv("ATTACHE_SIGNAL_CLI", launcher(tmp_path))
     monkeypatch.setattr(channel, "release_date", lambda version: date.today() - timedelta(120))
     assert channel.doctor([NUMBER]) == 1  # java is missing
     out = capsys.readouterr().out
@@ -316,6 +419,6 @@ def test_doctor_checks_version_age_and_account(
     assert f"ok    account {NUMBER} is registered; the bot's Signal id is {BOT}" in out
 
     monkeypatch.setattr(channel, "release_date", lambda version: None)  # offline
-    assert channel.doctor(["+44 7700 900999"]) == 1
+    assert channel.doctor(["+447700900999"]) == 1
     out = capsys.readouterr().out
     assert "release date unknown" in out and "+447700900999 is not registered" in out

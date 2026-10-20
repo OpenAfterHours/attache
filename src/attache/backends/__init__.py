@@ -34,7 +34,6 @@ def make(endpoint: Endpoint) -> Backend:
         return ClaudeCLI(endpoint)
     if endpoint.api not in ADAPTERS:
         valid = ", ".join([*ADAPTERS, "claude-cli"])
-        raise ValueError(
-            f"endpoint '{endpoint.name}' has unknown api '{endpoint.api}'; use {valid}"
-        )
+        problem = f"endpoint '{endpoint.name}' has unknown api '{endpoint.api}'; use {valid}"
+        raise ValueError(problem)
     return APIBackend(ADAPTERS[endpoint.api](endpoint))

@@ -158,13 +158,11 @@ def test_load_parses_everything(cfg: config.Config) -> None:
     local = cfg.endpoints["local"]
     assert (local.api, local.model) == ("openai-chat", "qwen3:32b")
     assert local.options == {"max_tokens": 2048}
-    family = cfg.chat("slack:C0123")
-    assert family is not None
+    family = cfg.chats["slack:C0123"]
     assert (family.members, family.engage) == (["sam"], "always")
-    work = cfg.chat("slack:C0456")
-    assert work is not None
+    work = cfg.chats["slack:C0456"]
     assert (work.engage, work.guests, work.endpoint) == ("mention", "ignore", None)
-    assert cfg.chat("slack:nope") is None
+    assert not hasattr(cfg, "chat")  # callers use cfg.chats.get(key)
 
 
 def test_load_accepts_a_byte_order_mark(home: Path) -> None:
@@ -185,9 +183,23 @@ def test_load_accepts_a_byte_order_mark(home: Path) -> None:
             "[limits]\nper_day = 5\n",
             r"unknown key per_day in \[limits\]; known: per_sender_hour, per_chat_hour, member",
         ),
-        ("[channels.signal]\nnumber = 447700900123\n", r"\[channels\.signal\] number: wrong type"),
-        ('[channels.slack]\nenabled = "yes"\n', r"\[channels\.slack\] enabled: wrong type"),
-        ("[channels.slack]\nenabled = true\nport = 8080\n", r"\[channels\.slack\] port: "),
+        ("[channels.signal]\nnumber = 447700900123\n", r"\[channels\.signal\] number must be a"),
+        ('[channels.slack]\nenabled = "yes"\n', r"\[channels\.slack\] enabled must be true or"),
+        ("[channels.slack]\nenabled = true\nport = 8080\n", r"\[channels\.slack\] port must be"),
+        ("[channels.local]\nenabled = true\n", r"\[channels\.local\] is taken"),
+        ("[limits]\nper_chat_hour = 0\n", r"\[limits\] per_chat_hour must be a whole number"),
+        ("[limits]\nmember_daily = true\n", r"\[limits\] member_daily must be"),  # not 1
+        ('[limits]\nper_sender_hour = "20"\n', r"\[limits\] per_sender_hour must be"),
+        ("[limits]\nper_sender_hour = 2.5\n", r"\[limits\] per_sender_hour must be"),
+        ('[owner]\napprovals = "slack:D0ALEX"\n', r"\[owner\] approvals must be"),  # not enabled
+        ('[owner]\napprovals = "me"\n', r"\[owner\] approvals must be"),
+        ('[owner]\napprovals = "local:other"\n', r"\[owner\] approvals must be"),
+        ('[owner]\napprovals = "slack:"\n[channels.slack]\nenabled = true\n', r"approvals must"),
+        (  # a group chat: approvals go to your own direct chat
+            '[owner]\napprovals = "slack:C1"\n[channels.slack]\nenabled = true\n'
+            '[chats."slack:C1"]\nname = "Family"\n',
+            r"\[owner\] approvals must be",
+        ),
     ],
 )
 def test_load_errors_name_the_file_and_section(home: Path, text: str, message: str) -> None:

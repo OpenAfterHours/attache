@@ -5,14 +5,15 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from socket import AF_INET, AF_INET6, create_server, socket
+from typing import Any
 
 from attache import channels, config, router, scheduler, store, web
-from attache.approvals import Approvals
-from attache.types import OnAnswer, Turn
+from attache.types import Turn
 
 SDKS = {"anthropic": "anthropic", "openai-chat": "openai", "openai-responses": "openai"}
 
@@ -22,8 +23,7 @@ class Services:
     config: config.Config
     store: store.Store
     scheduler: scheduler.Scheduler
-    channels: channels.ChannelManager
-    approvals: Approvals
+    channels: channels.ChannelManager  # also asks questions and takes their answers
     gateway: dict[str, Turn]  # MCP token -> the turn it serves (the claude-cli backend's tools)
     web_url: str  # e.g. http://127.0.0.1:8765
     ui_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))  # new every run
@@ -46,7 +46,16 @@ def build(home: Path) -> Services:
     cfg = config.load(home)
     db, hub = store.Store(home / "attache.db"), channels.ChannelManager()
     url = f"http://{'[::1]' if cfg.host == '::1' else cfg.host}:{cfg.port}"
-    return Services(cfg, db, scheduler.Scheduler(db), hub, Approvals(hub), {}, url)
+    return Services(cfg, db, scheduler.Scheduler(db), hub, {}, url)
+
+
+async def _cancel(tasks: list[asyncio.Task[Any]]) -> None:
+    """Cancel tasks and wait for them to finish; one that had failed is logged."""
+    for task in tasks:
+        task.cancel()
+    for result in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(result, Exception):
+            logging.getLogger(__name__).error("a task failed", exc_info=result)
 
 
 async def run(home: Path, *, terminal: bool) -> None:
@@ -54,50 +63,38 @@ async def run(home: Path, *, terminal: bool) -> None:
 
     Returns when the terminal session ends (EOF or /quit) or on Ctrl+C. A channel that stops,
     a sidecar included, never ends the run; the web server or the scheduler stopping does, as
-    a SystemExit. A port in use or a host that is not this machine is a SystemExit too. On the
-    way out the web server is stopped first, so requests in flight finish; then every other
-    task (any that failed is logged); then the channels; and only then is the store closed."""
+    a SystemExit. A port in use or a host that is not this machine is a SystemExit too."""
     cfg = config.load(home)
     try:
         sock = listen(cfg)
     except OSError:
         raise SystemExit(f"Port {cfg.port} is in use. Is `attache run` already running?") from None
     services = build(home)
+    os.environ["ATTACHE_WEB_URL"] = services.web_url  # for skill scripts and sidecars
     rt, page = router.Router(services), web.WebChannel()  # rt sets itself as scheduler.fire
     url = f"{services.web_url}/#t={services.ui_token}"
     print(f"Open {url}", flush=True)
 
-    def on_answer_for(name: str) -> OnAnswer:
-        """A sidecar's answers carry its platform sender id; approvals want the person id."""
-
-        def on_answer(ask_id: str, sender_id: str, choice: str) -> bool:
-            person = cfg.person(name, sender_id)
-            return services.approvals.answer(ask_id, person.id if person else sender_id, choice)
-
-        return on_answer
+    def on_answer(channel: str, ask_id: str, sender_id: str, choice: str) -> bool:
+        """A sidecar's answer names a platform sender; the question waits for a person id."""
+        person = cfg.person(channel, sender_id)
+        return person is not None and services.channels.answer(ask_id, person.id, choice)
 
     term = channels.TerminalChannel(cfg.owner.name, url)
-    for channel in [page, *([term] if terminal else []), *channels.sidecars(cfg, on_answer_for)]:
+    for channel in [page, *([term] if terminal else []), *channels.sidecars(cfg, on_answer)]:
         services.channels.add(channel)
-    server = asyncio.create_task(web.serve(web.create_app(services, rt, page), sock))
+    server = asyncio.create_task(web.serve(web.create_app(services, page), sock))
     beat = asyncio.create_task(services.scheduler.run())
     sdks = {SDKS[e.api] for e in cfg.endpoints.values() if e.api in SDKS}  # so turn 1 won't wait
-    rest = [
-        beat,
-        *(asyncio.create_task(asyncio.to_thread(importlib.import_module, m)) for m in sdks),
-    ]
-    rest += await services.channels.start(rt.handle)
-    ending = [server, beat, *([asyncio.create_task(term.done.wait())] if terminal else [])]
+    warmups = [asyncio.create_task(asyncio.to_thread(importlib.import_module, m)) for m in sdks]
+    rest = [beat, *warmups, *await services.channels.start(rt.handle)]
+    quitting = [asyncio.create_task(term.done.wait())] if terminal else []
     try:
-        done, _ = await asyncio.wait(ending, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait([server, beat, *quitting], return_when=asyncio.FIRST_COMPLETED)
         if server in done or beat in done:
             raise SystemExit("The web server or the scheduler stopped; see the log above.")
-    finally:
-        for group in ([server], [*rest, *ending[2:], *rt.background.values()]):  # web first
-            for task in group:
-                task.cancel()
-            for result in await asyncio.gather(*group, return_exceptions=True):
-                if isinstance(result, Exception):
-                    logging.getLogger(__name__).error("a task failed", exc_info=result)
-        await services.channels.stop()
-        services.store.close()
+    finally:  # in this order:
+        await services.channels.stop()  # the turns still running, then every channel, which
+        # ends the page's event streams, so the web server's own shutdown is quick and quiet
+        await _cancel([server, *rest, *quitting, *rt.background.values()])
+        services.store.close()  # last, once nothing can write to it

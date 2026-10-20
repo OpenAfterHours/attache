@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import shutil
 import socket
 import sqlite3
@@ -14,8 +15,15 @@ from typing import Any
 import pytest
 
 from attache import app, config, web
-from attache.approvals import Approvals
+from attache.channels import ChannelManager
 from attache.scheduler import Scheduler
+
+
+@pytest.fixture(autouse=True)
+def fake_web_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """app.run builds the web app as create_app(services, page); these tests fake the server."""
+    monkeypatch.setattr(web, "create_app", lambda services, page: None)
+    monkeypatch.delenv("ATTACHE_WEB_URL", raising=False)  # restored after each test
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
@@ -27,8 +35,8 @@ def test_build_on_an_initialised_home(home: Path) -> None:
         assert services.web_url == "http://127.0.0.1:8765" and services.gateway == {}
         assert len(services.ui_token) >= 32 and services.ui_token != again.ui_token  # per run
         assert not hasattr(services, "secret") and not (home / ".secret").exists()
-        assert isinstance(services.approvals, Approvals)
-        assert services.approvals.channels is services.channels
+        assert isinstance(services.channels, ChannelManager)  # it asks the questions too
+        assert not hasattr(services, "approvals")
         services.store.add_message("local:me", "user", "hi")
     finally:
         services.store.close()
@@ -111,12 +119,12 @@ def test_run_wires_sidecars_and_outlives_a_channel(
         async def stop(self) -> None:
             events.append("sidecar stopped")
 
-    def sidecars(cfg: config.Config, on_answer_for: Any) -> list[Sidecar]:
-        events.append(on_answer_for("slack"))
+    def sidecars(cfg: config.Config, on_answer: Any) -> list[Sidecar]:
+        events.append(on_answer)
         return [Sidecar()]
 
     answers: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(Approvals, "answer", lambda self, *args: answers.append(args) or True)
+    monkeypatch.setattr(ChannelManager, "answer", lambda self, *args: answers.append(args) or True)
     monkeypatch.setattr(app.importlib, "import_module", lambda name: events.append(name))
     monkeypatch.setattr(app.channels, "sidecars", sidecars)
     monkeypatch.setattr(web, "serve", serving)
@@ -134,12 +142,14 @@ def test_run_wires_sidecars_and_outlives_a_channel(
         await asyncio.sleep(0.5)
         assert "sidecar ended" in events and not task.done()  # Attaché runs on
         on_answer = events[0]
-        assert on_answer("a1", "U0ALEX", "Approve") and on_answer("a2", "U0WHO", "Decline")
+        assert on_answer("slack", "a1", "U0ALEX", "Approve")
+        assert not on_answer("slack", "a2", "U0WHO", "Decline")  # nobody we know
+        assert os.environ["ATTACHE_WEB_URL"].startswith("http://127.0.0.1:")  # for sidecars
         go.set()
         await asyncio.wait_for(task, 10)
 
     asyncio.run(main())
-    assert answers == [("a1", "owner", "Approve"), ("a2", "U0WHO", "Decline")]  # person ids
+    assert answers == [("a1", "owner", "Approve")]  # a person id; the stranger never got there
     assert "anthropic" in events and "sidecar stopped" in events  # warmed, then stopped
 
 
@@ -176,6 +186,8 @@ def test_run_shuts_down_in_order(home: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(sys, "stdin", io.StringIO("/quit\n"))
     free_home(home)
     asyncio.run(asyncio.wait_for(app.run(home, terminal=True), 10))
-    assert events == ["web cancelled", "scheduler cancelled", "channels stopped"]  # web first
+    # The channels first (that ends the page's event streams), then the web server and the rest.
+    assert events[0] == "channels stopped"
+    assert sorted(events[1:]) == ["scheduler cancelled", "web cancelled"]
     with pytest.raises(sqlite3.ProgrammingError):  # closed last
         stores[0].add_message("local:me", "user", "too late")

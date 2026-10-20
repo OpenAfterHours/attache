@@ -53,9 +53,6 @@ class Config:
                 return person
         return None
 
-    def chat(self, chat_key: str) -> ChatConfig | None:
-        return self.chats.get(chat_key)
-
     def endpoint_for(self, chat_key: str, is_group: bool) -> Endpoint:
         """The chat's own endpoint if set, else [routing] group_chats or own_chats."""
         chat = self.chats.get(chat_key)
@@ -102,13 +99,23 @@ def load(home: Path | None = None) -> Config:
         endpoints[name] = Endpoint(name, api, model, base_url, key_env, options=table)
     channels = raw.get("channels", {})
     for name, table in channels.items():
-        table.setdefault("enabled", False)
-        wrong = [k for k, v in table.items() if not isinstance(v, bool if k == "enabled" else str)]
-        if wrong:  # enabled is true or false; the rest reach the sidecar as text
-            raise ValueError(f"{path}: [channels.{name}] {', '.join(wrong)}: wrong type of value")
+        if name == "local":
+            raise ValueError(f"{path}: [channels.local] is taken by the terminal and web page")
+        if not isinstance(table.setdefault("enabled", False), bool):
+            raise ValueError(f"{path}: [channels.{name}] enabled must be true or false")
+        for key, value in table.items():
+            if key != "enabled" and not isinstance(value, str):  # the sidecar gets them as env
+                raise ValueError(f"{path}: [channels.{name}] {key} must be a string")
     limits = {**LIMITS, **_check(path, "limits", raw.get("limits", {}), list(LIMITS))}
-    settings: dict[str, Any] = {"channels": channels, "limits": limits}
-    settings["approvals"] = own.get("approvals", "local:me")
+    for key, value in limits.items():
+        if type(value) is not int or value < 1:  # type(): true and false are not numbers here
+            raise ValueError(f"{path}: [limits] {key} must be a whole number of at least 1")
+    approvals = str(own.get("approvals", "local:me"))
+    channel, _, chat_id = approvals.partition(":")
+    direct = approvals == "local:me" or (channels.get(channel, {}).get("enabled") and chat_id)
+    if not direct or approvals in chats:  # questions go to your own direct chat, never a group
+        raise ValueError(f'{path}: [owner] approvals must be "local:me" or "<channel>:<your DM>"')
+    settings: dict[str, Any] = {"channels": channels, "limits": limits, "approvals": approvals}
     for section, keys in SECTIONS.items():
         settings.update(_check(path, section, raw.get(section, {}), keys))
     try:

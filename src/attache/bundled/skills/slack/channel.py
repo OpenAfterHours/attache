@@ -7,9 +7,9 @@
 The protocol is in docs/channels.md. It connects over Socket Mode, so Slack needs no public URL.
 The tokens live in the OS keychain under the service "attache-slack":
 
-    uv run channel.py setup            store the bot (xoxb-) and app-level (xapp-) tokens
-    uv run channel.py check [U...]     test them; with your member id, print your DM's chat key
-    uv run channel.py                  run the sidecar (Attaché does this)
+    uv run channel.py setup     store the bot (xoxb-) and app-level (xapp-) tokens
+    uv run channel.py check     test them
+    uv run channel.py           run the sidecar (Attaché does this)
 
 The protocol translation is plain functions and slack-bolt is imported only inside run() and
 check(), so tests can import this file without slack-bolt installed.
@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import json
-import logging
 import os
 import re
 import sys
@@ -33,9 +31,13 @@ from urllib.parse import urlparse
 SERVICE = "attache-slack"  # keychain service; usernames bot_token and app_token
 SETUP = "uv run ~/.attache/skills/slack/channel.py setup"
 PLAIN = {None, "file_share", "thread_broadcast"}  # message subtypes a person typed
-COMMANDS = ("send", "ask", "typing", "stop")
-KEEP = 1000  # message ids remembered for dedupe and threading
+COMMANDS = ("send", "ask", "answered", "stop")
+KEEP = 1000  # messages and button presses remembered
+MAX_FILE = 25 * 1024 * 1024  # bytes; bigger files aren't downloaded
 SPECIAL = re.compile(r"<!([^>|]+)(?:\|[^>]*)?>")  # <!channel>, <!here>, <!subteam^S01>
+BROADCAST = re.compile(r"(?<!\w)@(channel|here|everyone)\b")
+TOKEN_ERRORS = ("invalid_auth", "not_authed", "account_inactive", "token_revoked")
+NOT_TAKEN = "That answer wasn't taken: only the person asked can answer, while it's still open."
 Json = dict[str, Any]
 
 
@@ -67,26 +69,27 @@ def unescape(text: str) -> str:
 
 
 def quiet(text: str) -> str:
-    """Turn @channel, @here and group pings into plain words, so a reply never notifies a
-    whole channel because a message it quoted asked for that."""
-    return SPECIAL.sub(r"@\1", text)
+    """Defuse @channel, @here, @everyone and group pings, written as <!here> or as plain words,
+    so a reply never notifies a whole channel because a message it quoted asked for that."""
+    text = SPECIAL.sub(r"@\1", text)
+    return BROADCAST.sub("@‍\\1", text)  # a zero-width joiner after the @
 
 
-def inbound(event: Json, self_id: str, names: dict, seen: dict | None = None) -> Json | None:
+def inbound(event: Json, self_id: str, names: dict, seen: dict) -> Json | None:
     """A Slack `message` or `app_mention` event as a protocol "message", or None to ignore it.
 
-    Ignored: bots (this one included), edits, joins and other subtypes, and, when `seen` is
-    given, repeats: Slack delivers a channel mention twice, as app_mention and as message.*.
-    `names` maps user ids to display names; `files` is left for the caller to download.
+    Ignored: bots (this one included), edits, joins and other subtypes, and repeats: Slack
+    delivers a channel mention twice, as app_mention and as message.*. `seen` remembers each
+    message passed on, as (chat, ts) -> the thread a reply to it belongs in. `names` maps user
+    ids to display names; `files` is left for the caller to download.
     """
     user = event.get("user")
     if event.get("bot_id") or not user or user == self_id or event.get("subtype") not in PLAIN:
         return None
     key = (event.get("channel"), event.get("ts"))
-    if seen is not None:
-        if key in seen:
-            return None
-        remember(seen, key)
+    if key in seen:
+        return None
+    remember(seen, key, thread_root(event))
     mention = re.compile(rf"<@{re.escape(self_id)}(?:\|[^>]*)?>")
     raw = event.get("text") or ""
     text = unescape(mention.sub("", raw)).strip()
@@ -113,10 +116,10 @@ def thread_root(event: Json) -> str | None:
     return None if event.get("channel_type") == "im" else event.get("ts")
 
 
-def reply_thread(reply_to: str | None, chat_id: str, roots: dict[str, str | None]) -> str | None:
+def reply_thread(reply_to: str | None, chat_id: str, seen: dict) -> str | None:
     """The thread_ts for a reply. Slack wants the thread's parent, not a reply inside it."""
-    if reply_to in roots:
-        return roots[reply_to]
+    if (chat_id, reply_to) in seen:
+        return seen[(chat_id, reply_to)]
     return None if not reply_to or chat_id.startswith("D") else reply_to  # D...: a DM
 
 
@@ -136,8 +139,6 @@ def ask_blocks(text: str, options: list[str], ask_id: str) -> list[Json]:
         }
         for i, option in enumerate(options[:25])
     ]
-    if buttons:
-        buttons[0]["style"] = "primary"
     return [*sections, {"type": "actions", "elements": buttons}]
 
 
@@ -189,6 +190,13 @@ def read_commands(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[Json]) -
     loop.call_soon_threadsafe(queue.put_nowait, {"type": "stop"})
 
 
+def wait_for_stop() -> None:
+    """Read stdin until a stop command or its end."""
+    for line in sys.stdin:
+        if (parse_command(line) or {}).get("type") == "stop":
+            return
+
+
 async def name_of(client: Any, names: dict[str, str], user: str) -> str:
     """A user's display name from users.info, cached; the id when Slack won't say."""
     if user not in names:
@@ -203,47 +211,46 @@ async def name_of(client: Any, names: dict[str, str], user: str) -> str:
 
 async def download(files: list[Json], token: str) -> list[str]:
     """Save a message's files into ATTACHE_FILES and return their absolute paths."""
-    if not files:
-        return []
     import aiohttp
 
     folder = Path(os.environ.get("ATTACHE_FILES") or "inbox").resolve()
     folder.mkdir(parents=True, exist_ok=True)
-    paths = []
     async with aiohttp.ClientSession(headers={"Authorization": f"Bearer {token}"}) as session:
-        for file in files:
-            url = file.get("url_private_download") or ""
-            if not is_slack_url(url):
-                continue  # external or hidden files have no download link
-            path = folder / local_name(file)
-            try:
-                async with session.get(url) as response:
-                    # Without files:read, Slack answers with its sign-in page instead.
-                    html = response.content_type == "text/html"
-                    if response.status != 200 or (html and file.get("mimetype") != "text/html"):
-                        why = f"HTTP {response.status}, {response.content_type}; files:read?"
-                        log("warning", f"could not download {file.get('name')} ({why})")
-                        continue
-                    with path.open("wb") as out:
-                        async for chunk in response.content.iter_chunked(65536):
-                            out.write(chunk)
-            except aiohttp.ClientError as error:
-                log("warning", f"could not download {file.get('name')}: {error}")
-                continue
-            paths.append(str(path))
-    return paths
+        paths = [await fetch(session, file, folder) for file in files]
+    return [path for path in paths if path]
 
 
-async def send(client: Any, command: Json, roots: dict[str, str | None]) -> None:
+async def fetch(session: Any, file: Json, folder: Path) -> str | None:
+    """Download one file, or log why not and give None. Redirects aren't followed, so the bot
+    token goes only to the Slack link, and nothing over MAX_FILE is kept."""
+    url, path = file.get("url_private_download") or "", folder / local_name(file)
+    if not is_slack_url(url):
+        return None  # external or hidden files have no download link
+    try:
+        if (file.get("size") or 0) > MAX_FILE:
+            raise ValueError("over 25 MB")
+        async with session.get(url, allow_redirects=False) as response:
+            # Without files:read, Slack answers with a redirect or its sign-in page.
+            html = response.content_type == "text/html" and file.get("mimetype") != "text/html"
+            if response.status != 200 or html:
+                raise ValueError(f"HTTP {response.status}; does the app have files:read?")
+            with path.open("wb") as out:
+                async for chunk in response.content.iter_chunked(65536):
+                    out.write(chunk)
+                    if out.tell() > MAX_FILE:
+                        raise ValueError("over 25 MB")
+    except Exception as error:
+        path.unlink(missing_ok=True)
+        log("warning", f"could not download {file.get('name')}: {error}")
+        return None
+    return str(path)
+
+
+async def send(client: Any, command: Json, seen: dict) -> None:
     """Post a "send": text as Markdown, or files with the text as their comment."""
     chat, text = command["chat_id"], quiet(command.get("text") or "")
-    thread = reply_thread(command.get("reply_to"), chat, roots)
-    uploads = []
-    for path in command.get("files") or []:
-        if Path(path).is_file():
-            uploads.append({"file": path})
-        else:
-            log("warning", f"not sending {path}: no such file")
+    thread = reply_thread(command.get("reply_to"), chat, seen)
+    uploads = [{"file": path} for path in command.get("files") or []]
     if uploads:
         await client.files_upload_v2(
             channel=chat, file_uploads=uploads, initial_comment=text or None, thread_ts=thread
@@ -261,6 +268,22 @@ async def ask(client: Any, command: Json) -> None:
     await client.chat_postMessage(channel=command["chat_id"], text=escape(text), blocks=blocks)
 
 
+async def answered(client: Any, command: Json, clicks: dict[Any, Json]) -> None:
+    """Attaché's verdict on a button press: a taken answer replaces the buttons with the choice;
+    otherwise only the person who pressed is told it wasn't taken."""
+    user = command["sender_id"]
+    body = clicks.pop((command["ask_id"], user), None)
+    if body is None:
+        return
+    channel, asked = body["channel"]["id"], body["message"]
+    if command.get("accepted"):
+        choice = answer_from_action(body)["choice"]
+        blocks = answered_blocks(asked.get("blocks") or [], choice, user)
+        await client.chat_update(channel=channel, ts=asked["ts"], text=asked["text"], blocks=blocks)
+    else:
+        await client.chat_postEphemeral(channel=channel, user=user, text=NOT_TAKEN)
+
+
 async def run(bot_token: str, app_token: str) -> int:
     """The sidecar: Slack events out as JSON lines, commands from stdin in, until stop."""
     from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -269,54 +292,49 @@ async def run(bot_token: str, app_token: str) -> int:
     app = AsyncApp(token=bot_token)
     client = app.client
     self_id = (await client.auth_test())["user_id"]
+    await client.apps_connections_open(app_token=app_token)  # connect() retries a bad one forever
     names: dict[str, str] = {}
-    seen: dict[Any, Any] = {}
-    roots: dict[str, str | None] = {}
+    seen: dict[Any, str | None] = {}  # (chat, ts) -> thread root, for dedupe and replies
+    clicks: dict[Any, Json] = {}  # (ask_id, user) -> the button press, until Attaché answers
 
     async def on_event(event: Json) -> None:
         user = event.get("user")
         if user and not event.get("bot_id"):
             await name_of(client, names, user)
         message = inbound(event, self_id, names, seen)
-        if message is not None:
-            remember(roots, message["message_id"], thread_root(event))
-            message["files"] = await download(event.get("files") or [], bot_token)
-            emit(message)
+        if message is None:
+            return
+        if event.get("files") and (message["mentioned"] or not message["is_group"]):
+            message["files"] = await download(event["files"], bot_token)  # DMs and mentions
+        emit(message)
 
     async def on_answer(ack: Any, body: Json) -> None:
         await ack()
         answer = answer_from_action(body)
+        remember(clicks, (answer["ask_id"], answer["sender_id"]), body)
         emit(answer)
-        asked = body["message"]
-        blocks = answered_blocks(asked.get("blocks") or [], answer["choice"], answer["sender_id"])
-        await client.chat_update(
-            channel=body["channel"]["id"], ts=asked["ts"], text=asked.get("text", ""), blocks=blocks
-        )
-
-    async def on_error(error: Exception) -> None:
-        log("error", f"slack: {error}")
 
     app.event("message")(on_event)
     app.event("app_mention")(on_event)
     app.action(re.compile("^attache_answer_"))(on_answer)
-    app.error(on_error)
 
+    handler = AsyncSocketModeHandler(app, app_token)
+    await handler.connect_async()  # not start_async(): that prints a banner to stdout
     commands: asyncio.Queue[Json] = asyncio.Queue()
     loop = asyncio.get_running_loop()
     threading.Thread(target=read_commands, args=(loop, commands), daemon=True).start()
-    handler = AsyncSocketModeHandler(app, app_token)
-    await handler.connect_async()  # not start_async(): that prints a banner to stdout
     emit({"type": "ready", "self_id": self_id, "name": await name_of(client, names, self_id)})
     while (command := await commands.get())["type"] != "stop":
         try:
             if command["type"] == "send":
-                await send(client, command, roots)
+                await send(client, command, seen)
             elif command["type"] == "ask":
                 await ask(client, command)
+            elif command["type"] == "answered":
+                await answered(client, command, clicks)
         except Exception as error:
             log("error", f"{command['type']} failed: {error}")
-    with contextlib.suppress(Exception):  # Attaché waits 5 seconds at most
-        await asyncio.wait_for(handler.close_async(), 4)
+    await handler.close_async()
     return 0
 
 
@@ -350,24 +368,17 @@ def setup() -> int:
     return 0
 
 
-def check(bot_token: str, app_token: str, member: str | None = None) -> int:
-    """Test both tokens; with a member id, also print that person's DM with the bot."""
+def check(bot_token: str, app_token: str) -> int:
+    """Test both tokens: auth.test takes the xoxb- one, apps.connections.open the xapp- one."""
     from slack_sdk import WebClient
 
-    bot = WebClient(token=bot_token)
-    step = "The bot token (xoxb-)"
     try:
-        auth = bot.auth_test()
-        step = "The app-level token (xapp-)"
+        auth = WebClient(token=bot_token).auth_test()
         WebClient().apps_connections_open(app_token=app_token)
-        print(f"Both tokens work: bot user {auth['user_id']} in {auth['team']} ({auth['team_id']})")
-        if member:
-            step = f"Opening a DM with {member}"
-            dm = bot.conversations_open(users=member)["channel"]["id"]
-            print(f'Your DM with the bot, for [owner]: approvals = "slack:{dm}"')
     except Exception as error:
-        print(f"{step} failed: {error}", file=sys.stderr)
+        print(f"Slack refused a token: {error}", file=sys.stderr)
         return 1
+    print(f"Both tokens work: bot user {auth['user_id']} in {auth['team']} ({auth['team_id']})")
     return 0
 
 
@@ -380,32 +391,33 @@ def main(argv: list[str] | None = None) -> int:
         "tests them, and with no command it runs the sidecar."
     )
     parser.add_argument("command", nargs="?", choices=["setup", "check"])
-    parser.add_argument("member", nargs="?", help="for check: your member id (U...)")
     args = parser.parse_args(argv)
     if args.command == "setup":
         return setup()
 
     def fail(text: str) -> int:
-        if args.command == "check":
-            print(text, file=sys.stderr)
-        else:
-            log("error", text)
+        """Say why on stderr. The sidecar then idles until stop rather than exiting, because
+        Attaché would only restart it, and it can't run until the setup is fixed."""
+        print(text, file=sys.stderr)
+        if args.command is None:
+            wait_for_stop()
         return 2
 
     try:
         tokens = load_tokens()
     except Exception as error:  # no keychain, e.g. on a headless Linux box
-        return fail(f"cannot read the keychain: {error}")
+        return fail(f"Slack: cannot read the keychain: {error}")
     if tokens is None:
         return fail(f"Slack tokens are missing. Run: {SETUP}")
     if args.command == "check":
-        return check(*tokens, args.member)
-    logging.basicConfig(level=logging.WARNING)  # to stderr, which goes to Attaché's log
+        return check(*tokens)
     try:
         return asyncio.run(run(*tokens))
-    except KeyboardInterrupt:
-        return 0
     except Exception as error:
+        from slack_sdk.errors import SlackApiError
+
+        if isinstance(error, SlackApiError) and error.response["error"] in TOKEN_ERRORS:
+            return fail(f"Slack refused a token ({error.response['error']}). Run: {SETUP}")
         log("error", f"slack: {error}")
         return 1
 

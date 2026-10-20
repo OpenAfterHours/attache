@@ -19,13 +19,15 @@ follow a page link. Send them a picture of it instead.
    one-page pass that lets the render browser open the page on this machine.
 2. Render it:
    `script {skill: "render", script: "render.py", args: ["<snapshot>", "page.png"]}`.
-   On success the output is the file's path, such as `files/slack-c0123/page.png`.
-3. Send it: `send {text: "The packing list", files: ["files/slack-c0123/page.png"]}`, using
-   the path the script printed.
+   On success the output is the file's path in this chat's files folder, such as
+   `files/slack-c0123-7a947790/page.png` (the folder ends in 8 hex digits).
+3. Send it: `send {text: "The packing list", files: ["files/slack-c0123-7a947790/page.png"]}`,
+   using exactly the path the script printed.
 
 Name files after what they show (`packing-list.png`); the same name replaces the last picture.
 For a PDF, give `page.pdf` instead. For a phone-shaped picture add
-`"--width", "390", "--height", "844"` to `args`; the default is 1280 x 900.
+`"--width", "390", "--height", "844"` to `args`; the default is 1280 x 900, the most is 4000 x
+4000, and `--wait` is at most 30 seconds.
 
 ## Rules
 
@@ -33,8 +35,9 @@ For a PDF, give `page.pdf` instead. For a phone-shaped picture add
   this machine; send the picture.
 - Snapshot links change every time Attaché restarts: take the `snapshot` from the latest
   `artifact` result, and render straight after publishing.
-- The script only renders pages on this machine (`localhost` or `127.0.0.1`), and the browser
-  cannot reach the internet while it renders. It writes only into this chat's files folder.
+- The script renders only Attaché's own pages, from a `snapshot` link (no other address, local
+  or not, and no files), and the browser cannot reach the internet while it renders. It writes
+  only into this chat's files folder.
 - It needs Microsoft Edge or Google Chrome. If the script says none was found, tell the person
   plainly and offer the list as text instead.
 - If the picture looks empty, the page may still have been loading: add `"--wait", "8"`.

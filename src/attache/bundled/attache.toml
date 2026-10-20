@@ -23,6 +23,7 @@ host = "127.0.0.1"  # only this machine can reach the web page
 port = 8765
 
 # Chat apps. Each one is a skill that runs a small program, and is off until enabled here.
+# enabled is true or false; every other value must be a string ("+44…", not a number).
 # Secrets never go in this file: the skill's setup command keeps them in your system keychain,
 # for example `uv run ~/.attache/skills/slack/channel.py setup`.
 # [channels.slack]

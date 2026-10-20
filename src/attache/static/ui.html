@@ -252,19 +252,31 @@
   function showAsk({ ask_id, text, options }) {
     const msg = add("bot", text);
     const choices = el("div", "choices");
+    // Answering, by a button or by typing an option: the buttons go, and the choice shows.
+    async function choose(option) {
+      asks.delete(ask_id);
+      choices.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+      const res = await api("POST", "/api/answer", { ask_id, choice: option }).catch(() => null);
+      choices.replaceChildren(el("span", "files", res?.ok ? `You chose: ${option}` : "No longer open."));
+    }
     for (const option of options) {
       const button = el("button", "", option);
-      button.type = "button";
-      button.addEventListener("click", async () => {
-        choices.querySelectorAll("button").forEach((b) => { b.disabled = true; });
-        const res = await api("POST", "/api/answer", { ask_id, choice: option }).catch(() => null);
-        asks.delete(ask_id);
-        choices.replaceChildren(el("span", "files", res?.ok ? `You chose: ${option}` : "No longer open."));
-      });
+      Object.assign(button, { type: "button", onclick: () => choose(option) });
       choices.append(button);
     }
     msg.append(choices);
-    asks.set(ask_id, msg);
+    asks.set(ask_id, { msg, text, options, choose });
+  }
+
+  // Typed text that names an option of an open question, or its number, answers it: the
+  // newest such question first, as the server's typed-reply rule does.
+  function typedAnswer(text) {
+    const said = text.trim().toLowerCase();
+    for (const ask of [...asks.values()].reverse()) {
+      const option = ask.options.find((o, i) => o.toLowerCase() === said || String(i + 1) === said);
+      if (option) return () => ask.choose(option);
+    }
+    return null;
   }
 
   function setThinking(on) {
@@ -283,9 +295,10 @@
       thinking = null;
       log.replaceChildren(...(past.length ? [] : [hello]));
       const mine = (m) => m.role === "user" && m.sender_name !== "Reminder"; // reminders are ours
-      for (const m of past) add(mine(m) ? "you" : "bot", m.text);
+      const open = new Set([...asks.values()].map((ask) => ask.text)); // shown with buttons below
+      for (const m of past) if (!open.has(m.text)) add(mine(m) ? "you" : "bot", m.text);
       if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
-      log.append(...asks.values()); // questions still open stay below the chat
+      log.append(...[...asks.values()].map((ask) => ask.msg)); // open questions stay last
       const fresh = past.filter((m) => m.ts >= since).map((m) => m.text);
       early = early.filter((msg) => msg.ask_id || !fresh.includes(msg.text));
     }
@@ -311,6 +324,8 @@
     if (!text) return;
     input.value = "";
     add("you", text);
+    const answer = typedAnswer(text);
+    if (answer) return answer(); // an answer, not a request: no turn, so no "Thinking…"
     setThinking(true);
     await api("POST", "/api/chat", { text }).catch((err) => {
       setThinking(false);

@@ -14,18 +14,17 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import unicodedata
 from asyncio.subprocess import DEVNULL, PIPE, STDOUT
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from attache import skills, store, web
+from attache import channels, scheduler, skills, store, web
 from attache.types import Outbound, Tool, TurnContext
 
 OWNER, MEMBER, BOTH = frozenset({"owner"}), frozenset({"member"}), frozenset({"owner", "member"})
+BREAKS = {0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"}  # json.dumps keeps these raw
 OUTPUT_CAP = 20_000  # characters of command output kept: the end, where errors are
 SHELL = "cmd.exe" if os.name == "nt" else "sh"
 PRIVATE = {".secret", ".git", ".claude", "claude.md"}  # and attache.db*; any case, any depth
@@ -43,7 +42,14 @@ def slug(text: str) -> str:
 
 def chat_slug(chat_key: str) -> str:
     """A folder name for a chat: readable, and distinct even when two keys slug alike."""
-    return f"{slug(chat_key)[:40].strip('-')}-{hashlib.sha256(chat_key.encode()).hexdigest()[:8]}"
+    digest = hashlib.sha256(chat_key.encode()).hexdigest()[:8]
+    return f"{slug(chat_key)[:40].strip('-')}-{digest}"
+
+
+def quote(text: str) -> str:
+    """Someone else's text as one JSON string on one line: inside its quotes, nothing can pose
+    as a header or a label, or close a <<< >>> fence."""
+    return json.dumps(text, ensure_ascii=False).translate(BREAKS)
 
 
 def chat_files(ctx: TurnContext) -> Path:
@@ -101,9 +107,9 @@ def _tool(fields: str, roles: frozenset[str] = OWNER, description: str = "") -> 
 
 
 async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
-    """Run a command (a string runs in the shell); JSON {exit_code, output}. On timeout the
-    whole process tree is killed, then reaped so its pipes close."""
-    # start_new_session: on POSIX its own process group, killed as one; ignored on Windows
+    """Run a command (a string runs in the shell); JSON {exit_code, output}. On timeout
+    channels.kill_tree kills the whole process tree and reaps it, so its pipes close."""
+    # start_new_session: on POSIX its own process group, which kill_tree kills as one
     kw = {"cwd": cwd, "stdin": DEVNULL, "stdout": PIPE, "stderr": STDOUT, "start_new_session": True}
     if isinstance(cmd, str):
         proc = await asyncio.create_subprocess_shell(cmd, **kw)
@@ -112,11 +118,7 @@ async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
-        else:
-            os.killpg(proc.pid, signal.SIGKILL)
-        await proc.wait()
+        await channels.kill_tree(proc)
         raise TimeoutError(f"stopped after {timeout:g} seconds") from None
     text = out.decode("utf-8", "replace")[-OUTPUT_CAP:]
     return json.dumps({"exit_code": proc.returncode, "output": text}, ensure_ascii=False)
@@ -180,7 +182,8 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
 async def send(args: dict[str, Any], ctx: TurnContext) -> str:
     """Send a message to this chat now, with optional files (paths relative to home; in shared
     chats, only files from this chat's files folder)."""
-    folder = ctx.services.home if access(ctx.role, ctx.is_group) == "owner" else chat_files(ctx)
+    owner = access(ctx.role, ctx.is_group) == "owner"
+    folder = ctx.services.home if owner else chat_files(ctx)
     files = [resolve(ctx, f) for f in args.get("files") or []]
     for path in files:
         if not path.is_relative_to(folder.resolve()) or not path.is_file():
@@ -221,32 +224,49 @@ async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
     return json.dumps({"url": url, "snapshot": web.snapshot_url(services, name)})  # for render
 
 
+async def _ask(ctx: TurnContext, chat_key: str, question: str, options: list[str]) -> str | None:
+    """Put a question to the owner in `chat_key` and wait for the choice (None: no answer). The
+    question is kept in that chat's history too, so a page reload still shows it."""
+    ctx.services.store.add_message(chat_key, "assistant", question)
+    return await ctx.services.channels.ask(chat_key, "owner", question, options)
+
+
 @_tool("question options?")
 async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
     """Ask the owner a question in this chat and wait for the answer; options default to Yes
     and No. Returns the chosen option, or "no answer"."""
     options = list(args.get("options") or ["Yes", "No"])
-    choice = await ctx.services.approvals.ask(ctx.chat_key, "owner", args["question"], options)
-    return choice or "no answer"
+    return await _ask(ctx, ctx.chat_key, args["question"], options) or "no answer"
 
 
 @_tool("summary", MEMBER)
 async def request(args: dict[str, Any], ctx: TurnContext) -> str:
     """Ask the owner to approve something only they can do, such as changing a skill or how a
-    shared list works. Returns "approved; it will be done", "declined" or "no answer yet"."""
-    services, chat = ctx.services, ctx.services.config.chat(ctx.chat_key)
+    shared list works. The summary says what and why, in under 300 characters. Returns at
+    once; the owner's answer comes to this chat later."""
+    services, summary = ctx.services, str(args["summary"])
+    if len(summary) > 300:
+        raise ValueError("keep the summary under 300 characters")
+    chat, owner = services.config.chats.get(ctx.chat_key), services.config.owner.name
     who, where = f"{ctx.sender.name} ({ctx.role})", (chat and chat.name) or ctx.chat_key
-    question = f"{ctx.sender.name} in {where} asks: {args['summary']}"
+    # Quoted as one JSON string, the way the router fences group messages: the owner approves
+    # exactly the text the owner turn will get, and it reaches that turn only as data.
+    question = f"{ctx.sender.name} in {where} asks: {quote(summary)}"
     owner_chat = services.config.approvals  # where approvals are asked, and the work happens
-    choice = await services.approvals.ask(owner_chat, "owner", question, ["Approve", "Decline"])
-    if choice != "Approve":
-        return "declined" if choice == "Decline" else "no answer yet"
-    # The owner said yes, but the member's words reach the turn only as quoted data, fenced as
-    # the router fences group messages. json.dumps escapes every line break, so one line.
-    fenced = f"<<<\n[{who}]: {json.dumps(args['summary'])}\n>>>"
-    text = f"You approved this request from {who} in {where}. Do it, within your rules:\n{fenced}"
-    services.scheduler.add(owner_chat, text, at=datetime.now().timestamp(), kind="turn", by="owner")
-    return "approved; it will be done"
+
+    async def wait_and_act() -> None:
+        choice = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
+        if choice == "Approve":
+            fenced = f"<<<\n[{who}]: {quote(summary)}\n>>>"
+            text = f"You approved this request from {who} in {where}. Do it, within your rules:"
+            due = datetime.now().timestamp()
+            services.store.task_add(owner_chat, f"{text}\n{fenced}", due, kind="turn", by="owner")
+            services.scheduler.wake()
+        verb = {"Approve": "approved", "Decline": "declined"}.get(choice, "did not answer")
+        await send({"text": f"{owner} {verb} the request from {ctx.sender.name}."}, ctx)
+
+    services.channels.spawn(wait_and_act())  # the turn, and the chat, need not wait for it
+    return f"Asked {owner}; the answer will come to this chat."
 
 
 @_tool("op text? at? in_minutes? cron? kind? id? all?", BOTH)
@@ -263,7 +283,7 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
         mine = [t["id"] for t in saved.task_list(chat) if owner or t["by"] == ctx.sender.id]
         if int(args["id"]) not in mine:
             raise KeyError(f"no pending task {args['id']} that you can cancel")
-        saved.task_cancel(int(args["id"]))
+        saved.task_end(int(args["id"]), "cancelled")
         return f"cancelled task {args['id']}"
     if op != "add":
         raise ValueError(f"unknown op {op!r}: use add, list or cancel")
@@ -273,8 +293,12 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
     at = datetime.fromisoformat(args["at"]).timestamp() if args.get("at") else None  # naive: local
     if at is None and args.get("in_minutes") not in (None, ""):
         at = datetime.now().timestamp() + 60 * float(args["in_minutes"])
-    scheduler, cron = ctx.services.scheduler, args.get("cron") or None
-    task = scheduler.add(ctx.chat_key, args["text"], at=at, cron=cron, kind=kind, by=ctx.sender.id)
+    cron = args.get("cron") or None
+    if (at is None) == (cron is None):
+        raise ValueError("give exactly one of `at`, `in_minutes` or `cron`")
+    due = scheduler.next_cron(cron, datetime.now().timestamp()) if cron else at
+    task = saved.task_add(ctx.chat_key, args["text"], due, kind=kind, cron=cron, by=ctx.sender.id)
+    ctx.services.scheduler.wake()  # the loop may be asleep until a later task
     return json.dumps(task)
 
 

@@ -58,7 +58,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import uvicorn
 from starlette.applications import Starlette
-from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -74,7 +73,6 @@ from attache.types import Inbound, OnMessage, Outbound, ToolCall
 
 if TYPE_CHECKING:
     from attache.app import Services
-    from attache.router import Router
 
 UI = "_ui"  # the scope slug of the Attaché page itself
 PING_SECONDS = 15
@@ -168,11 +166,12 @@ class WebChannel:
                 loop.call_soon_threadsafe(queue.put_nowait, (kind, event))
 
     async def stream(self, scope: Scope) -> AsyncIterator[str]:
-        """Server-sent events for one page, with a ": ping" comment when idle."""
+        """Server-sent events for one page, with a ": ping" comment when idle. It ends once
+        stop() has run, so open pages never hold up the server's shutdown."""
         self.subs.append(sub := (scope, asyncio.get_running_loop(), asyncio.Queue()))
         try:
             yield ": connected\n\n"
-            while True:
+            while not self.stopped.is_set():
                 try:
                     kind, event = await asyncio.wait_for(sub[2].get(), PING_SECONDS)
                     yield f"event: {kind}\ndata: {json.dumps(event)}\n\n"
@@ -182,7 +181,9 @@ class WebChannel:
             self.subs.remove(sub)
 
     async def start(self, on_message: OnMessage) -> None:
-        await self.stopped.wait()  # messages typed in the page reach the router via /api/chat
+        """Keep `on_message` for /api/chat, the way messages typed in the page come in."""
+        self.on_message = on_message
+        await self.stopped.wait()
 
     async def send(self, msg: Outbound) -> None:
         """A reply, or with `author` set a message the owner typed elsewhere (the terminal).
@@ -190,11 +191,15 @@ class WebChannel:
         if msg.origin != "web":
             self.publish("message", **vars(msg))
 
-    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> None:
+    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
+        """Show a question on the open Attaché pages: False when there is none to see it."""
         self.publish("ask", ask_id=ask_id, text=text, options=options)
+        return any(scope.slug == UI for scope, _, _ in self.subs)
 
     async def stop(self) -> None:
         self.stopped.set()
+        for _, _, queue in self.subs:  # wake each stream, which sends "bye" and ends
+            queue.put_nowait(("bye", {}))
 
 
 class _BridgeCORS(CORSMiddleware):
@@ -210,7 +215,7 @@ async def _error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": str(exc.args[0] if exc.args else exc)}, code)
 
 
-def create_app(services: Services, router: Router, channel: WebChannel) -> Starlette:
+def create_app(services: Services, channel: WebChannel) -> Starlette:
     """The app. Registers a store listener, so doc changes reach open pages."""
     store, home = services.store, services.config.home
     store.on_change.append(lambda c, i, d: channel.publish("doc", collection=c, id=i, doc=d))
@@ -253,12 +258,13 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         ui_only(request)
         text = str((await body(request)).get("text", ""))  # the page never sends empty text
         msg = Inbound("local", "me", "owner", services.config.owner.name, text, origin="web")
-        return JSONResponse({"ok": True}, background=BackgroundTask(router.handle, msg))
+        await channel.on_message(msg)  # returns at once: the turn runs as a ChannelManager task
+        return JSONResponse({"ok": True})
 
     async def answer(request: Request) -> Response:
         ui_only(request)
         data = await body(request)
-        ok = services.approvals.answer(str(data.get("ask_id")), "owner", str(data.get("choice")))
+        ok = services.channels.answer(str(data.get("ask_id")), "owner", str(data.get("choice")))
         return JSONResponse({"ok": ok})
 
     async def db(request: Request) -> Response:
@@ -288,17 +294,16 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         if "id" not in message:  # a notification: nothing to answer
             return Response(status_code=202)
         method, params = message.get("method"), message.get("params") or {}
+        result: dict[str, Any] = {}  # what "ping" gets
         if method == "initialize":
             result = {**SERVER, "protocolVersion": params.get("protocolVersion")}
-        elif method == "ping":
-            result = {}
         elif method == "tools/list":
             result = {"tools": [tool_spec(tool, key="inputSchema") for tool in turn.tools]}
         elif method == "tools/call":
             args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             out = await run_tool(ToolCall(str(message["id"]), str(params.get("name")), args), turn)
             result = {"content": [{"type": "text", "text": out}], "isError": out[:6] == "error:"}
-        else:
+        elif method != "ping":
             error = {"code": -32601, "message": f"no method {method}"}
             return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "error": error})
         return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "result": result})

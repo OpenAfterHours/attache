@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS sessions (chat_key TEXT, endpoint TEXT, json TEXT,
     PRIMARY KEY (chat_key, endpoint));
 """
 PENDING_TASKS = "SELECT * FROM tasks WHERE status = 'pending'"
+HISTORY = """SELECT role, text, sender_id, sender_name, ts FROM messages
+WHERE chat_key = ? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?"""
+# An update keeps `created`, so doc_list order stays oldest first.
+UPSERT_DOC = """INSERT INTO docs VALUES (?, ?, ?, ?, ?) ON CONFLICT (collection, id)
+DO UPDATE SET json = excluded.json, updated = excluded.updated"""
 
 
 class Store:
@@ -76,11 +81,7 @@ class Store:
     ) -> list[dict[str, Any]]:
         """The last `limit` messages with id < `before` (if given), oldest first:
         {"role", "text", "sender_id", "sender_name", "ts"}."""
-        sql = (
-            "SELECT role, text, sender_id, sender_name, ts FROM messages"
-            " WHERE chat_key = ? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?"
-        )
-        return self._rows(sql, chat_key, before, before, limit)[::-1]  # oldest first
+        return self._rows(HISTORY, chat_key, before, before, limit)[::-1]  # oldest first
 
     # documents
     def doc_list(self, collection: str, *, shared_with: str | None = None) -> list[dict[str, Any]]:
@@ -106,11 +107,7 @@ class Store:
                 doc_id = secrets.token_hex(4)
         now = time.time()
         doc = {**data, "id": doc_id, "_updated": now, "_by": by}
-        sql = (  # an update keeps `created`, so doc_list order stays oldest first
-            "INSERT INTO docs VALUES (?, ?, ?, ?, ?) ON CONFLICT (collection, id)"
-            " DO UPDATE SET json = excluded.json, updated = excluded.updated"
-        )
-        self._write(sql, collection, doc_id, json.dumps(doc), now, now)
+        self._write(UPSERT_DOC, collection, doc_id, json.dumps(doc), now, now)
         self._notify(collection, doc_id, doc)
         return doc
 
@@ -153,12 +150,10 @@ class Store:
     def task_reschedule(self, task_id: int, due: float) -> None:
         self._write("UPDATE tasks SET due = ? WHERE id = ?", due, task_id)
 
-    def task_finish(self, task_id: int) -> None:
-        self._write("UPDATE tasks SET status = 'done' WHERE id = ?", task_id)
-
-    def task_cancel(self, task_id: int) -> bool:
-        sql = "UPDATE tasks SET status = 'cancelled' WHERE id = ? AND status = 'pending'"
-        return self._write(sql, task_id).rowcount > 0
+    def task_end(self, task_id: int, status: str = "done") -> bool:
+        """Mark a pending task "done" or "cancelled"; False when it was not pending."""
+        sql = "UPDATE tasks SET status = ? WHERE id = ? AND status = 'pending'"
+        return self._write(sql, status, task_id).rowcount > 0
 
     def task_list(self, chat_key: str | None = None) -> list[dict[str, Any]]:
         """Pending tasks, earliest first, optionally for one chat."""

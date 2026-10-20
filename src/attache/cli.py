@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import shutil
 import sys
@@ -31,8 +32,10 @@ NEXT = """Next:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the `attache` command and return a process exit code."""
-    with suppress(AttributeError, ValueError, OSError):  # Windows consoles and pipes: UTF-8
+    # Windows consoles and pipes: UTF-8. Apart, so a stdout that can't change keeps stdin's.
+    with suppress(AttributeError, ValueError, OSError):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    with suppress(AttributeError, ValueError, OSError):
         if not sys.stdin.isatty():  # a console already reads Unicode; a pipe or file may not
             sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     raw = argparse.RawDescriptionHelpFormatter
@@ -120,6 +123,10 @@ def _run(home: Path, *, terminal: bool) -> int:
     except (ValueError, TypeError) as e:  # a bad attache.toml: one line, not a traceback
         print(f"attache.toml: {e}", file=sys.stderr)
         return 1
+    # Attaché's own news (a sidecar ready, its log lines, restarts), but only warnings from the
+    # libraries, such as httpx's line for every request.
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("attache").setLevel(logging.INFO)
     from attache import app  # the web stack; `attache skills` and `init` start faster without
 
     with suppress(KeyboardInterrupt):

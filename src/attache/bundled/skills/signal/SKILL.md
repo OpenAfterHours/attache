@@ -38,7 +38,8 @@ number with signal-cli logs that number out of any phone using it.
    Java, the signal-cli version and the account, and prints the bot's own Signal id.
 
 `uv run ~/.attache/skills/signal/channel.py setup` prints these steps and runs doctor. It never
-solves the captcha for you.
+solves the captcha for you. If the number is missing, or signal-cli cannot start the account,
+the channel says why in Attaché's output and waits; fix it, then restart Attaché.
 
 ## Configuration
 
@@ -49,7 +50,6 @@ In `attache.toml`:
 enabled = true
 number = "+447700900123"          # the bot's number
 # signal_cli = 'C:\Tools\signal-cli-0.14.9\bin\signal-cli.bat'   # if it is not on PATH
-# data_dir = '...'                # only if you keep signal-cli's data somewhere else
 # uuid = "..."                    # the bot's id, if doctor cannot find it
 
 [owner.ids]
@@ -65,9 +65,16 @@ members = ["sam"]
 ```
 
 People are matched by Signal id (ACI), a uuid, never by name or number (Signal hides numbers).
-To find yours, message the bot from your phone and look in Attaché's log for the sender id. Or
-stop Attaché and run `signal-cli -a +447700900123 listContacts --all-recipients`. The `ready`
-line in the log shows the bot's own id.
+To find yours, message the bot from your phone, stop Attaché, then run:
+
+```
+signal-cli -a +447700900123 receive
+signal-cli -a +447700900123 listContacts --all-recipients
+```
+
+Copy the `ACI:` from the line with your name. Do the same for anyone else, once they have
+messaged the bot. The bot's own id is printed by doctor, and by Attaché as `self_id` in its
+`channel signal ready` line.
 
 ## Groups
 
@@ -75,6 +82,8 @@ Save the bot's number as a contact on your phone and add it to a group like anyo
 shows as invited rather than joined, stop Attaché and accept with
 `signal-cli -a +447700900123 updateGroup -g GROUP_ID`; `listGroups` shows the ids. In a group,
 mention the bot (type @ and pick it) or reply to one of its messages to get an answer.
+Attachments reach Attaché only from direct messages and messages that mention the bot, and only
+up to 25 MB each.
 
 ## Approvals
 

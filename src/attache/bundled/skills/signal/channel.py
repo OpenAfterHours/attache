@@ -9,9 +9,10 @@
     uv run channel.py setup [+44…]    print the setup steps from SKILL.md, then run doctor
 
 Settings come from [channels.signal] as environment variables: ATTACHE_NUMBER (required),
-ATTACHE_SIGNAL_CLI (a path, or a JSON list of arguments) and ATTACHE_UUID (the bot's ACI,
+ATTACHE_SIGNAL_CLI (the program, if it is not on PATH) and ATTACHE_UUID (the bot's ACI,
 normally read from `signal-cli listAccounts`). signal-cli keeps the account's keys itself, so
-this script stores no secrets.
+this script stores no secrets. Without a number or a working signal-cli it says why on stderr
+and waits for `stop`, so Attaché does not restart it over and over.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -34,9 +36,11 @@ from typing import Any
 NAME = "Attaché"
 THUMBS = ("👍", "👎")  # react with these for the first and second option of an ask
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+MAX_FILE = 25 * 1024 * 1024  # attachments bigger than this are not copied
 STALE_DAYS = 90  # Signal's servers may stop accepting older signal-cli releases
 RELEASES = "https://api.github.com/repos/AsamK/signal-cli/releases"
 Asks = dict[int, tuple[str, list[str]]]  # sent timestamp -> (ask_id, options)
+Names = dict[str, str]  # sender uuid -> the name signal-cli gave them (sourceName)
 FAILED = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)  # running signal-cli
 JAVA = "winget install EclipseAdoptium.Temurin.25.JRE (Windows), or Java 25 from adoptium.net"
 
@@ -54,8 +58,9 @@ def log(level: str, text: str) -> None:
 # Translation between signal-cli's JSON and the sidecar protocol. Pure, so tests import them.
 
 
-def inbound(envelope: dict[str, Any], self_uuid: str) -> dict[str, Any] | None:
-    """The `message` event for a signal-cli envelope (files not yet copied), or None to skip."""
+def inbound(envelope: dict[str, Any], self_uuid: str, names: Names) -> dict[str, Any] | None:
+    """The `message` event for a signal-cli envelope (files not yet copied), or None to skip.
+    `names` maps uuids to the names signal-cli gave their senders, for other people's mentions."""
     data = envelope.get("dataMessage") or {}
     sender = envelope.get("sourceUuid") or ""
     text = data.get("message") or ""
@@ -63,7 +68,7 @@ def inbound(envelope: dict[str, Any], self_uuid: str) -> dict[str, Any] | None:
         return None
     if not text and not data.get("attachments"):
         return None  # sync, receipt and typing envelopes, group updates, deletions
-    text, mentioned = resolve_mentions(text, data.get("mentions") or [], self_uuid)
+    text, mentioned = resolve_mentions(text, data.get("mentions") or [], self_uuid, names)
     replied = bool(self_uuid) and (data.get("quote") or {}).get("authorUuid") == self_uuid
     group = (data.get("groupInfo") or {}).get("groupId")
     return {
@@ -79,13 +84,16 @@ def inbound(envelope: dict[str, Any], self_uuid: str) -> dict[str, Any] | None:
     }
 
 
-def resolve_mentions(text: str, mentions: list[dict[str, Any]], self_uuid: str) -> tuple[str, bool]:
-    """Replace each mention's placeholder (U+FFFC) with "@name"; True if one is the bot."""
+def resolve_mentions(
+    text: str, mentions: list[dict[str, Any]], self_uuid: str, names: Names
+) -> tuple[str, bool]:
+    """Replace each mention's placeholder (U+FFFC) with "@name"; True if one is the bot.
+    Someone without a known name is "@someone": a number or uuid never goes into the text."""
     units, mentioned = text.encode("utf-16-le"), False  # Signal counts in UTF-16 code units
     for mention in sorted(mentions, key=lambda m: m.get("start", 0), reverse=True):
         is_bot = bool(self_uuid) and mention.get("uuid") == self_uuid
         mentioned = mentioned or is_bot
-        name = NAME if is_bot else (mention.get("number") or mention.get("uuid") or "someone")
+        name = NAME if is_bot else names.get(mention.get("uuid") or "", "someone")
         start = 2 * int(mention.get("start", 0))
         end = start + 2 * int(mention.get("length", 1))
         units = units[:start] + f"@{name}".encode("utf-16-le") + units[end:]
@@ -95,8 +103,7 @@ def resolve_mentions(text: str, mentions: list[dict[str, Any]], self_uuid: str) 
 def send_params(cmd: dict[str, Any]) -> dict[str, Any]:
     """signal-cli `send` params for an Attaché `send` (or `ask`) command."""
     chat = str(cmd["chat_id"])
-    direct = UUID.fullmatch(chat) or chat.startswith("+")  # anything else is a group id
-    params: dict[str, Any] = {"recipient": [chat]} if direct else {"groupId": chat}
+    params: dict[str, Any] = {"recipient": [chat]} if UUID.fullmatch(chat) else {"groupId": chat}
     params["message"] = cmd.get("text") or ""
     if cmd.get("files"):
         params["attachments"] = [str(path) for path in cmd["files"]]
@@ -107,13 +114,11 @@ def send_params(cmd: dict[str, Any]) -> dict[str, Any]:
 
 
 def ask_text(text: str, options: list[str]) -> str:
-    """The question plus how to answer it, since Signal has no buttons."""
+    """The question plus how to answer it, since Signal has no buttons. Approvals have two
+    options; any further ones can only be typed."""
     pairs = zip(THUMBS, options, strict=False)
-    hint = "React " + ", ".join(f"{thumb} for {option}" for thumb, option in pairs)
-    hint += ", or reply with the option"
-    if len(options) > 2:
-        hint += ": " + ", ".join(f"{n} {option}" for n, option in enumerate(options, 1))
-    return f"{text}\n\n{hint}."
+    reacts = ", ".join(f"{thumb} for {option}" for thumb, option in pairs)
+    return f"{text}\n\nReact {reacts}, or reply with the option."
 
 
 def answer_from_reaction(envelope: dict[str, Any], asks: Asks) -> dict[str, Any] | None:
@@ -136,8 +141,8 @@ def save_attachments(envelope: dict[str, Any], source: Path, target: Path) -> li
     saved = []
     for n, item in enumerate((envelope.get("dataMessage") or {}).get("attachments") or []):
         stored = source / Path(str(item.get("id") or "")).name  # signal-cli names files by id
-        if not stored.is_file():
-            log("warning", f"attachment {item.get('id')!r} is not in {source}; skipped")
+        if not stored.is_file() or stored.stat().st_size > MAX_FILE:
+            log("warning", f"attachment {item.get('id')!r} is missing or over 25 MB; skipped")
             continue
         name = Path(str(item.get("filename") or stored.name)).name  # chosen by the sender
         name = re.sub(r"[^\w.\- ]", "_", name)
@@ -151,50 +156,45 @@ def save_attachments(envelope: dict[str, Any], source: Path, target: Path) -> li
 # Settings, and signal-cli itself.
 
 
-def number_from(raw: str) -> str:
-    return re.sub(r"[\s()-]", "", raw)  # signal-cli wants +447700900123, not "+44 7700 900123"
-
-
 def data_dir() -> Path:
     """signal-cli's data folder, found the way signal-cli finds it."""
     xdg = os.environ.get("XDG_DATA_HOME")
     return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "signal-cli"
 
 
-def signal_cli() -> list[str] | None:
-    """The arguments that run signal-cli, or None when it cannot be found."""
-    configured = os.environ.get("ATTACHE_SIGNAL_CLI", "").strip()
-    if configured.startswith("["):
-        argv = [str(part) for part in json.loads(configured)]
-    else:
-        found = configured or shutil.which("signal-cli") or shutil.which("signal-cli.bat")
-        argv = [found] if found else []
-    return argv if argv and shutil.which(argv[0]) else None
+def signal_cli() -> str | None:
+    """The signal-cli program (signal-cli.bat on Windows), or None when it cannot be found."""
+    return shutil.which(os.environ.get("ATTACHE_SIGNAL_CLI") or "signal-cli")
 
 
-def java_env() -> dict[str, str]:
-    # Piped Java output can use a legacy Windows code page; signal-cli must write UTF-8.
-    options = os.environ.get("JAVA_TOOL_OPTIONS", "") + " -Dstdout.encoding=UTF-8"
-    return {**os.environ, "JAVA_TOOL_OPTIONS": options.strip()}
-
-
-def run(argv: list[str], wait: float = 120) -> subprocess.CompletedProcess[str]:
-    """Run a command to completion, capturing its output as text."""
+def run(cmd: list[str], wait: float = 120) -> subprocess.CompletedProcess[str]:
+    """Run a command to completion, capturing its output as text. It gets an empty stdin of its
+    own: on Windows a child sharing ours stalls while read_stdin waits on it."""
     return subprocess.run(
-        argv, capture_output=True, encoding="utf-8", errors="replace", env=java_env(), timeout=wait
+        cmd, input="", capture_output=True, encoding="utf-8", errors="replace", timeout=wait
     )
 
 
-def bot_aci(cli: list[str], number: str) -> str:
+def bot_aci(cli: str, number: str) -> str:
     """The bot's ACI from `signal-cli listAccounts`, or "" if the number is not listed.
 
     Raises one of FAILED when signal-cli fails, prints something other than JSON, or times
     out (as it does while another signal-cli holds the account)."""
-    done = run([*cli, "-o", "json", "listAccounts"])
+    done = run([cli, "-o", "json", "listAccounts"])
     if done.returncode:
         raise RuntimeError((done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1])
     accounts = json.loads(done.stdout or "[]")
     return next((a.get("aci") or "" for a in accounts if a.get("number") == number), "")
+
+
+def kill_tree(pid: int) -> None:
+    """Kill signal-cli and everything it started: on Windows, killing signal-cli.bat alone
+    leaves Java running, and Java keeps the account locked."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, input=b"")
+    else:  # signal-cli leads its own process group (start_new_session)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGKILL)
 
 
 @dataclass
@@ -203,10 +203,11 @@ class Bridge:
 
     proc: asyncio.subprocess.Process
     self_uuid: str
-    attachments: Path  # signal-cli's attachments folder
-    files: Path  # ATTACHE_FILES
+    attachments: Path = field(default_factory=lambda: data_dir() / "attachments")  # signal-cli's
+    files: Path = field(default_factory=lambda: Path(os.environ.get("ATTACHE_FILES") or "inbox"))
     pending: dict[int, tuple[str, Any]] = field(default_factory=dict)  # request id -> why
     asks: Asks = field(default_factory=dict)
+    names: Names = field(default_factory=dict)
     last_id: int = 0
 
     async def request(self, method: str, params: dict[str, Any], why: tuple[str, Any]) -> None:
@@ -223,8 +224,10 @@ class Bridge:
             envelope = (msg.get("params") or {}).get("envelope") or {}
             if answer := answer_from_reaction(envelope, self.asks):
                 emit(answer)
-            elif message := inbound(envelope, self.self_uuid):
-                message["files"] = save_attachments(envelope, self.attachments, self.files)
+            elif message := inbound(envelope, self.self_uuid, self.names):
+                self.names[message["sender_id"]] = message["sender_name"] or "someone"
+                if message["mentioned"] or not message["is_group"]:  # not every group upload
+                    message["files"] = save_attachments(envelope, self.attachments, self.files)
                 emit(message)
         elif msg.get("id") in self.pending:
             why, info = self.pending.pop(msg["id"])
@@ -257,7 +260,8 @@ async def read_signal(bridge: Bridge) -> None:
 
 
 async def serve(bridge: Bridge, commands: asyncio.Queue[Any]) -> None:
-    """Carry out Attaché's commands until `stop` or the end of stdin. `typing` is ignored."""
+    """Carry out Attaché's commands until `stop` or the end of stdin. Others, such as
+    `answered`, need nothing on Signal and are ignored."""
     while (cmd := await commands.get()) is not None:
         kind = cmd.get("type")
         try:
@@ -272,30 +276,55 @@ async def serve(bridge: Bridge, commands: asyncio.Queue[Any]) -> None:
             log("error", f"could not {kind}: {e!r}")
 
 
-async def sidecar(cli: list[str], number: str, self_uuid: str) -> int:
+async def idle(why: str, commands: asyncio.Queue[Any]) -> int:
+    """Say why on stderr, then wait for `stop`: Attaché restarts a sidecar that exits."""
+    print(f"Signal: {why}. Fix it (run doctor), then restart Attaché.", file=sys.stderr, flush=True)
+    while (cmd := await commands.get()) is not None and cmd.get("type") != "stop":
+        pass  # nothing can be sent until the setup is fixed
+    return 0
+
+
+def self_id(cli: str, number: str) -> str:
+    """The bot's ACI, for spotting mentions, or "" with a warning when signal-cli can't say
+    (signal-cli's own error shows when jsonRpc starts)."""
+    with contextlib.suppress(*FAILED):
+        if aci := bot_aci(cli, number):
+            return aci
+    log("warning", f"no Signal id for {number}, so group mentions go unnoticed; run doctor")
+    return ""
+
+
+async def sidecar() -> int:
     """Run signal-cli until Attaché says stop (0) or signal-cli exits (non-zero)."""
-    pipe = asyncio.subprocess.PIPE
-    proc = await asyncio.create_subprocess_exec(
-        *cli, "-a", number, "jsonRpc", stdin=pipe, stdout=pipe, env=java_env(), limit=2**24
-    )
-    files = Path(os.environ.get("ATTACHE_FILES") or "inbox")
-    bridge = Bridge(proc, self_uuid, data_dir() / "attachments", files)
     commands: asyncio.Queue[Any] = asyncio.Queue()
     loop = asyncio.get_running_loop()
     threading.Thread(target=read_stdin, args=(loop, commands), daemon=True).start()
+    number, cli = os.environ.get("ATTACHE_NUMBER", ""), signal_cli()
+    if not number or not cli:
+        why = "no number under [channels.signal]" if not number else "signal-cli not found"
+        return await idle(why, commands)
+    self_uuid = os.environ.get("ATTACHE_UUID") or await asyncio.to_thread(self_id, cli, number)
+    pipe = asyncio.subprocess.PIPE
+    proc = await asyncio.create_subprocess_exec(  # its own process group, for kill_tree
+        cli, "-a", number, "jsonRpc", stdin=pipe, stdout=pipe, limit=2**24, start_new_session=True
+    )
+    bridge = Bridge(proc, self_uuid)
     with contextlib.suppress(OSError):  # signal-cli may have quit already; read_signal sees it
         await bridge.request("version", {}, ("ready", None))  # the reply means it is up
-    signal = asyncio.create_task(read_signal(bridge))
+    reader = asyncio.create_task(read_signal(bridge))
     attache = asyncio.create_task(serve(bridge, commands))
-    await asyncio.wait({signal, attache}, return_when=asyncio.FIRST_COMPLETED)
+    await asyncio.wait({reader, attache}, return_when=asyncio.FIRST_COMPLETED)
     proc.stdin.close()  # signal-cli exits at the end of its input
     try:
         code = await asyncio.wait_for(proc.wait(), 4)
     except TimeoutError:
-        proc.kill()
+        kill_tree(proc.pid)
         code = await proc.wait()
     if attache.done():  # Attaché said stop, or closed stdin
         return 0
+    attache.cancel()
+    if code == 1 and ("ready", None) in bridge.pending.values():  # a setup error, before ready
+        return await idle("signal-cli could not start the account; its error is above", commands)
     log("error", f"signal-cli exited with code {code}; its own message is in the log")
     return code or 1
 
@@ -319,18 +348,18 @@ def check_java() -> bool:
     return report("ok", f"java: {line}")
 
 
-def check_version(cli: list[str] | None) -> bool:
+def check_version(cli: str | None) -> bool:
     if not cli:
         return report("FAIL", "signal-cli: not found on PATH (SKILL.md step 3)")
     try:
-        done = run([*cli, "--version"], 60)
+        done = run([cli, "--version"], 60)
     except FAILED as e:
-        return report("FAIL", f"signal-cli ({cli[0]}) did not run: {e}")
+        return report("FAIL", f"signal-cli ({cli}) did not run: {e}")
     found = re.search(r"\d+\.\d+\.\d+", done.stdout)
     if not found:
         error = (done.stderr or done.stdout).strip()[-300:]
-        return report("FAIL", f"signal-cli ({cli[0]}) did not run: {error}")
-    text = f"signal-cli {found[0]} ({cli[0]})"
+        return report("FAIL", f"signal-cli ({cli}) did not run: {error}")
+    text = f"signal-cli {found[0]} ({cli})"
     if not (released := release_date(found[0])):
         return report("ok", f"{text}; release date unknown (offline?)")
     age = (date.today() - released).days
@@ -339,7 +368,7 @@ def check_version(cli: list[str] | None) -> bool:
     return report("ok", f"{text}, released {released}")
 
 
-def check_account(cli: list[str], number: str) -> bool:
+def check_account(cli: str, number: str) -> bool:
     if not number:
         return report("FAIL", "account: no number given; run: doctor +447700900123")
     try:
@@ -357,7 +386,7 @@ def doctor(args: list[str]) -> int:
     cli = signal_cli()
     if not check_version(cli) or not cli:  # check_version also reports a missing signal-cli
         return 1
-    number = number_from(args[0] if args else os.environ.get("ATTACHE_NUMBER", ""))
+    number = args[0] if args else os.environ.get("ATTACHE_NUMBER", "")
     return 0 if check_account(cli, number) and java_ok else 1
 
 
@@ -383,23 +412,7 @@ def main(argv: list[str]) -> int:
         print(f"Setting up Signal for Attaché\n\n{setup_steps()}\n\nChecking:", flush=True)
     if command in ("setup", "doctor"):
         return doctor(argv[2:])
-    number = number_from(os.environ.get("ATTACHE_NUMBER", ""))
-    if not number:
-        log("error", 'no number: add number = "+447700900123" under [channels.signal]')
-        return 2
-    cli = signal_cli()
-    if not cli:
-        log("error", "signal-cli not found: add it to PATH, or set signal_cli in [channels.signal]")
-        return 1
-    self_uuid = os.environ.get("ATTACHE_UUID", "")
-    if not self_uuid:
-        try:
-            self_uuid = bot_aci(cli, number)
-        except FAILED as e:
-            log("warning", f"signal-cli listAccounts failed: {e}")
-    if not self_uuid:
-        log("warning", f"no Signal id for {number}, so group mentions go unnoticed; run doctor")
-    return asyncio.run(sidecar(cli, number, self_uuid))
+    return asyncio.run(sidecar())
 
 
 if __name__ == "__main__":

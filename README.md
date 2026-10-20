@@ -5,8 +5,9 @@ to-dos and reminders, makes interactive pages on demand, and learns how you work
 folder of skills it can edit itself. The core is just under 1,800 lines of Python code, the
 cap CI enforces; everything else is a skill.
 
-> **Status:** phase 1 of the [roadmap](docs/proposal.html): the local core, terminal and web
-> chat. Slack and Signal arrive in phase 2, email (Outlook, Gmail, Titan) in phase 3.
+> **Status:** phase 2 of the [roadmap](docs/proposal.html): the local core, terminal and web
+> chat, plus Slack and Signal (with group chats, approvals and rate limits). Email (Outlook,
+> Gmail, Titan) arrives in phase 3.
 
 **Documentation:** <https://openafterhours.github.io/attache/>.
 
@@ -59,9 +60,13 @@ key_env = "ANTHROPIC_API_KEY"
 - **Artifacts** are HTML pages the assistant writes into `~/.attache/artifacts/`. The local web
   server adds a small `attache` bridge so a page can read and write real data with live updates.
   Pages run sandboxed: they can't reach the internet or anything outside the data they declare.
-- **Roles.** You are the owner. Group members (from phase 2) only reach what is shared with
-  their chat, and never files, shell or email. Your own turns inside a group get member tools
-  too, because the group's messages are untrusted.
+- **Channels.** Slack and Signal are skills that ship a small program, a sidecar, which Attaché
+  starts with `uv run` and talks to over JSON lines. Any chat app can be added the same way:
+  see [docs/channels.md](docs/channels.md).
+- **Roles.** You are the owner. Group members only reach what is shared with their chat, and
+  never files, shell or email. Your own turns inside a group get member tools too, because the
+  group's messages are untrusted. When a member asks for something only you can do, Attaché
+  asks you first (buttons on Slack and the web page, a reaction or a typed reply elsewhere).
 - **Claude Code** runs as a backend with `claude -p` on your own login, for your own chats only.
   Attaché's tools reach it through an MCP endpoint on the local web server. It runs in a
   working folder next to your home (`~/.attache-claude`), so nothing written into `~/.attache`

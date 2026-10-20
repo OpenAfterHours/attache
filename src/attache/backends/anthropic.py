@@ -45,14 +45,10 @@ class AnthropicAdapter:
         # Send the blocks back as they came, so thinking blocks keep their signatures.
         blocks = [b.model_dump(exclude_none=True) for b in resp.content]
         state.append({"role": "assistant", "content": blocks})
-        return Step(
-            text="".join(b.text for b in resp.content if b.type == "text"),
-            calls=[ToolCall(b.id, b.name, b.input) for b in resp.content if b.type == "tool_use"],
-            usage={
-                "input_tokens": resp.usage.input_tokens,
-                "output_tokens": resp.usage.output_tokens,
-            },
-        )
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        calls = [ToolCall(b.id, b.name, b.input) for b in resp.content if b.type == "tool_use"]
+        usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+        return Step(text, calls, usage)
 
     def add_results(self, state: list[dict[str, Any]], results: list[tuple[ToolCall, str]]) -> None:
         blocks = [

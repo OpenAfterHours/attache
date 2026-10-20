@@ -4,27 +4,35 @@
 # ///
 """Take a picture (PNG) or a PDF of an Attaché page with the Edge or Chrome already installed.
 
-    render.py <url> <out.png|out.pdf> [--width 1280] [--height 900] [--wait 4]
+    render.py <snapshot> <out.png|out.pdf> [--width 1280] [--height 900] [--wait 4]
 
-<url> is a page on this machine, usually the `snapshot` link the artifact tool returns. The
-browser runs headless with a throwaway profile and cannot reach the internet: every host name
-but localhost and 127.0.0.1 fails to resolve, and anything else goes to a proxy that is not
-there. The file is written into the current folder (the chat's files folder when the script
-tool runs this), and its path, relative to the Attaché home when it is in one, is printed.
+<snapshot> is the link the artifact tool returns, and nothing else is accepted: its origin must
+be this Attaché's ($ATTACHE_WEB_URL, which `attache run` sets), its path /a/<page>, and it must
+carry the page's t= and r= tokens. So the script cannot take pictures of other local servers
+(an admin page, say) or local files, which members could then send into a group chat. Width
+and height are at most 4000 pixels, and the wait at most 30 seconds.
+
+The browser runs headless with a throwaway profile and cannot reach the internet: every host
+name but localhost and 127.0.0.1 fails to resolve, and anything else goes to a proxy that is
+not there. The file is written into the current folder (the chat's files folder when the
+script tool runs this), and its path, relative to the Attaché home when it is in one, is
+printed.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 NAMES = [
     "msedge",
@@ -50,7 +58,7 @@ PATHS = [
     "/usr/bin/chromium-browser",
     "/snap/bin/chromium",
 ]
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+PAGE = re.compile(r"/a/[a-z0-9-]+")  # an Attaché page, as web.py serves it
 OFFLINE = [
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
     "--proxy-server=127.0.0.1:9",  # nothing listens: IP literals fail too (loopback is exempt)
@@ -68,17 +76,43 @@ def find_browser() -> str | None:
     return next((path for path in candidates if Path(path).is_file()), None)
 
 
+def at_most(limit: float, kind: Callable[[str], float]) -> Callable[[str], float]:
+    """An argparse type: a number above 0 and at most `limit`."""
+
+    def number(text: str) -> float:
+        value = kind(text)
+        if not 0 < value <= limit:
+            raise argparse.ArgumentTypeError(f"{text} is not between 0 and {limit}")
+        return value
+
+    return number
+
+
+def snapshot_problem(url: str) -> str | None:
+    """Why `url` is not a snapshot link of this Attaché's pages, or None when it is one."""
+    web = os.environ.get("ATTACHE_WEB_URL")
+    if not web:
+        return "ATTACHE_WEB_URL is not set: run this through Attaché's script tool"
+    parts, home = urlsplit(url), urlsplit(web)
+    if (parts.scheme, parts.netloc) != (home.scheme, home.netloc):
+        return f"only pages of this Attaché ({web}) can be rendered"
+    tokens = parse_qs(parts.query)
+    both_tokens = all(len(tokens.get(key, [])) == 1 for key in ("t", "r"))
+    if not PAGE.fullmatch(parts.path) or not both_tokens:
+        return "give the `snapshot` link from the artifact tool: /a/<page>?t=...&r=..."
+    return None
+
+
 def parse(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render a local web page to a PNG or a PDF.")
-    parser.add_argument("url", help="a page on this machine, e.g. the artifact tool's snapshot")
+    parser = argparse.ArgumentParser(description="Render an Attaché page to a PNG or a PDF.")
+    parser.add_argument("url", help="the artifact tool's `snapshot` link")
     parser.add_argument("out", help="the file to write in the current folder: .png or .pdf")
-    parser.add_argument("--width", type=int, default=1280, help="viewport width in pixels")
-    parser.add_argument("--height", type=int, default=900, help="viewport height in pixels")
-    parser.add_argument("--wait", type=float, default=4, help="seconds to let the page load")
+    parser.add_argument("--width", type=at_most(4000, int), default=1280, help="pixels, ≤ 4000")
+    parser.add_argument("--height", type=at_most(4000, int), default=900, help="pixels, ≤ 4000")
+    parser.add_argument("--wait", type=at_most(30, float), default=4, help="seconds, at most 30")
     args = parser.parse_args(argv)
-    parts = urlsplit(args.url)
-    if parts.scheme not in ("http", "https") or parts.hostname not in LOCAL_HOSTS:
-        parser.error("url must be an http(s) address on this machine (localhost or 127.0.0.1)")
+    if problem := snapshot_problem(args.url):
+        parser.error(problem)
     if Path(args.out).suffix.lower() not in (".png", ".pdf"):
         parser.error("out must end in .png or .pdf")
     args.out = Path.cwd() / Path(args.out).name  # always into the current folder

@@ -31,24 +31,8 @@ class Scheduler:
         self.fire = fire  # the Router sets this to Router.fire when it is created
         self._wake = asyncio.Event()
 
-    def add(
-        self,
-        chat_key: str,
-        text: str,
-        *,
-        at: float | None = None,
-        cron: str | None = None,
-        kind: str = "message",
-        by: str = "",
-    ) -> dict[str, Any]:
-        """Exactly one of `at` (epoch seconds) or `cron` (5 fields, local time). Wakes the loop."""
-        if (at is None) == (cron is None):
-            raise ValueError("give exactly one of `at` or `cron`")
-        due = next_cron(cron, time.time()) if cron is not None else at
-        self.wake()  # safe before the insert: the loop cannot run until this returns
-        return self.store.task_add(chat_key, text, due, kind=kind, cron=cron, by=by)
-
     def wake(self) -> None:
+        """Call after store.task_add, so a task due sooner than the loop's next check fires."""
         self._wake.set()
 
     async def run(self) -> None:
@@ -65,7 +49,7 @@ class Scheduler:
                     if task["cron"]:  # the next time after now, not after `due`: no backfill
                         self.store.task_reschedule(task["id"], next_cron(task["cron"], time.time()))
                     else:
-                        self.store.task_finish(task["id"])
+                        self.store.task_end(task["id"])
                     try:
                         await self.fire(task)
                     except Exception:
