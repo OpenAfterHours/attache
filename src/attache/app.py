@@ -87,6 +87,7 @@ async def run(home: Path, *, terminal: bool) -> None:
         if services.channels.tasks:  # the terminal quit, maybe at the end of piped input:
             # let its turns reply first, for as long as the slowest endpoint may take
             timeouts = [float(e.options.get("timeout", 900)) for e in cfg.endpoints.values()]
+            print("Waiting for the last replies; Ctrl+C stops.", flush=True)
             await asyncio.wait(services.channels.tasks, timeout=max(timeouts, default=900))
     finally:  # in this order:
         await services.channels.stop()  # the turns still running, then every channel, which

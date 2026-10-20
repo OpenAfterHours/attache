@@ -82,8 +82,8 @@ Save the bot's number as a contact on your phone and add it to a group like anyo
 shows as invited rather than joined, stop Attaché and accept with
 `signal-cli -a +447700900123 updateGroup -g GROUP_ID`; `listGroups` shows the ids. In a group,
 mention the bot (type @ and pick it) or reply to one of its messages to get an answer.
-Attachments reach Attaché only from direct messages and messages that mention the bot, and only
-up to 25 MB each.
+Attachments reach Attaché only from direct messages and messages that mention the bot: at most
+10 files and 50 MB per message, and no file over 25 MB. The rest are skipped and logged.
 
 ## Approvals
 

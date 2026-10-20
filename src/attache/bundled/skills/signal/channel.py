@@ -36,7 +36,9 @@ NAME = "Attaché"
 THUMBS = ("👍", "👎")  # react with these for the first and second option of an ask
 E164 = re.compile(r"\+[1-9]\d{6,14}")  # a phone number: the only kind passed to signal-cli.bat
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-MAX_FILE = 25 * 1024 * 1024  # attachments bigger than this are not copied
+MAX_FILE = 25 * 1024 * 1024  # bytes in one copied attachment (the same limits as Slack's)
+MAX_TOTAL = 50 * 1024 * 1024  # bytes copied for one message
+MAX_FILES = 10  # attachments copied for one message
 RELEASES = "https://api.github.com/repos/AsamK/signal-cli/releases"
 Asks = dict[int, tuple[str, list[str]]]  # sent timestamp -> (ask_id, options)
 Names = dict[str, str]  # sender uuid -> the name signal-cli gave them (sourceName)
@@ -47,8 +49,7 @@ JAVA = "winget install EclipseAdoptium.Temurin.25.JRE (Windows), or Java 25 from
 
 def emit(event: dict[str, Any]) -> None:
     """Write one protocol line to Attaché."""
-    sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
 def log(level: str, text: str) -> None:
@@ -139,12 +140,14 @@ def answer_from_reaction(envelope: dict[str, Any], asks: Asks) -> dict[str, Any]
 
 def save_attachments(envelope: dict[str, Any], source: Path, target: Path) -> list[str]:
     """Copy a message's attachments from signal-cli's folder into `target`; absolute paths."""
-    saved = []
+    saved, room = [], MAX_TOTAL
     for n, item in enumerate((envelope.get("dataMessage") or {}).get("attachments") or []):
         stored = source / Path(str(item.get("id") or "")).name  # signal-cli names files by id
-        if not stored.is_file() or stored.stat().st_size > MAX_FILE:
-            log("warning", f"attachment {item.get('id')!r} is missing or over 25 MB; skipped")
+        size = stored.stat().st_size if stored.is_file() else None
+        if size is None or size > min(MAX_FILE, room) or n >= MAX_FILES:
+            log("warning", f"skipped {stored.name}: missing, over 25 MB, or past 10 files/50 MB")
             continue
+        room -= size
         name = Path(str(item.get("filename") or stored.name)).name  # chosen by the sender
         name = re.sub(r"[^\w.\- ]", "_", name)
         dest = target / f"{envelope.get('timestamp')}-{n}-{name}"
@@ -158,8 +161,7 @@ def save_attachments(envelope: dict[str, Any], source: Path, target: Path) -> li
 
 def data_dir() -> Path:
     """signal-cli's data folder, found the way signal-cli finds it."""
-    xdg = os.environ.get("XDG_DATA_HOME")
-    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "signal-cli"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "signal-cli"
 
 
 def signal_cli() -> str | None:

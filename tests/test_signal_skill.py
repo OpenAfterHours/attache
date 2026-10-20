@@ -182,7 +182,29 @@ def test_attachments_are_copied_under_safe_names_up_to_25_mb(
     assert path.is_absolute() and path.parent == inbox.resolve() and path.read_bytes() == b"%PDF"
     assert path.name == "1729000000001-0-ev_il_.pdf"
     logs = [json.loads(line)["text"] for line in capsys.readouterr().out.splitlines()]
-    assert len(logs) == 2 and all("missing or over 25 MB" in text for text in logs)
+    assert logs == [
+        "skipped missing.jpg: missing, over 25 MB, or past 10 files/50 MB",
+        "skipped big.mp4: missing, over 25 MB, or past 10 files/50 MB",
+    ]
+
+
+def test_a_message_brings_at_most_10_attachments_and_50_mb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (channel.MAX_FILES, channel.MAX_TOTAL) == (10, 50 * 1024 * 1024)  # as Slack's
+    store, inbox = tmp_path / "attachments", tmp_path / "inbox"
+    store.mkdir()
+    inbox.mkdir()
+    for name, size in (("a", 4), ("b", 4), ("c", 2), ("d", 1)):
+        (store / name).write_bytes(b"x" * size)
+    monkeypatch.setattr(channel, "MAX_TOTAL", 6)
+    monkeypatch.setattr(channel, "MAX_FILES", 3)
+    items = [{"id": name} for name in "abcd"]
+    saved = channel.save_attachments(dm("photos", attachments=items), store, inbox)
+    # b would pass 6 bytes in all; c still fits; d is the fourth file
+    assert [Path(path).name for path in saved] == ["1729000000001-0-a", "1729000000001-2-c"]
+    logs = [json.loads(line)["text"] for line in capsys.readouterr().out.splitlines()]
+    assert [text.split(":")[0] for text in logs] == ["skipped b", "skipped d"]
 
 
 def receive(bridge: Any, envelope: dict[str, Any]) -> None:

@@ -63,6 +63,7 @@ PAGE = re.compile(r"/a/[a-z0-9-]+")  # an Attaché page, as web.py serves it
 OFFLINE = [
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
     "--proxy-server=127.0.0.1:9",  # nothing listens there, so whatever is sent to it fails
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",  # WebRTC UDP skips the proxy
 ]
 
 

@@ -50,6 +50,7 @@ Security
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import re
@@ -349,10 +350,12 @@ async def serve(app: Starlette, sock: socket.socket) -> None:
     """Run uvicorn on a socket that app.run has bound, until cancelled. Cancelled, it stops
     taking requests and gives the ones running (an /api/chat turn, say) up to 2 seconds to
     finish before they are cancelled, so they are done before app.run closes the store.
-    (uvicorn sets should_exit and shuts down by itself when a signal stops it; a cancel skips
-    that, so the finally does the shutdown, unless it has happened or startup never ended.)"""
+    uvicorn is kept from trapping Ctrl+C itself: asyncio.run then cancels app.run, whose
+    shutdown ends the page's event streams before this one runs, so it is quick and quiet. (A
+    cancel skips uvicorn's own shutdown, so the finally does it, unless startup never ended.)"""
     config = uvicorn.Config(app, log_level="warning", lifespan="off", timeout_graceful_shutdown=2)
     server = uvicorn.Server(config)
+    server.capture_signals = contextlib.nullcontext  # Ctrl+C goes to asyncio.run, as above
     try:
         await server.serve(sockets=[sock])
     finally:
