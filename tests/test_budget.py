@@ -12,7 +12,7 @@ import tokenize
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "attache"
-CORE_LIMIT = 1600  # target about 1,500
+CORE_LIMIT = 1900  # raised from 1,600 for phase 2's sidecars, approvals, limits (issue #20)
 SKILL_SCRIPT_LIMIT = 300
 
 

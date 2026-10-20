@@ -12,9 +12,10 @@ from attache import skills
 from attache.types import Endpoint, Person
 
 BUNDLED = Path(__file__).parent / "bundled"
-PERSON_KEYS = ("name", "role", "ids")  # any other key is a channel id, like slack = "U0123"
+PERSON_KEYS = ("name", "role", "ids", "approvals")  # others are channel ids, like slack = "U01"
 # The [routing], [web] and [assistant] keys, which are all Config fields.
 SECTIONS = {"routing": ["own_chats", "group_chats"], "web": ["host", "port"], "assistant": ["name"]}
+LIMITS = {"per_sender_hour": 20, "per_chat_hour": 60, "member_daily": 200}  # turns, non-owners
 
 
 @dataclass
@@ -39,6 +40,9 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8765
     name: str = "Attaché"  # how the assistant names itself; also its default trigger word
+    channels: dict[str, dict[str, Any]] = field(default_factory=dict)  # [channels.<name>]
+    approvals: str = "local:me"  # the chat where approval requests reach the owner
+    limits: dict[str, int] = field(default_factory=lambda: dict(LIMITS))
 
     def person(self, channel: str, sender_id: str) -> Person | None:
         """Who sent this? Senders on the `local` channel (terminal and web) are the owner."""
@@ -48,9 +52,6 @@ class Config:
             if person.ids.get(channel) == sender_id:  # load() drops empty ids
                 return person
         return None
-
-    def chat(self, chat_key: str) -> ChatConfig | None:
-        return self.chats.get(chat_key)
 
     def endpoint_for(self, chat_key: str, is_group: bool) -> Endpoint:
         """The chat's own endpoint if set, else [routing] group_chats or own_chats."""
@@ -96,7 +97,26 @@ def load(home: Path | None = None) -> Config:
         api, model = table.pop("api", ""), table.pop("model", "")
         base_url, key_env = table.pop("base_url", None), table.pop("key_env", None)
         endpoints[name] = Endpoint(name, api, model, base_url, key_env, options=table)
-    settings: dict[str, Any] = {}
+    channels = raw.get("channels", {})
+    for name, table in channels.items():
+        if name == "local":
+            raise ValueError(f"{path}: [channels.local] is taken by the terminal and web page")
+        if not isinstance(table.setdefault("enabled", False), bool):
+            raise ValueError(f"{path}: [channels.{name}] enabled must be true or false")
+        for key, value in table.items():
+            if key != "enabled" and not isinstance(value, str):  # the sidecar gets them as env
+                raise ValueError(f"{path}: [channels.{name}] {key} must be a string")
+    limits = {**LIMITS, **_check(path, "limits", raw.get("limits", {}), list(LIMITS))}
+    for key, value in limits.items():
+        if type(value) is not int or value < 1:  # type(): true and false are not numbers here
+            raise ValueError(f"{path}: [limits] {key} must be a whole number of at least 1")
+    approvals = str(own.get("approvals", "local:me"))
+    channel, _, chat_id = approvals.partition(":")
+    enabled = channels.get(channel, {}).get("enabled", False)
+    direct = approvals == "local:me" or (enabled and chat_id != "")
+    if not direct or approvals in chats:  # questions go to your own direct chat, never a group
+        raise ValueError(f'{path}: [owner] approvals must be "local:me" or "<channel>:<your DM>"')
+    settings: dict[str, Any] = {"channels": channels, "limits": limits, "approvals": approvals}
     for section, keys in SECTIONS.items():
         settings.update(_check(path, section, raw.get(section, {}), keys))
     try:

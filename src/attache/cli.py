@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import shutil
 import sys
 from contextlib import suppress
 from pathlib import Path
 
-from attache import __version__, config, skills
+from attache import __version__, channels, config, skills
 
 NEXT = """Next:
   1. Tell Attaché about yourself in {home}/memory/USER.md.
@@ -31,7 +32,8 @@ NEXT = """Next:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the `attache` command and return a process exit code."""
-    with suppress(AttributeError, ValueError, OSError):  # Windows consoles and pipes: UTF-8
+    # Windows consoles and pipes: UTF-8. Apart, so a stdout that can't change keeps stdin's.
+    with suppress(AttributeError, ValueError, OSError):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     with suppress(AttributeError, ValueError, OSError):
         if not sys.stdin.isatty():  # a console already reads Unicode; a pipe or file may not
@@ -70,9 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parser.error("use: attache skills list | log [NAME] | undo NAME")
         return 0
-    if args.command == "doctor":
-        return _doctor(home)
-    return _run(home, terminal=args.command != "run")
+    return _doctor(home) if args.command == "doctor" else _run(home, terminal=args.command != "run")
 
 
 def _doctor(home: Path) -> int:
@@ -97,6 +97,12 @@ def _doctor(home: Path) -> int:
         checks.append((mark, f"endpoint {name}" + ("" if ok else f" needs {need}")))
     checks += [("✓" if shutil.which(tool) else "✗", f"{tool} installed") for tool in ("git", "uv")]
     if cfg:
+        found = {s.name: s for s in skills.discover(home)}
+        for name in [n for n, settings in cfg.channels.items() if settings.get("enabled")]:
+            # the test sidecars() makes (uv is checked above), so the two always agree
+            ok = name in found and channels.channel_script(found[name]) is not None
+            mark = "✓" if ok else "✗"
+            checks.append((mark, f"channel {name}: skills/{name} names its sidecar script"))
         from attache import app  # the web stack, for the same bind check as `attache run`
 
         try:
@@ -119,6 +125,10 @@ def _run(home: Path, *, terminal: bool) -> int:
     except (ValueError, TypeError) as e:  # a bad attache.toml: one line, not a traceback
         print(f"attache.toml: {e}", file=sys.stderr)
         return 1
+    # Attaché's own news (a sidecar ready, its log lines, restarts), but only warnings from the
+    # libraries, such as httpx's line for every request.
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("attache").setLevel(logging.INFO)
     from attache import app  # the web stack; `attache skills` and `init` start faster without
 
     with suppress(KeyboardInterrupt):

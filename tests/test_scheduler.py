@@ -67,28 +67,6 @@ def test_next_cron_always_moves_forward() -> None:
         t = later
 
 
-def test_add(store: Store) -> None:
-    sched = Scheduler(store)
-    with pytest.raises(ValueError):
-        sched.add(CHAT, "neither")
-    with pytest.raises(ValueError):
-        sched.add(CHAT, "both", at=1.0, cron="* * * * *")
-    assert store.task_list() == []
-    task = sched.add(CHAT, "tea", at=123.0, by="owner")
-    assert (task["due"], task["by"], task["kind"], task["cron"]) == (
-        123.0,
-        "owner",
-        "message",
-        None,
-    )
-    assert sched._wake.is_set()
-    now = time.time()
-    daily = sched.add(CHAT, "triage", cron="0 7 * * *", kind="turn")
-    due = datetime.fromtimestamp(daily["due"])
-    assert now < daily["due"] < now + 2 * 86400 and (due.hour, due.minute) == (7, 0)
-    assert daily["kind"] == "turn" and daily["cron"] == "0 7 * * *"
-
-
 def test_run_fires_due_tasks(store: Store, caplog: pytest.LogCaptureFixture) -> None:
     fired: list[str] = []
 
@@ -147,7 +125,8 @@ def test_wake_fires_a_new_task_promptly(store: Store) -> None:
         sched = Scheduler(store, fire)
         runner = asyncio.create_task(sched.run())
         await asyncio.sleep(0.05)  # the loop now waits up to 60 s
-        sched.add(CHAT, "now", at=time.time())
+        store.task_add(CHAT, "now", time.time())
+        sched.wake()
         await asyncio.wait_for(fired.wait(), 2)
         await stop(runner)
 
@@ -174,7 +153,7 @@ def test_store_errors_are_retried_and_never_repeat_a_reminder(
     monkeypatch.setattr(scheduler, "RETRY_SECONDS", 0.01)
     # Fire-then-finish would deliver twice here: the reminder goes out, finishing it fails, and
     # the retry finds it still pending. Finishing first delivers it once.
-    for name in ("task_due", "task_finish", "task_next"):
+    for name in ("task_due", "task_end", "task_next"):
         monkeypatch.setattr(store, name, locked_once(getattr(store, name)))
     store.task_add(CHAT, "once", time.time() - 1)
     fired: list[str] = []

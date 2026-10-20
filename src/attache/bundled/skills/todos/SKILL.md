@@ -53,10 +53,19 @@ first, then send every field back with your change.
 
 ## In group chats
 
-When a member asks, or the owner asks in a group, you have the `db` tool and nothing else
-here. Use it for every change, and show lists as plain text in the reply: one line per item,
-open items first, with the due date. Pages, boards and links for groups arrive with sharing in
-phase 3, so don't offer them. Everything below "Showing lists" is for the owner's own chat.
+In a group chat, lists are the docs shared with that chat through `_shared` (see "Sharing a
+list with a group"): the `db` tool there reads and changes only those. Use it for every
+change, and answer with the list as plain text: one line per item, open items first, with the
+due date.
+
+- When a picture would help (a board, a long packing list), publish a page with the `artifact`
+  tool, then follow the render skill: render its `snapshot` to a PNG and `send` the image.
+  Never post page links into a group; they open only in the owner's Attaché window.
+- Members can't change how a list works, delete items or share a list with another chat. When
+  a member asks for something like that, call `request {summary}` to ask the owner, and say
+  you have asked.
+
+The rest of this file is for the owner's own chat.
 
 ## Showing lists
 

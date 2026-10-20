@@ -84,9 +84,7 @@ def install_bundled(home: Path) -> list[Path]:
 def git(home: Path, *args: str) -> str | None:
     """Run git in <home>; stdout, or None when git is missing or the command fails."""
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=home, capture_output=True, text=True, encoding="utf-8"
-        )
+        result = subprocess.run(["git", *args], cwd=home, capture_output=True, encoding="utf-8")
     except OSError:  # no git binary, or no such folder
         return None
     if result.returncode != 0:

@@ -63,7 +63,9 @@ Versions follow PEP 440. The single source of truth is `__version__` in
       test);
     - builds the sdist and wheel, and checks their metadata with `twine check --strict`;
     - uploads them to PyPI;
-    - creates the GitHub release, with generated notes and both files attached.
+    - creates the GitHub release, with generated notes and both files attached. If a release
+      for the tag already exists (made by hand, say), it keeps that release's notes and
+      attaches the files to it instead.
 
 A tag that doesn't match `__version__` fails in the first job, before anything is built.
 Versions ending in `a`, `b`, `rc` or `dev` (for example `0.1.0rc1`) are marked as

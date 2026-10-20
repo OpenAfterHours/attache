@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from attache import app, backends, config, router, tools
+from attache import agent, app, backends, config, router, tools
 from attache.channels import ChannelManager
 from attache.config import ChatConfig
 from attache.router import APOLOGY, FENCE, Router
 from attache.scheduler import Scheduler
 from attache.store import Store
-from attache.types import Endpoint, Inbound, Outbound, Reply, Turn
+from attache.types import Endpoint, Inbound, Outbound, Reply, ToolCall, Turn
 
 TOML = """
 [assistant]
@@ -78,7 +78,7 @@ engage = "always"
 endpoint = "cli"
 """
 OWNER_CHAT = Inbound("local", "me", "owner", "Alex", "")
-MEMBER_TOOLS = ["script", "send", "db", "artifact", "schedule"]
+MEMBER_TOOLS = ["script", "send", "db", "artifact", "request", "schedule"]
 SKILL = "---\nname: {name}\ndescription: The {name} skill.\n{meta}---\nHow to use {name}.\n"
 
 
@@ -129,7 +129,7 @@ class World:
         return self.backend
 
     def me(self, text: str) -> Reply | None:
-        msg = Inbound("local", "me", "owner", "Alex", text)
+        msg = Inbound("local", "me", "owner", "Alex", text, origin="terminal")
         return asyncio.run(self.router.handle(msg))
 
     def say(self, text: str, sender: str = "USAM", chat: str = "CFAM", **kw: Any) -> Reply | None:
@@ -149,7 +149,8 @@ def world(home: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
 def test_owner_local_chat(world: World) -> None:
     reply = world.me("hi\nthere")
     assert reply is not None and reply.text == "reply 1"
-    assert world.local.sent == [Outbound("local:me", "reply 1")]
+    echo = Outbound("local:me", "hi\nthere", author="Alex", origin="terminal")
+    assert world.local.sent == [echo, Outbound("local:me", "reply 1")]  # the web page sees both
     turn = world.backend.turns[0]
     assert turn.endpoint.name == "own" and turn.ctx.role == "owner" and turn.history == []
     assert turn.text.startswith("[Alex, owner, local, ") and turn.text.endswith("]\nhi\nthere")
@@ -287,7 +288,7 @@ def test_guests(world: World) -> None:
 
 
 def test_trigger_word(world: World) -> None:
-    family = world.services.config.chat("slack:CFAM")
+    family = world.services.config.chats["slack:CFAM"]
 
     def said(text: str) -> bool:
         return world.router.triggered(Inbound("slack", "CFAM", "USAM", "Sam", text, True), family)
@@ -318,7 +319,7 @@ def test_system_prompts(world: World) -> None:
     (home / "memory" / "USER.md").write_text("Alex's private notes", encoding="utf-8")
     family_notes = home / "memory" / "chats" / f"{tools.chat_slug('slack:CFAM')}.md"
     family_notes.write_text("Family notes.", encoding="utf-8")
-    family = world.services.config.chat("slack:CFAM")
+    family = world.services.config.chats["slack:CFAM"]
     owner, sam = world.services.config.owner, world.services.config.people["sam"]
     mine = world.router.system_prompt(owner, OWNER_CHAT, None)
     assert "private notes" in mine and "**shared**" in mine and "**private**" in mine
@@ -336,7 +337,7 @@ def test_errors(world: World) -> None:
     world.backend.error = RuntimeError("boom")
     reply = world.me("go")
     assert reply is not None and "RuntimeError: boom" in reply.text
-    assert world.local.sent[0].text == reply.text
+    assert world.local.sent[-1].text == reply.text
     reply = world.say("@Attaché go", name="Sam")
     assert reply is not None and reply.text == APOLOGY == world.slack.sent[0].text
     assert world.store.session_get("local:me", "own") == {}  # not saved on failure
@@ -434,3 +435,155 @@ def test_a_scheduled_turn_still_running_is_skipped(world: World) -> None:
 
     asyncio.run(main())
     assert len(world.backend.turns) == 2
+
+
+def test_an_answer_runs_no_turn(world: World) -> None:
+    hub = world.services.channels
+
+    async def main() -> None:
+        mine = await hub.ask("local:me", "owner", "Send it?", ["Yes", "No"])  # shown: waiting
+        sams = await hub.ask("slack:CFAM", "sam", "Which?", ["Red", "Blue"])
+        local = Inbound("local", "me", "owner", "Alex", "yes", origin="web")
+        assert await world.router.handle(local) is None
+        unmentioned = Inbound("slack", "CFAM", "USAM", "Sam", "2", True)  # needs no mention
+        assert await world.router.handle(unmentioned) is None
+        assert await mine == "Yes" and await sams == "Blue"
+
+    asyncio.run(main())
+    assert world.backend.turns == []
+    assert [m["text"] for m in world.store.history("local:me")] == ["yes"]  # still stored
+    assert not [m for m in world.local.sent if m.author]  # an answer is not echoed to the terminal
+
+
+def test_a_listed_chat_is_always_a_group(world: World) -> None:
+    # A sidecar that calls a chat from [chats] a direct one gets no direct-chat trust for it.
+    assert world.say("packing tonight", name="Sam", is_group=False) is None  # unmentioned
+    world.say("@Attaché make a list", sender="UALEX", name="Alex", is_group=False)
+    turn = world.backend.turns[0]
+    assert turn.ctx.is_group and turn.endpoint.name == "group"
+    assert [t.name for t in turn.tools] == MEMBER_TOOLS  # the owner in a group: member rights
+    assert turn.text.startswith(FENCE) and '[Sam (member)]: "packing tonight"' in turn.text
+
+
+def test_the_busy_notice_comes_after_the_replies_queued_before_it(world: World) -> None:
+    world.services.config.limits = {"per_sender_hour": 1, "per_chat_hour": 9, "member_daily": 9}
+    world.backend.delay = 0.1
+
+    async def main() -> None:
+        one = Inbound("slack", "CFAM", "USAM", "Sam", "@Attaché one", True)
+        two = Inbound("slack", "CFAM", "USAM", "Sam", "@Attaché two", True)
+        await asyncio.gather(world.router.handle(one), world.router.handle(two))
+
+    asyncio.run(main())
+    assert len(world.backend.turns) == 1  # two was counted, and refused, as it arrived
+    first, second = (m.text for m in world.slack.sent)
+    assert first == "reply 1" and second.startswith("I've had a lot of requests here")
+
+
+def requesting(world: World, summary: str) -> None:
+    """The world's first turn calls the real request tool for `summary`; later turns answer."""
+
+    async def run(turn: Turn) -> Reply:
+        world.backend.turns.append(turn)
+        if len(world.backend.turns) == 1:
+            call = ToolCall("1", "request", {"summary": summary})
+            return Reply(await agent.run_tool(call, turn))
+        return Reply("The ferry is at nine.")
+
+    world.backend.run = run
+
+
+async def until(condition: Any) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+
+
+def said(text: str) -> Inbound:
+    return Inbound("slack", "CFAM", "USAM", "Sam", text, True)
+
+
+def test_a_request_waits_without_holding_up_the_chat(world: World) -> None:
+    requesting(world, "a chores list for the family")
+    question = 'Sam in Family asks: "a chores list for the family"'
+
+    async def main() -> None:
+        asking = world.router.handle(said("@Attaché can we have a chores list?"))
+        reply = await asyncio.wait_for(asking, 5)  # the turn does not wait for the owner
+        assert reply is not None and reply.text.startswith("Asked Alex;")
+        await asyncio.sleep(0.01)  # the question goes to the owner
+        assert world.local.sent[-1].text.startswith(question)
+        reply = await world.router.handle(said("@Attaché when is the ferry?"))
+        assert reply is not None and reply.text == "The ferry is at nine."  # not held up
+        approve = Inbound("local", "me", "owner", "Alex", "Approve", origin="web")
+        assert await world.router.handle(approve) is None
+        await until(lambda: len(world.slack.sent) == 3)
+
+    asyncio.run(main())
+    assert [m.text for m in world.slack.sent][1:] == [
+        "The ferry is at nine.",
+        "Alex approved the request from Sam.",
+    ]
+    assert world.store.history("slack:CFAM")[-1]["text"] == "Alex approved the request from Sam."
+    assert [m["text"] for m in world.store.history("local:me")] == [question, "Approve"]
+    (task,) = world.store.task_list()
+    assert (task["chat_key"], task["kind"], task["by"]) == ("local:me", "turn", "owner")
+
+
+def test_a_request_nobody_can_see_is_reported_and_not_kept(world: World) -> None:
+    owner_chat = world.services.config.approvals = "signal:+447700900123"  # no signal channel
+    requesting(world, "a chores list for the family")
+
+    async def main() -> None:
+        reply = await world.router.handle(said("@Attaché can we have a chores list?"))
+        assert reply is not None and reply.text == "Couldn't reach Alex just now; try again later."
+
+    asyncio.run(main())
+    # The turn's own reply says so, and nothing later contradicts it.
+    assert [m.text for m in world.slack.sent] == ["Couldn't reach Alex just now; try again later."]
+    assert world.store.history("slack:CFAM")[-1]["role"] == "assistant"  # kept in Sam's chat
+    assert world.store.history(owner_chat) == []  # so a typed "Approve" there has no question
+    assert world.store.task_list() == []
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_rate_limits(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(router.time, "time", clock)
+    world.services.config.limits = {"per_sender_hour": 2, "per_chat_hour": 3, "member_daily": 5}
+    for _ in range(4):
+        world.say("@Attaché hi", name="Sam")
+    busy = [m.text for m in world.slack.sent if m.text.startswith("I've had a lot")]
+    assert len(world.backend.turns) == 2 and len(busy) == 1  # one notice, then silence
+    assert busy[0] == "I've had a lot of requests here; I'll be back in about 60 minutes."
+    for _ in range(3):
+        world.say("@Attaché hi", sender="UALEX", name="Alex")  # the owner is never limited
+    assert len(world.backend.turns) == 5
+    clock.now += 3601  # Sam's hour is over
+    world.say("@Attaché again", name="Sam")
+    assert len(world.backend.turns) == 6
+
+
+def test_chat_and_daily_limits(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    monkeypatch.setattr(router.time, "time", clock)
+    world.services.config.limits = {"per_sender_hour": 10, "per_chat_hour": 2, "member_daily": 3}
+    for guest in ("U1", "U2", "U3"):  # three guests in a public chat share its hourly limit
+        world.say("hi", sender=guest, chat="CPUB", name="Pat")
+    assert len(world.backend.turns) == 2
+    last = world.slack.sent[-1]
+    assert last.chat_key == "slack:CPUB" and "about 60 minutes" in last.text
+    world.say("hi", sender="USAM", chat="DSAM", name="Sam")  # a third turn today, elsewhere
+    clock.now += 3601
+    world.say("hi", sender="U4", chat="CPUB", name="Pat")  # the chat has room; the day has not
+    assert len(world.backend.turns) == 3
+    last = world.slack.sent[-1]
+    assert last.chat_key == "slack:CPUB" and "about 1380 minutes" in last.text

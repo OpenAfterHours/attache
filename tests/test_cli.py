@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import builtins
 import io
+import logging
 import shutil
 import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from attache import app, cli
+from attache import app, channels, cli, config
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 LOCAL = """
@@ -91,6 +93,38 @@ def test_doctor(
     assert cli.main(["doctor"]) == 1 and "✗ git installed" in capsys.readouterr().out
 
 
+def test_doctor_checks_enabled_channels(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    enabled = ["slack", "signal", "irc", "xmpp", "nostr"]
+    blocks = [f"[channels.{name}]\nenabled = true\n" for name in enabled]
+    blocks.append("[channels.matrix]\nenabled = false\n")
+    (home / "attache.toml").write_text(
+        LOCAL.format(port=free_port(), group="local") + "\n" + "".join(blocks), "utf-8"
+    )
+    skill = "---\nname: {0}\ndescription: The {0} channel.\n{1}---\n"
+    script = "metadata:\n  attache-channel: {}\n"
+    for name, meta in [
+        ("slack", script.format("channel.py")),  # a plain name, and the file is there: fine
+        ("signal", ""),  # names no script
+        ("irc", script.format("../channel.py")),  # not a plain file name
+        ("xmpp", script.format("missing.py")),  # no such file
+    ]:
+        (home / "skills" / name).mkdir(parents=True)
+        (home / "skills" / name / "SKILL.md").write_text(skill.format(name, meta), "utf-8")
+        (home / "skills" / name / "channel.py").write_text("print('hi')\n", "utf-8")
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line[2:].startswith("channel ")]
+    marks = {line.split()[2].rstrip(":"): line[0] for line in lines}
+    # nostr has no skill at all; matrix is not enabled, so it is not checked
+    assert marks == {"slack": "✓", "signal": "✗", "irc": "✗", "xmpp": "✗", "nostr": "✗"}
+    assert "✓ channel slack: skills/slack names its sidecar script" in out
+    started = [side.name for side in channels.sidecars(config.load(home), lambda *a: False)]
+    assert started == ["slack"]  # doctor and sidecars() agree
+
+
 def test_doctor_warnings_and_notes(
     home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -152,9 +186,35 @@ def test_run_without_a_home_or_with_a_bad_config(
     assert err.count("\n") == 2 and "attache.toml:" in err and "Traceback" not in err
 
 
-def test_stdin_from_a_pipe_is_read_as_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("stdout", [None, io.StringIO()])  # StringIO has no reconfigure()
+def test_stdin_from_a_pipe_is_read_as_utf8(
+    stdout: io.StringIO | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     raw = io.BytesIO("café, Ágnes\n".encode())
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(raw, encoding="cp1252"))
+    if stdout:
+        monkeypatch.setattr(sys, "stdout", stdout)  # a stdout that can't change keeps stdin's
     with pytest.raises(SystemExit):
         cli.main(["--version"])
     assert sys.stdin.encoding == "utf-8" and sys.stdin.readline() == "café, Ágnes\n"
+
+
+def test_run_logs_attache_news_but_only_library_warnings(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured: list[dict[str, Any]] = []
+
+    async def fake_run(where: Path, *, terminal: bool) -> None: ...
+
+    monkeypatch.setattr(app, "run", fake_run)
+    monkeypatch.setattr(cli.logging, "basicConfig", lambda **kw: configured.append(kw))
+    write_config(home, free_port())
+    assert cli.main(["run"]) == 0
+    assert configured == [{"level": logging.WARNING}]  # the root logger, so httpx and the rest
+    assert logging.getLogger("attache.channels").getEffectiveLevel() == logging.INFO
+
+
+@pytest.fixture(autouse=True)
+def default_logging() -> Iterator[None]:
+    yield
+    logging.getLogger("attache").setLevel(logging.NOTSET)  # as it was before _run set INFO

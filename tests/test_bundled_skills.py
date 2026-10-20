@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -17,7 +20,7 @@ EXTERNAL = re.compile(r"""\b(?:src|href|action)\s*=\s*["']?\s*(?:https?:)?//""",
 
 def test_the_core_skills_are_bundled() -> None:
     names = {p.name for p in FOLDERS}
-    assert {"todos", "reminders", "skill-writer", "artifact-kit"} <= names
+    assert {"todos", "reminders", "skill-writer", "artifact-kit", "render"} <= names
 
 
 @pytest.mark.parametrize("folder", FOLDERS, ids=lambda p: p.name)
@@ -33,12 +36,16 @@ def test_skill_frontmatter(folder: Path) -> None:
     assert len(text.splitlines()) < 120
 
 
-@pytest.mark.parametrize("name", ["todos", "reminders"])
+@pytest.mark.parametrize("name", ["todos", "reminders", "render"])
 def test_member_skills(name: str) -> None:
     meta, body = skills.parse((skills.BUNDLED / name / "SKILL.md").read_text(encoding="utf-8"))
     assert meta["metadata"]["attache-roles"] == "member"
-    if name == "todos":  # members get the body too, but not pages, links or file tools
+    if name == "todos":  # members get the body too: lists as text, pictures, and `request`
         assert "## In group chats" in body and "plain text" in body
+        assert "`_shared`" in body and "render" in body and "`request" in body
+    if name == "render":  # the snapshot flow, end to end
+        for step in ("`snapshot`", '"render.py"', "send {", "Never send the `snapshot` link"):
+            assert step in body, step
 
 
 @pytest.mark.parametrize("folder", FOLDERS, ids=lambda p: p.name)
@@ -98,3 +105,149 @@ def test_tokens_are_dark_by_default_with_a_light_scheme() -> None:
     )
     assert defaults["--display"] == "var(--font-display)"  # Space Grotesk headings
     assert len(overrides) >= 8 and set(overrides) <= set(defaults)
+
+
+# the render skill's script, without a real browser
+
+
+def load_render() -> ModuleType:
+    path = skills.BUNDLED / "render" / "scripts" / "render.py"
+    spec = importlib.util.spec_from_file_location("attache_render", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+WEB_URL = "http://127.0.0.1:8765"
+SNAPSHOT = f"{WEB_URL}/a/home?t=abc&r=def"
+
+
+@pytest.fixture(autouse=True)
+def attache_web_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What `attache run` sets for skill scripts."""
+    monkeypatch.setenv("ATTACHE_WEB_URL", WEB_URL)
+
+
+def test_render_script_has_a_pep_723_header_and_no_dependencies() -> None:
+    text = (skills.BUNDLED / "render" / "scripts" / "render.py").read_text(encoding="utf-8")
+    header = re.search(r"# /// script\n(.*?)# ///", text, re.S)
+    assert header and "dependencies = []" in header[1]
+
+
+def test_render_arguments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    render = load_render()
+    monkeypatch.chdir(tmp_path)
+    args = render.parse([SNAPSHOT, "../../elsewhere/page.png", "--width", "390", "--height", "844"])
+    assert args.out == tmp_path / "page.png"  # always into the current folder
+    assert (args.width, args.height, args.wait) == (390, 844, 4)
+    for bad in (
+        ["file:///C:/Users/you/.ssh/id_rsa", "x.png"],  # only web pages
+        ["https://example.com/a/home?t=abc&r=def", "x.png"],  # only this Attaché
+        ["http://127.0.0.1:8080/a/home?t=abc&r=def", "x.png"],  # another local server
+        ["http://localhost:8765/a/home?t=abc&r=def", "x.png"],  # the same origin, exactly
+        ["http://me@127.0.0.1:8765/a/home?t=abc&r=def", "x.png"],
+        [f"{WEB_URL}/admin?t=abc&r=def", "x.png"],  # only /a/<page>
+        [f"{WEB_URL}/a/home/../../api/messages?t=abc&r=def", "x.png"],
+        [f"{WEB_URL}/a/home?t=abc", "x.png"],  # a snapshot carries both tokens
+        [f"{WEB_URL}/a/home?r=def", "x.png"],
+        [f"{WEB_URL}/a/home?t=abc&t=xyz&r=def", "x.png"],
+        [SNAPSHOT, "page.html"],  # only a picture or a PDF
+        [SNAPSHOT, "x.png", "--width", "4001"],  # capped sizes and wait
+        [SNAPSHOT, "x.png", "--height", "0"],
+        [SNAPSHOT, "x.png", "--wait", "31"],
+        [SNAPSHOT, "x.png", "--wait", "-1"],
+    ):
+        with pytest.raises(SystemExit):
+            render.parse(bad)
+    big = render.parse([SNAPSHOT, "x.png", "--width", "4000", "--height", "4000", "--wait", "30"])
+    assert (big.width, big.height, big.wait) == (4000, 4000, 30)
+
+
+def test_render_refuses_without_attache_web_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    render = load_render()
+    monkeypatch.delenv("ATTACHE_WEB_URL")
+    with pytest.raises(SystemExit):
+        render.parse([SNAPSHOT, "x.png"])
+    assert "ATTACHE_WEB_URL" in capsys.readouterr().err
+
+
+def test_render_finds_edge_or_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
+    render = load_render()
+    on_path = {"google-chrome": "/usr/bin/google-chrome", "msedge": "C:/Edge/msedge.exe"}
+    monkeypatch.setattr(render.shutil, "which", on_path.get)
+    assert render.find_browser() == "C:/Edge/msedge.exe"  # Edge first
+    monkeypatch.setattr(render.shutil, "which", lambda name: None)
+    monkeypatch.setattr(render, "PATHS", [])
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert render.find_browser() is None
+
+
+def test_render_builds_an_offline_headless_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    render = load_render()
+    monkeypatch.chdir(tmp_path)
+    png = render.command("edge", render.parse([SNAPSHOT, "page.png"]), "C:/tmp/profile")
+    assert png[0] == "edge" and png[-1] == SNAPSHOT
+    for flag in (
+        "--headless=new",
+        "--user-data-dir=C:/tmp/profile",
+        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
+        # everything through a dead proxy but Attaché's own origin; "<-loopback>" drops the
+        # browser's loopback exemption (checked with real Edge: a page that navigated itself
+        # to another local port got ERR_PROXY_CONNECTION_FAILED, and that server saw nothing)
+        "--proxy-server=127.0.0.1:9",
+        "--proxy-bypass-list=<-loopback>;127.0.0.1:8765",
+        "--timeout=4000",
+        f"--screenshot={tmp_path / 'page.png'}",
+        "--window-size=1280,900",
+    ):
+        assert flag in png, flag
+    assert not any(arg.startswith("--virtual-time-budget") for arg in png)  # hangs on SSE pages
+    pdf = render.command("edge", render.parse([SNAPSHOT, "page.pdf", "--wait", "8"]), "p")
+    assert f"--print-to-pdf={tmp_path / 'page.pdf'}" in pdf and "--timeout=8000" in pdf
+
+
+def test_render_checks_the_page_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    render = load_render()
+    seen = []
+
+    class Opener:
+        def open(self, request: Any, timeout: float) -> Any:
+            seen.append(request.get_header("Sec-fetch-dest"))
+            raise render.urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(render.urllib.request, "build_opener", lambda *handlers: Opener())
+    problem = render.check(SNAPSHOT)
+    assert problem and problem.startswith("the page answered 403") and seen == ["document"]
+
+
+def test_render_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+    render = load_render()
+    chat = tmp_path / "home" / "files" / "slack-c0123-7a947790"
+    chat.mkdir(parents=True)
+    monkeypatch.chdir(chat)
+    monkeypatch.setattr(render, "find_browser", lambda: None)
+    assert render.main([SNAPSHOT, "page.png"]) == 2
+    assert "no Edge or Chrome" in capsys.readouterr().err
+
+    def browser(argv: list[str], **options: Any) -> SimpleNamespace:  # writes what it is asked
+        shot = next(arg for arg in argv if arg.startswith("--screenshot="))
+        Path(shot.split("=", 1)[1]).write_bytes(b"\x89PNG")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(render, "find_browser", lambda: "edge")
+    monkeypatch.setattr(render.subprocess, "run", browser)
+    monkeypatch.setattr(render, "check", lambda url: "the page answered 403")
+    assert render.main([SNAPSHOT, "page.png"]) == 1  # no picture of an error page
+    assert "403" in capsys.readouterr().err and not (chat / "page.png").exists()
+    monkeypatch.setattr(render, "check", lambda url: None)
+    assert render.main([SNAPSHOT, "page.png"]) == 0
+    assert capsys.readouterr().out.strip() == "files/slack-c0123-7a947790/page.png"  # for `send`
+    monkeypatch.setattr(
+        render.subprocess, "run", lambda argv, **o: SimpleNamespace(stdout="", stderr="crashed")
+    )
+    assert render.main([SNAPSHOT, "again.png"]) == 1
+    assert "crashed" in capsys.readouterr().err

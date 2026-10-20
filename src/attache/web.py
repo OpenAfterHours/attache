@@ -4,20 +4,28 @@ Routes
   GET  /                       static/ui.html. It holds no token: the terminal prints
                                http://127.0.0.1:<port>/#t=<services.ui_token> and the page keeps it.
   GET  /bridge.js              static/bridge.js
-  GET  /fonts/{name}.woff2     static/fonts/ ([a-z0-9-] names only), cached for a year, with
+  GET  /fonts/<file>.woff2     each font shipped in static/fonts/ (one route per file, so any
+                               other name is 404), cached for a year, with
                                Access-Control-Allow-Origin: * (a sandboxed page's font loads
                                are CORS requests from the origin "null")
   GET  /a/{name}?t=<token>     artifacts/<name>.html (name [a-z0-9-]+) with the bridge script
-                               injected and CSP; 403 without the page's token, or when
-                               Sec-Fetch-Dest says it is not loaded in a frame
+                               injected and CSP; 403 without the page's token. Only frames load
+                               it (Sec-Fetch-Dest: iframe), except that snapshot_url's extra
+                               &r=<render token> lets the render skill's browser open it top-level
   GET  /api/artifacts          [{name, src}], src = "/a/<name>?t=<token>", sorted   UI token
-  GET  /api/messages           the last 50 of local:me, as store.history gives them    UI token
-  POST /api/chat {text}        an owner Inbound in local:me; the reply arrives over SSE UI token
+  GET  /api/messages           {messages: the last 50 of local:me, as store.history gives
+                               them; asks: [{ask_id, text, options}] still waiting for the
+                               owner there, so a reload keeps their buttons}          UI token
+  POST /api/chat {text}        an owner Inbound in local:me (origin "web"); the reply arrives
+                               over SSE                                                UI token
+  POST /api/answer {ask_id, choice}  the owner's answer to an ask: {"ok": accepted}   UI token
   GET|POST /api/db/{c}         list | create   } the UI token or a page's token, under the db
   GET|PUT|DELETE /api/db/{c}/{id}             } tool's rules (store.db_access)
-  GET  /api/events             SSE with ?token= (the UI) or ?artifact=&token= (a page):
-                               "message" {chat_key, text, files} for the UI only, "doc"
-                               {collection, id, doc} within the scope, a ping every 15 s
+  GET  /api/events             SSE with ?token= (the UI) or ?artifact=&token= (a page). For the
+                               UI only: "message" (an Outbound's fields; with author set, a
+                               message the owner typed in the terminal) and "ask" {ask_id,
+                               text, options}. "doc" {collection, id, doc} within the scope.
+                               A ping every 15 s.
   POST /mcp/{token}            MCP over Streamable HTTP (plain JSON responses) for the tools of
                                the turn services.gateway[token]; Claude Code connects here
 
@@ -42,6 +50,7 @@ Security
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import re
@@ -52,7 +61,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import uvicorn
 from starlette.applications import Starlette
-from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -68,14 +76,12 @@ from attache.types import Inbound, OnMessage, Outbound, ToolCall
 
 if TYPE_CHECKING:
     from attache.app import Services
-    from attache.router import Router
 
 UI = "_ui"  # the scope slug of the Attaché page itself
 PING_SECONDS = 15
 STATIC = Path(__file__).parent / "static"
 SLUG = re.compile(r"[a-z0-9-]+")
 META = re.compile(r"<meta\b(?=[^>]*name=.attache-collections.)[^>]*content=[\"']([^\"']*)", re.I)
-TAG = '<script src="/bridge.js" data-token="{}" data-artifact="{}"></script>'
 PAGE_HEADERS = {
     "Content-Security-Policy": "sandbox allow-scripts allow-forms; default-src 'self' "
     "'unsafe-inline' data:; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
@@ -94,6 +100,13 @@ def artifact_token(key: bytes, name: str) -> str:
 
 def page_token(services: Services, name: str) -> str:
     return artifact_token(services.ui_token.encode(), name)
+
+
+def snapshot_url(services: Services, name: str) -> str:
+    """A link that opens the page `name` top-level, for the render skill to take a picture of.
+    Its r= token is valid for that page only, and rotates with the run like every page token."""
+    tokens = f"t={page_token(services, name)}&r={page_token(services, f'render:{name}')}"
+    return f"{services.web_url}/a/{name}?{tokens}"
 
 
 class Scope(NamedTuple):
@@ -156,11 +169,12 @@ class WebChannel:
                 loop.call_soon_threadsafe(queue.put_nowait, (kind, event))
 
     async def stream(self, scope: Scope) -> AsyncIterator[str]:
-        """Server-sent events for one page, with a ": ping" comment when idle."""
+        """Server-sent events for one page, with a ": ping" comment when idle. It ends once
+        stop() has run, so open pages never hold up the server's shutdown."""
         self.subs.append(sub := (scope, asyncio.get_running_loop(), asyncio.Queue()))
         try:
             yield ": connected\n\n"
-            while True:
+            while not self.stopped.is_set():
                 try:
                     kind, event = await asyncio.wait_for(sub[2].get(), PING_SECONDS)
                     yield f"event: {kind}\ndata: {json.dumps(event)}\n\n"
@@ -170,13 +184,25 @@ class WebChannel:
             self.subs.remove(sub)
 
     async def start(self, on_message: OnMessage) -> None:
-        await self.stopped.wait()  # messages typed in the page reach the router via /api/chat
+        """Keep `on_message` for /api/chat, the way messages typed in the page come in."""
+        self.on_message = on_message
+        await self.stopped.wait()
 
     async def send(self, msg: Outbound) -> None:
-        self.publish("message", chat_key=msg.chat_key, text=msg.text, files=msg.files)
+        """A reply, or with `author` set a message the owner typed elsewhere (the terminal).
+        What the page sent itself (origin "web") it already shows."""
+        if msg.origin != "web":
+            self.publish("message", **vars(msg))
+
+    async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
+        """Show a question on the open Attaché pages: False when there is none to see it."""
+        self.publish("ask", ask_id=ask_id, text=text, options=options)
+        return any(scope.slug == UI for scope, _, _ in self.subs)
 
     async def stop(self) -> None:
         self.stopped.set()
+        for _, _, queue in self.subs:  # wake each stream, which sends "bye" and ends
+            queue.put_nowait(("bye", {}))
 
 
 class _BridgeCORS(CORSMiddleware):
@@ -192,7 +218,7 @@ async def _error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": str(exc.args[0] if exc.args else exc)}, code)
 
 
-def create_app(services: Services, router: Router, channel: WebChannel) -> Starlette:
+def create_app(services: Services, channel: WebChannel) -> Starlette:
     """The app. Registers a store listener, so doc changes reach open pages."""
     store, home = services.store, services.config.home
     store.on_change.append(lambda c, i, d: channel.publish("doc", collection=c, id=i, doc=d))
@@ -209,20 +235,18 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         page = home / "artifacts" / f"{name}.html"
         if not SLUG.fullmatch(name) or not page.is_file():
             raise KeyError(f"no artifact {name!r}")
-        token, given = page_token(services, name), request.query_params.get("t", "")
-        framed = request.headers.get("sec-fetch-dest", "iframe") == "iframe"
-        if not framed or not hmac.compare_digest(given.encode(), token.encode()):
+        token, render = page_token(services, name), page_token(services, f"render:{name}").encode()
+        query, dest = request.query_params, request.headers.get("sec-fetch-dest", "iframe")
+        framed = dest == "iframe"  # inside the Attaché window
+        rendering = dest == "document" and hmac.compare_digest(query.get("r", "").encode(), render)
+        if not (framed or rendering):
             raise PermissionError("pages open inside the Attaché window only")
+        if not hmac.compare_digest(query.get("t", "").encode(), token.encode()):
+            raise PermissionError("bad or missing page token")
         text = page.read_text(encoding="utf-8")
-        tag = TAG.format(token, name)
+        tag = f'<script src="/bridge.js" data-token="{token}" data-artifact="{name}"></script>'
         html, found = re.subn(r"</head\s*>", lambda end: tag + end[0], text, count=1, flags=re.I)
         return Response(html if found else tag + text, headers=PAGE_HEADERS, media_type="text/html")
-
-    async def font(request: Request) -> Response:
-        name = request.path_params["name"]  # [a-z0-9-] only, so it cannot leave static/fonts/
-        if not re.fullmatch(r"[a-z0-9-]+\.woff2", name) or not (STATIC / "fonts" / name).is_file():
-            raise KeyError(f"no font {name!r}")
-        return FileResponse(STATIC / "fonts" / name, headers=FONT_HEADERS)
 
     async def artifacts(request: Request) -> Response:
         ui_only(request)
@@ -232,14 +256,28 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         return JSONResponse(listing)
 
     async def messages(request: Request) -> Response:
+        """The chat (reminders come from "Reminder") and the questions still waiting for the
+        owner's answer there, so a reloaded page can show their buttons again."""
         ui_only(request)
-        return JSONResponse(store.history("local:me", 50))  # reminders come from "Reminder"
+        asks = [
+            {"ask_id": ask_id, "text": ask.text, "options": ask.options}
+            for ask_id, ask in services.channels.pending.items()
+            if ask.chat_key == "local:me" and ask.person_id == "owner" and not ask.future.done()
+        ]
+        return JSONResponse({"messages": store.history("local:me", 50), "asks": asks})
 
     async def chat(request: Request) -> Response:
         ui_only(request)
         text = str((await body(request)).get("text", ""))  # the page never sends empty text
-        msg = Inbound("local", "me", "owner", services.config.owner.name, text)
-        return JSONResponse({"ok": True}, background=BackgroundTask(router.handle, msg))
+        msg = Inbound("local", "me", "owner", services.config.owner.name, text, origin="web")
+        await channel.on_message(msg)  # returns at once: the turn runs as a ChannelManager task
+        return JSONResponse({"ok": True})
+
+    async def answer(request: Request) -> Response:
+        ui_only(request)
+        data = await body(request)
+        ok = services.channels.answer(str(data.get("ask_id")), "owner", str(data.get("choice")))
+        return JSONResponse({"ok": ok})
 
     async def db(request: Request) -> Response:
         scope = scope_of(services, request)
@@ -277,21 +315,22 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
         elif method == "tools/call":
             args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             out = await run_tool(ToolCall(str(message["id"]), str(params.get("name")), args), turn)
-            content = [{"type": "text", "text": out}]
-            result = {"content": content, "isError": out.startswith("error:")}
+            result = {"content": [{"type": "text", "text": out}], "isError": out[:6] == "error:"}
         else:
             error = {"code": -32601, "message": f"no method {method}"}
             return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "error": error})
         return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "result": result})
 
+    fonts = sorted(f"fonts/{p.name}" for p in (STATIC / "fonts").glob("*.woff2"))  # others: 404
     routes = [
         Route("/", static("ui.html", headers={"Content-Security-Policy": UI_CSP})),
         Route("/bridge.js", static("bridge.js", media_type="text/javascript")),
-        Route("/fonts/{name}", font),
+        *(Route(f"/{font}", static(font, headers=FONT_HEADERS)) for font in fonts),
         Route("/a/{name}", artifact),
         Route("/api/artifacts", artifacts),
         Route("/api/messages", messages),
         Route("/api/chat", chat, methods=["POST"]),
+        Route("/api/answer", answer, methods=["POST"]),
         Route("/api/db/{collection}", db, methods=["GET", "POST"]),
         Route("/api/db/{collection}/{id}", db, methods=["GET", "PUT", "DELETE"]),
         Route("/api/events", events),
@@ -308,7 +347,17 @@ def create_app(services: Services, router: Router, channel: WebChannel) -> Starl
 
 
 async def serve(app: Starlette, sock: socket.socket) -> None:
-    """Run uvicorn on a socket that app.run has bound, until cancelled. The graceful shutdown
-    is short, so open event streams do not hold up Ctrl+C."""
-    config = uvicorn.Config(app, log_level="warning", lifespan="off", timeout_graceful_shutdown=1)
-    await uvicorn.Server(config).serve(sockets=[sock])
+    """Run uvicorn on a socket that app.run has bound, until cancelled. Cancelled, it stops
+    taking requests and gives the ones running (an /api/chat turn, say) up to 2 seconds to
+    finish before they are cancelled, so they are done before app.run closes the store.
+    uvicorn is kept from trapping Ctrl+C itself: asyncio.run then cancels app.run, whose
+    shutdown ends the page's event streams before this one runs, so it is quick and quiet. (A
+    cancel skips uvicorn's own shutdown, so the finally does it, unless startup never ended.)"""
+    config = uvicorn.Config(app, log_level="warning", lifespan="off", timeout_graceful_shutdown=2)
+    server = uvicorn.Server(config)
+    server.capture_signals = contextlib.nullcontext  # Ctrl+C goes to asyncio.run, as above
+    try:
+        await server.serve(sockets=[sock])
+    finally:
+        if server.started and not server.should_exit:
+            await server.shutdown(sockets=[sock])

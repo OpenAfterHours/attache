@@ -14,24 +14,25 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import unicodedata
 from asyncio.subprocess import DEVNULL, PIPE, STDOUT
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from attache import skills, store
+from attache import channels, scheduler, skills, store, web
 from attache.types import Outbound, Tool, TurnContext
 
-OWNER, BOTH = frozenset({"owner"}), frozenset({"owner", "member"})
+OWNER, MEMBER, BOTH = frozenset({"owner"}), frozenset({"member"}), frozenset({"owner", "member"})
+# Unicode categories quote() escapes: controls, format characters (bidi controls, zero-width
+# characters, the BOM), lone surrogates, and the line and paragraph separators.
+HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 OUTPUT_CAP = 20_000  # characters of command output kept: the end, where errors are
 SHELL = "cmd.exe" if os.name == "nt" else "sh"
 PRIVATE = {".secret", ".git", ".claude", "claude.md"}  # and attache.db*; any case, any depth
 NUM, ARRAY = {"type": "number"}, {"type": "array", "items": {"type": "string"}}
 TYPES = {"timeout": NUM, "in_minutes": NUM, "all": {"type": "boolean"}, "data": {"type": "object"}}
-TYPES |= {"args": ARRAY, "files": ARRAY}  # every other argument is a string
+TYPES |= {"args": ARRAY, "files": ARRAY, "options": ARRAY}  # every other argument is a string
 TOOLS: list[Tool] = []
 
 
@@ -43,8 +44,18 @@ def slug(text: str) -> str:
 
 def chat_slug(chat_key: str) -> str:
     """A folder name for a chat: readable, and distinct even when two keys slug alike."""
-    digest = hashlib.sha256(chat_key.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(chat_key.encode()).hexdigest()[:8]
     return f"{slug(chat_key)[:40].strip('-')}-{digest}"
+
+
+def quote(text: str) -> str:
+    """Someone else's text as one JSON string on one line: inside its quotes, nothing can pose
+    as a header or a label, or close a <<< >>> fence. Every invisible or line-breaking
+    character (HIDDEN) is written as its JSON escape, so the text shows exactly what the model
+    reads; json.dumps alone would keep these raw."""
+    # json.dumps(c) is the ASCII escape, as a surrogate pair beyond U+FFFF
+    escapes = {ord(c): json.dumps(c)[1:-1] for c in text if unicodedata.category(c) in HIDDEN}
+    return json.dumps(text, ensure_ascii=False).translate(escapes)
 
 
 def chat_files(ctx: TurnContext) -> Path:
@@ -102,9 +113,9 @@ def _tool(fields: str, roles: frozenset[str] = OWNER, description: str = "") -> 
 
 
 async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
-    """Run a command (a string runs in the shell); JSON {exit_code, output}. On timeout the
-    whole process tree is killed, then reaped so its pipes close."""
-    # start_new_session: on POSIX its own process group, killed as one; ignored on Windows
+    """Run a command (a string runs in the shell); JSON {exit_code, output}. On timeout
+    channels.kill_tree kills the whole process tree and reaps it, so its pipes close."""
+    # start_new_session: on POSIX its own process group, which kill_tree kills as one
     kw = {"cwd": cwd, "stdin": DEVNULL, "stdout": PIPE, "stderr": STDOUT, "start_new_session": True}
     if isinstance(cmd, str):
         proc = await asyncio.create_subprocess_shell(cmd, **kw)
@@ -113,11 +124,7 @@ async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
-        else:
-            os.killpg(proc.pid, signal.SIGKILL)
-        await proc.wait()
+        await channels.kill_tree(proc)
         raise TimeoutError(f"stopped after {timeout:g} seconds") from None
     text = out.decode("utf-8", "replace")[-OUTPUT_CAP:]
     return json.dumps({"exit_code": proc.returncode, "output": text}, ensure_ascii=False)
@@ -171,8 +178,7 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
         raise FileNotFoundError(f"skill {name!r} has no script {file!r}")
     if access(ctx.role, ctx.is_group) != "owner" and not for_members(skill):
         raise PermissionError(f"skill {name!r} is not available in this chat")
-    uv = shutil.which("uv")
-    if uv is None:
+    if not (uv := shutil.which("uv")):
         raise RuntimeError("uv is not installed: see https://docs.astral.sh/uv/")
     argv = [uv, "run", str(path), *map(str, args.get("args") or [])]
     return await _exec(argv, chat_files(ctx), 600)
@@ -183,15 +189,15 @@ async def send(args: dict[str, Any], ctx: TurnContext) -> str:
     """Send a message to this chat now, with optional files (paths relative to home; in shared
     chats, only files from this chat's files folder)."""
     owner = access(ctx.role, ctx.is_group) == "owner"
-    folder = (ctx.services.home if owner else chat_files(ctx)).resolve()
+    folder = ctx.services.home if owner else chat_files(ctx)
     files = [resolve(ctx, f) for f in args.get("files") or []]
     for path in files:
-        if not path.is_relative_to(folder) or not path.is_file():
+        if not path.is_relative_to(folder.resolve()) or not path.is_file():
             raise PermissionError(f"{path.name}: not a file in {folder}")
     text = str(args.get("text") or "")
     await ctx.services.channels.send(Outbound(ctx.chat_key, text, [str(p) for p in files]))
-    if text:  # so it is in the chat's history
-        ctx.services.store.add_message(ctx.chat_key, "assistant", text)
+    shown = text or f"(sent {', '.join(p.name for p in files)})"  # kept in the chat's history
+    ctx.services.store.add_message(ctx.chat_key, "assistant", shown)
     return "sent"
 
 
@@ -200,8 +206,8 @@ async def db(args: dict[str, Any], ctx: TurnContext) -> str:
     """Documents in named collections, e.g. lists and trackers. op: list (all docs) | get (by
     id) | put (replace the doc with `data`; no id creates one) | delete (by id)."""
     chat = None if access(ctx.role, ctx.is_group) == "owner" else ctx.chat_key
-    request = (args["op"], args["collection"], args.get("id"), args.get("data"))
-    found = store.db_access(ctx.services.store, *request, by=ctx.sender.id, chat=chat)
+    call = (args["op"], args["collection"], args.get("id"), args.get("data"))
+    found = store.db_access(ctx.services.store, *call, by=ctx.sender.id, chat=chat)
     return json.dumps(found, default=str, ensure_ascii=False)
 
 
@@ -220,7 +226,65 @@ async def artifact(args: dict[str, Any], ctx: TurnContext) -> str:
     await write_file({"path": f"artifacts/{name}.html", "content": args["html"]}, ctx)
     if shared:
         services.store.doc_put("_artifacts", name, {"chat_key": ctx.chat_key}, by=ctx.sender.id)
-    return json.dumps({"url": f"{services.web_url}/#page={name}"})  # opens in Attaché's window
+    url = f"{services.web_url}/#page={name}"  # opens in Attaché's window
+    return json.dumps({"url": url, "snapshot": web.snapshot_url(services, name)})  # for render
+
+
+async def _ask(ctx: TurnContext, chat_key: str, question: str, options: list[str]) -> Any:
+    """Put a question to the owner in `chat_key`; once a surface has shown it, keep it in that
+    chat's history and return a task giving the choice (None: no answer in time). A question
+    nobody saw is never kept, so a later "Approve" typed there is just a message: LookupError,
+    straight away."""
+    answer = await ctx.services.channels.ask(chat_key, "owner", question, options)
+    ctx.services.store.add_message(chat_key, "assistant", question)
+    return answer
+
+
+@_tool("question options?")
+async def ask(args: dict[str, Any], ctx: TurnContext) -> str:
+    """Ask the owner a question in this chat and wait for the answer; options default to Yes
+    and No. Returns the chosen option, "no answer", or "couldn't reach the owner just now"."""
+    options = list(args.get("options") or ["Yes", "No"])
+    try:
+        answer = await _ask(ctx, ctx.chat_key, args["question"], options)
+    except LookupError:  # no surface showed the question
+        return "couldn't reach the owner just now"
+    return await answer or "no answer"
+
+
+@_tool("summary", MEMBER)
+async def request(args: dict[str, Any], ctx: TurnContext) -> str:
+    """Ask the owner to approve something only they can do, such as changing a skill or how a
+    shared list works. The summary says what and why, in under 300 characters. Returns once
+    the owner has been asked, or couldn't be; their answer comes to this chat later."""
+    services, summary = ctx.services, str(args["summary"])
+    if len(summary) > 300:
+        raise ValueError("keep the summary under 300 characters")
+    chat, owner = services.config.chats.get(ctx.chat_key), services.config.owner.name
+    who, where = f"{ctx.sender.name} ({ctx.role})", (chat and chat.name) or ctx.chat_key
+    # Quoted as one JSON string, the way the router fences group messages: the owner approves
+    # exactly the text the owner turn will get, and it reaches that turn only as data.
+    question = f"{ctx.sender.name} in {where} asks: {quote(summary)}"
+    owner_chat = services.config.approvals  # where approvals are asked, and the work happens
+
+    try:
+        answer = await _ask(ctx, owner_chat, question, ["Approve", "Decline"])
+    except LookupError:  # no surface showed the question, so it was not kept either
+        return f"Couldn't reach {owner} just now; try again later."
+
+    async def wait_and_act() -> str:  # sends the member's chat a notice, whatever happens
+        choice = await answer
+        if choice == "Approve":
+            fenced = f"<<<\n[{who}]: {quote(summary)}\n>>>"
+            text = f"You approved this request from {who} in {where}. Do it, within your rules:"
+            due = datetime.now().timestamp()
+            services.store.task_add(owner_chat, f"{text}\n{fenced}", due, kind="turn", by="owner")
+            services.scheduler.wake()
+        verb = {"Approve": "approved", "Decline": "declined"}.get(choice, "did not answer")
+        return await send({"text": f"{owner} {verb} the request from {ctx.sender.name}."}, ctx)
+
+    services.channels.spawn(wait_and_act())  # the turn, and the chat, need not wait for it
+    return f"Asked {owner}; the answer will come to this chat."
 
 
 @_tool("op text? at? in_minutes? cron? kind? id? all?", BOTH)
@@ -237,7 +301,7 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
         mine = [t["id"] for t in saved.task_list(chat) if owner or t["by"] == ctx.sender.id]
         if int(args["id"]) not in mine:
             raise KeyError(f"no pending task {args['id']} that you can cancel")
-        saved.task_cancel(int(args["id"]))
+        saved.task_end(int(args["id"]), "cancelled")
         return f"cancelled task {args['id']}"
     if op != "add":
         raise ValueError(f"unknown op {op!r}: use add, list or cancel")
@@ -248,8 +312,11 @@ async def schedule(args: dict[str, Any], ctx: TurnContext) -> str:
     if at is None and args.get("in_minutes") not in (None, ""):
         at = datetime.now().timestamp() + 60 * float(args["in_minutes"])
     cron = args.get("cron") or None
-    scheduler = ctx.services.scheduler
-    task = scheduler.add(ctx.chat_key, args["text"], at=at, cron=cron, kind=kind, by=ctx.sender.id)
+    if (at is None) == (cron is None):
+        raise ValueError("give exactly one of `at`, `in_minutes` or `cron`")
+    due = scheduler.next_cron(cron, datetime.now().timestamp()) if cron else at
+    task = saved.task_add(ctx.chat_key, args["text"], due, kind=kind, cron=cron, by=ctx.sender.id)
+    ctx.services.scheduler.wake()  # the loop may be asleep until a later task
     return json.dumps(task)
 
 

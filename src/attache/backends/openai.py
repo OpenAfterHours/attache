@@ -40,11 +40,8 @@ class ChatAdapter:
         self.client = client
 
     def start(self, turn: Turn) -> list[dict[str, Any]]:
-        return [
-            {"role": "system", "content": turn.system},
-            *map(dict, turn.history),
-            {"role": "user", "content": turn.text},
-        ]
+        system = {"role": "system", "content": turn.system}
+        return [system, *map(dict, turn.history), {"role": "user", "content": turn.text}]
 
     async def step(self, state: list[dict[str, Any]], turn: Turn) -> Step:
         kwargs: dict[str, Any] = {"model": self.endpoint.model, "messages": state}
