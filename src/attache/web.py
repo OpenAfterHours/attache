@@ -21,15 +21,19 @@ Local routes (create_app(services, channel, router)), on [web] host:port
   POST /api/chat {text}        an owner Inbound in local:me (origin "web"); the reply arrives
                                over SSE                                                UI token
   POST /api/answer {ask_id, choice}  the owner's answer to an ask: {"ok": accepted}   UI token
-  POST /api/ask {prompt}       a page turn (router.page_turn) for the page whose token it
+  POST /api/stop               stop the turns running in local:me (ChannelManager.stop_turns):
+                               {"stopped": whether one was}                           UI token
+  POST /api/ask {prompt}      a page turn (router.page_turn) for the page whose token it
                                carries: {"reply": text}. A page's token only, never the UI's
   GET|POST /api/db/{c}         list | create   } the UI token or a page's token, under the db
   GET|PUT|DELETE /api/db/{c}/{id}             } tool's rules (store.db_access)
   GET  /api/events             SSE with ?token= (the UI) or ?artifact=&token= (a page). For the
                                UI only: "message" (an Outbound's fields; with author set, a
-                               message the owner typed in the terminal) and "ask" {ask_id,
-                               text, options}. "doc" {collection, id, doc} within the scope.
-                               A ping every 15 s.
+                               message the owner typed in the terminal), "ask" {ask_id,
+                               text, options} and "activity" {kind, ...data}, a local:me turn's
+                               progress (started, step, thinking, finished; see
+                               ChannelManager.activity). "doc" {collection, id, doc} within
+                               the scope. A ping every 15 s.
   POST /mcp/{token}            MCP over Streamable HTTP (plain JSON responses) for the tools of
                                the turn services.gateway[token]; Claude Code connects here
 
@@ -237,7 +241,7 @@ class WebChannel:
         self.subs: list[tuple[Scope, asyncio.AbstractEventLoop, asyncio.Queue[Any]]] = []
         self.stopped = asyncio.Event()
 
-    def publish(self, kind: str, **event: Any) -> None:
+    def publish(self, kind: str, /, **event: Any) -> None:  # an activity event has a "kind" too
         """Queue an event for each open stream allowed to see it. Safe from any thread.
         Messages go to the Attaché page only; a doc change goes to the streams whose scope
         covers its collection, and for a chat's page only if the doc is shared with that chat
@@ -279,6 +283,11 @@ class WebChannel:
         """Show a question on the open Attaché pages: False when there is none to see it."""
         self.publish("ask", ask_id=ask_id, text=text, options=options)
         return any(scope.slug == UI for scope, _, _ in self.subs)
+
+    async def activity(self, chat_id: str, kind: str, data: dict[str, Any]) -> None:
+        """A local:me turn's progress, as {kind, ...data}: for the Attaché page only, like
+        messages, so artifact pages and share links never see steps or thinking."""
+        self.publish("activity", kind=kind, **data)
 
     async def stop(self) -> None:
         self.stopped.set()
@@ -371,6 +380,11 @@ def create_app(
         ok = services.channels.answer(str(data.get("ask_id")), "owner", str(data.get("choice")))
         return JSONResponse({"ok": ok})
 
+    async def stop(request: Request) -> Response:
+        """The page's Stop button (or Esc). The stopped turn sends "finished" with stopped."""
+        ui_only(request)
+        return JSONResponse({"stopped": services.channels.stop_turns("local:me")})
+
     async def ask(request: Request) -> Response:
         """attache.ask from a page open in the Attaché window: a turn limited to its scope."""
         if (scope := scope_of(services, request)).slug == UI:
@@ -442,6 +456,7 @@ def create_app(
         Route("/api/messages", messages),
         Route("/api/chat", chat, methods=["POST"]),
         Route("/api/answer", answer, methods=["POST"]),
+        Route("/api/stop", stop, methods=["POST"]),
         Route("/api/ask", ask, methods=["POST"]),
         Route("/mcp/{token}", mcp, methods=["POST"]),
     ]

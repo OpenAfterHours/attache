@@ -77,7 +77,12 @@ OnAnswer = Callable[[str, str, str, str], bool]
 
 class Channel(Protocol):
     """A chat surface. ask() shows a question (buttons, reactions or numbered text) and says
-    whether anyone could see it."""
+    whether anyone could see it.
+
+    It may also have `async activity(chat_id, kind, data) -> None`, to show how a turn is
+    going (ChannelManager.activity: started, step, thinking, finished). Only turns with owner
+    rights send it, and today only the terminal and the web page have it. A channel that adds
+    it must never show a step's or thinking's contents in a chat other people can read."""
 
     name: str
 

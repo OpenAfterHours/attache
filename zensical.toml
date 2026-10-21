@@ -37,6 +37,7 @@ nav = [
     { "Mail" = "mail.md" },
     { "Diary" = "diary.md" },
     { "Jobs" = "jobs.md" },
+    { "Terminal" = "terminal.md" },
     { "Skills" = "skills.md" },
     { "Pages" = "pages.md" },
     { "Security" = "security.md" },

@@ -255,6 +255,141 @@ def test_spawn_refuses_work_once_stop_has_begun() -> None:
     assert ran == [] and hub.tasks == set()
 
 
+class Showing(Channel):
+    """A fake channel that shows activity, as the terminal and the web page do."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.shown: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def activity(self, chat_id: str, kind: str, data: dict[str, Any]) -> None:
+        self.shown.append((chat_id, kind, data))
+
+
+def test_activity_reaches_only_the_chats_channels_that_show_it() -> None:
+    hub = ChannelManager()
+    plain, terminal, web, slack = (
+        Channel("local"),
+        Showing("local"),
+        Showing("local"),
+        Showing("slack"),
+    )
+    for channel in (plain, terminal, web, slack):
+        hub.add(channel)
+
+    async def main() -> None:
+        await hub.activity("local:me", "step", label="search mail", seconds=1.2)
+        await hub.activity("local:me", "finished", seconds=3.0, tokens=None, route="claude")
+
+    asyncio.run(main())
+    assert (
+        terminal.shown
+        == web.shown
+        == [
+            ("me", "step", {"label": "search mail", "seconds": 1.2}),
+            ("me", "finished", {"seconds": 3.0, "tokens": None, "route": "claude"}),
+        ]
+    )
+    assert slack.shown == [] and plain.sent == []  # another chat; one without activity() skipped
+
+
+def test_stop_turns_cancels_the_turns_of_that_chat_only() -> None:
+    hub, log = ChannelManager(), []
+    hub.add(Channel("local"))
+    hub.add(Channel("slack"))
+
+    async def turn(msg: Inbound) -> None:
+        try:
+            await asyncio.Event().wait()  # a long turn
+        except asyncio.CancelledError:
+            log.append(f"{msg.channel} stopped")
+            raise
+
+    def running() -> list[str]:
+        return sorted(task.get_name() for task in hub.tasks)
+
+    async def main() -> None:
+        other = hub.spawn(asyncio.Event().wait())  # other work, such as a question's wait
+        await asyncio.gather(*await hub.start(turn))
+        await until(lambda: len(hub.tasks) == 3)
+        assert {"local:c1", "slack:c1"} < set(running())  # each message's task: its chat key
+        assert hub.stop_turns("local:c1") is True
+        await until(lambda: log == ["local stopped"])
+        await until(lambda: len(hub.tasks) == 2)  # a done one is forgotten
+        assert hub.stop_turns("local:c1") is False  # nothing is running there now
+        assert hub.stop_turns("local:me") is False
+        assert other is not None and not other.done()  # not a chat's: left alone
+        await hub.stop()
+
+    asyncio.run(main())
+    assert log == ["local stopped", "slack stopped"] and hub.tasks == set()
+
+
+def test_summary_and_footer() -> None:
+    assert channels.summary("I should check  the\ninbox first. Then draft.") == (
+        "I should check the inbox first."
+    )
+    long = channels.summary("word " * 40)
+    assert len(long) == 100 and long.endswith("…")
+    assert channels.summary("No full stop") == "No full stop"
+    finished = {"seconds": 4.25, "route": "claude"}
+    assert channels.footer({**finished, "tokens": 3140}) == "4.2s · 3.1k tokens · claude"
+    assert channels.footer({**finished, "tokens": 812}) == "4.2s · 812 tokens · claude"
+    assert channels.footer({**finished, "tokens": None}) == "4.2s · claude"  # not known
+    assert channels.footer({**finished, "tokens": 9, "stopped": True}) == "stopped · 4.2s"
+    failed = {"seconds": 0.0, "route": None}  # it failed before a route was chosen
+    assert channels.footer({**failed, "tokens": None}) == "0.0s"
+    assert channels.footer({**failed, "tokens": 12}) == "0.0s · 12 tokens"
+
+
+def test_the_terminal_prints_no_control_characters(capsys: pytest.CaptureFixture[str]) -> None:
+    term = TerminalChannel("Alex", "http://x")
+    # What steered model text could carry: a window title (OSC 0), a clipboard write (OSC 52),
+    # a carriage return to overwrite the line, a cursor move, and C1 CSI (0x9b) and DEL.
+    hostile = "ok\x1b]0;pwned\x07 \x1b]52;c;ZXZpbA==\x07\rfake\x1b[2A\x9b31m\x7f\tend\nnext"
+
+    async def main() -> None:
+        await term.send(Outbound("local:me", hostile, [f"C:/files/{hostile}.pdf"]))
+        await term.activity("me", "step", {"label": f"Bash echo {hostile}", "seconds": None})
+        await term.activity("me", "thinking", {"text": hostile})
+        await term.activity("me", "finished", {"seconds": 1, "tokens": 1, "route": hostile})
+
+    asyncio.run(main())
+    out = capsys.readouterr().out
+    assert not any((ord(c) < 32 and c not in "\t\n") or 0x7F <= ord(c) <= 0x9F for c in out)
+    assert "attaché> ok]0;pwned ]52;c;ZXZpbA==fake[2A31m\tend\nnext" in out  # text stays
+
+
+def test_terminal_trail(capsys: pytest.CaptureFixture[str]) -> None:
+    term = TerminalChannel("Alex", "http://x")
+    thinking = "The user wants the boiler email. I'll search for it.\nThen read it."
+    events = [
+        ("started", {"route": "claude"}),
+        ("thinking", {"text": thinking}),
+        ("step", {"label": 'mail search "boiler"', "seconds": 1.23}),
+        ("step", {"label": "Bash ls -la", "seconds": None}),  # Claude Code's own: not timed
+        ("finished", {"seconds": 4.2, "tokens": 3100, "route": "claude", "stopped": False}),
+        ("started", {"route": "claude"}),
+        ("finished", {"seconds": 1, "tokens": None, "route": "claude", "stopped": True}),
+        ("later", {}),  # a kind it doesn't know: nothing
+    ]
+
+    async def main() -> None:
+        for kind, data in events:
+            await term.activity("me", kind, data)
+
+    asyncio.run(main())
+    assert capsys.readouterr().out.splitlines() == [
+        "  working…",
+        "  ∴ The user wants the boiler email.",  # one line: the first sentence
+        '  · mail search "boiler"  1.2s',
+        "  · Bash ls -la",
+        "  4.2s · 3.1k tokens · claude",
+        "  working…",
+        "  stopped · 1.0s",  # Ctrl+C, or the page's Stop
+    ]
+
+
 def test_terminal_channel(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

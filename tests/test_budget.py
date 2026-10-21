@@ -12,7 +12,7 @@ import tokenize
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "attache"
-CORE_LIMIT = 2150  # 1,600 / 1,900 / 2,100 by phase 3; then background scripts (owner's call)
+CORE_LIMIT = 2240  # 1,600 / 1,900 / 2,100 by phase 3; terminal progress; email requests
 SKILL_SCRIPT_LIMIT = 300
 SKILL_LIMITS = {"mail": 1390}  # shared and IMAP ~600, Outlook COM and Graph ~700, headers, show_as
 
