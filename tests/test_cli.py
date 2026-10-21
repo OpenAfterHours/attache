@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import json
 import logging
 import shutil
 import socket
@@ -83,11 +84,22 @@ def test_skill_runs_the_skills_own_script(home: Path, monkeypatch: pytest.Monkey
     script.parent.mkdir(parents=True)
     script.write_text("print('hi')\n", encoding="utf-8")
     ran: list[list[str]] = []
-    monkeypatch.setattr(cli.subprocess, "run", lambda argv: ran.append(argv) or Done(3))
+    envs: list[dict[str, str]] = []
+
+    def run(argv: list[str], env: dict[str, str]) -> Done:
+        ran.append(argv)
+        envs.append(env)
+        return Done(3)
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setenv("ATTACHE_TEST_KEEP", "kept")
     # Every argument after the name is the script's, options included: argparse never sees them.
     assert cli.main(["skill", "service", "install", "--dry-run"]) == 3  # its exit code
     assert ran == [["uv", "run", str(script), "install", "--dry-run"]]
+    # How to start this same Attaché, for a skill that runs one (the tui skill), and the rest
+    assert json.loads(envs[0]["ATTACHE_CLI"]) == [sys.executable, "-m", "attache"]
+    assert envs[0]["ATTACHE_TEST_KEEP"] == "kept"
     # SystemExit with a message: Python prints that one line on stderr and exits with code 1.
     for bad in (["skill"], ["skill", "nope"], ["skill", ".."], ["skill", "../service"]):
         with pytest.raises(SystemExit, match="new bundled skills arrive with `attache init`"):

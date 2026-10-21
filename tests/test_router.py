@@ -96,17 +96,22 @@ class Backend:
         self.log.append(f"end {turn.ctx.chat_key}")
         if self.error:
             raise self.error
-        return Reply(f"reply {len(self.turns)}", {"n": len(self.turns)})
+        usage = {"input_tokens": 1200, "output_tokens": 34}
+        return Reply(f"reply {len(self.turns)}", {"n": len(self.turns)}, usage)
 
 
 class Channel:
     def __init__(self, name: str) -> None:
         self.name, self.sent, self.asked = name, [], []
+        self.activities: list[tuple[str, dict[str, Any], int]] = []  # with the number sent
 
     async def start(self, on_message: Any) -> None: ...
 
     async def send(self, msg: Outbound) -> None:
         self.sent.append(msg)
+
+    async def activity(self, chat_id: str, kind: str, data: dict[str, Any]) -> None:
+        self.activities.append((kind, data, len(self.sent)))
 
     async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
         self.asked.append(text)
@@ -676,3 +681,31 @@ def test_scheduled_turns_stop_with_attache(world: World) -> None:
 
     asyncio.run(main())
     assert not world.router.background and len(world.backend.turns) == 1
+
+
+def test_a_turn_with_owner_rights_reports_started_and_finished(world: World) -> None:
+    world.me("hi")
+    (started, route, _), (finished, done, sent_before) = world.local.activities
+    assert (started, route) == ("started", {"route": "own"})
+    assert finished == "finished" and sent_before == 2  # after the reply (and the echo) went out
+    assert (done["tokens"], done["route"], done["stopped"]) == (1234, "own", False)
+    assert isinstance(done["seconds"], float)
+    world.say("@Attaché hi", name="Sam")  # a member's turn: nobody sees its progress
+    world.say("@Attaché hi", sender="UALEX", name="Alex")  # the owner in a group: nor this one
+    assert world.slack.activities == [] and len(world.local.activities) == 2
+
+
+def test_a_stopped_turn_says_so_and_sends_no_reply(world: World) -> None:
+    world.backend.delay = 5
+
+    async def main() -> None:
+        turn = asyncio.create_task(world.router.handle(Inbound("local", "me", "owner", "A", "go")))
+        await asyncio.sleep(0.05)
+        turn.cancel()  # as ChannelManager.stop_turns does
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+    asyncio.run(main())
+    kinds = [(kind, data.get("stopped")) for kind, data, _ in world.local.activities]
+    assert kinds == [("started", None), ("finished", True)]
+    assert world.local.activities[1][1]["tokens"] is None and world.local.sent == []

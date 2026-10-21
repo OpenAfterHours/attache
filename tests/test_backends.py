@@ -27,8 +27,12 @@ async def _add(args: dict[str, Any], ctx: TurnContext) -> str:
 ADD = Tool("add", "Add two numbers", {"type": "object", "properties": {}}, _add)
 
 
+async def no_activity(chat_key: str, kind: str, **data: Any) -> None: ...
+
+
 def make_turn(endpoint: Endpoint, history: list[dict[str, str]] | None = None) -> Turn:
-    ctx = TurnContext("local:me", Person("owner", "Phil", "owner"), False, SimpleNamespace())
+    services = SimpleNamespace(channels=SimpleNamespace(activity=no_activity))
+    ctx = TurnContext("local:me", Person("owner", "Phil", "owner"), False, services)
     return Turn(ctx, endpoint, "be brief", history or [], "what is 2+3?", [ADD])
 
 

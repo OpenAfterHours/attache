@@ -23,8 +23,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from attache.agent import label, progress
 from attache.channels import PIPE, SPAWN, kill_tree
-from attache.types import Endpoint, Reply, Turn
+from attache.types import Endpoint, Reply, Turn, TurnContext
 
 OWNER_BUILTINS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch"]
 # Our tools that Claude Code's own Read/Write/Edit/Bash already cover, so they are not served.
@@ -133,7 +134,30 @@ class ClaudeCLI:
 
     async def _once(self, turn: Turn, files: Path, cwd: Path) -> Reply:
         argv = self.command(turn, files / "mcp.json", files / "system.md")
-        return parse_events([line async for line in self.runner(argv, prompt(turn), cwd, _env())])
+        lines = []
+        async for line in self.runner(argv, prompt(turn), cwd, _env()):
+            lines.append(line)
+            await _report(turn.ctx, _event(line))  # as it comes, not once claude is done
+        return parse_events(lines)
+
+
+def _event(line: str) -> dict[str, Any]:
+    """One line of claude's stream-json output, or {} when it is not a JSON object."""
+    with contextlib.suppress(ValueError):
+        if isinstance(event := json.loads(line), dict):
+            return event
+    return {}
+
+
+async def _report(ctx: TurnContext, event: dict[str, Any]) -> None:
+    """Claude Code's thinking, and its own tools as steps (agent.progress; seconds None, as the
+    stream doesn't say). Its calls to Attaché's tools (mcp__...) are left out: they come
+    through the MCP endpoint, where run_tool reports them."""
+    for block in event["message"]["content"] if event.get("type") == "assistant" else []:
+        if block.get("type") == "thinking":
+            await progress(ctx, "thinking", text=block.get("thinking", ""))
+        elif block.get("type") == "tool_use" and not block["name"].startswith("mcp__"):
+            await progress(ctx, "step", label=label(block["name"], block["input"]), seconds=None)
 
 
 def parse_events(lines: Iterable[str]) -> Reply:
@@ -142,10 +166,7 @@ def parse_events(lines: Iterable[str]) -> Reply:
     is_error true raises RuntimeError with its message (StaleSessionError when a fresh session would
     fix it and no tool has run yet, since running tools twice could repeat a send or a write).
     Non-JSON lines are ignored."""
-    events = []
-    for line in lines:
-        with contextlib.suppress(ValueError):
-            events.append(json.loads(line))
+    events = [_event(line) for line in lines]
     result = next((e for e in reversed(events) if e.get("type") == "result"), {})
     blocks = [b for e in events if e.get("type") == "assistant" for b in e["message"]["content"]]
     if result.get("is_error"):

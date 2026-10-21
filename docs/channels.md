@@ -181,6 +181,35 @@ What a sidecar writes to stderr appears on Attaché's stderr, the terminal it ru
 and `log` events, ignored lines and restarts go to Attaché's log, the `attache` logger. Under
 `attache run` and `attache chat` it shows INFO and above (other libraries show warnings only).
 
+## Activity: how a turn is going
+
+While a turn with owner rights runs, Attaché reports how it is going: its steps (each tool it
+calls) and the model's thinking. Only your own turns report it, never a group's or a
+member's. The terminal shows it as a trail of plain, indented lines under the turn, and the
+web page in its "Thinking…" bubble.
+
+Inside Attaché, the router and the tool loop call `ChannelManager.activity(chat_key, kind,
+**data)` and await it. It reaches each channel of that chat's name that has a method
+`async activity(chat_id, kind, data) -> None`; a channel without one is skipped. Today only the
+two `local` channels have it, the terminal and the web page. The sidecar protocol has no
+activity event, so a chat app never sees steps or thinking.
+
+| `kind` | `data` | When |
+|---|---|---|
+| `started` | `route`: the endpoint's name | a turn begins |
+| `step` | `label`: a short name for the call, at most 80 characters, never its contents (`script mail inbox`, `Bash ls -la`); `seconds`: how long it took, or `null` if not known | after each tool call |
+| `thinking` | `text`: the full text the model sent | when the model thinks out loud |
+| `finished` | `seconds`; `tokens`: input plus output, or `null`; `route`; `stopped`: true if it was stopped | after the reply was sent, or after a stop |
+
+**A rule for channel authors:** a channel that gains `activity` must never show a step's label
+or the thinking in a chat other people can read. Thinking can quote your mail, and step labels
+name your files and commands.
+
+**Stopping a turn.** `ChannelManager.stop_turns(chat_key)` cancels what is running for that
+chat's messages and returns whether anything was running. The turn then ends with `finished`
+and `stopped: true`, and sends no reply. Ctrl+C in `attache chat` stops a turn of yours this
+way; with none running, it quits as before. The web page's Stop button does the same.
+
 ## Writing a channel
 
 1. Make a skill folder with a `SKILL.md` whose metadata names the script:

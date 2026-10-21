@@ -70,6 +70,23 @@ def choose(options: list[str], text: str) -> str | None:
     return None
 
 
+def summary(thinking: str) -> str:
+    """Thinking in one line: its first sentence, cut at 100 characters."""
+    first = re.split(r"(?<=[.!?])\s", " ".join(thinking.split()), maxsplit=1)[0]
+    return first if len(first) <= 100 else first[:99] + "…"
+
+
+def footer(turn: dict[str, Any]) -> str:
+    """The line under a finished turn: "4.2s · 3.1k tokens · claude", or "stopped · 4.2s"."""
+    took, tokens = f"{turn['seconds']:.1f}s", turn.get("tokens")
+    if turn.get("stopped"):
+        return f"stopped · {took}"
+    if tokens is None:  # the backend didn't say
+        return f"{took} · {turn['route']}"
+    count = f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
+    return f"{took} · {count} tokens · {turn['route']}"
+
+
 async def kill_tree(proc: asyncio.subprocess.Process) -> None:
     """Kill a process and every process it started, then reap it. On POSIX it must lead its
     own session (start_new_session=True), so its children share its process group."""
@@ -93,13 +110,14 @@ class ChannelManager:
     def add(self, channel: Channel) -> None:
         self.channels.setdefault(channel.name, []).append(channel)
 
-    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any] | None:
+    def spawn(self, coro: Coroutine[Any, Any, Any], key: str = "") -> asyncio.Task[Any] | None:
         """Run coro in a task that is kept until it is done; stop() cancels it. Once stop()
-        has begun, coro is closed unrun and None returned."""
+        has begun, coro is closed unrun and None returned. With a chat key, the work is that
+        chat's, such as a turn: the task is named after it, so stop_turns() can find it."""
         if self.closing:
             coro.close()
             return None
-        task = asyncio.create_task(coro)
+        task = asyncio.create_task(coro, name=key or None)  # None: asyncio's own "Task-7"
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return task
@@ -114,6 +132,23 @@ class ChannelManager:
     async def send(self, msg: Outbound) -> None:
         for channel in self._targets(msg.chat_key):
             await channel.send(msg)
+
+    async def activity(self, chat_key: str, kind: str, **data: Any) -> None:
+        """How a turn with owner rights is going, for the chat's channels that show it (those
+        with an activity() method; others are skipped): kind "started" {route}, "step"
+        {label, seconds}, "thinking" {text} or "finished" {seconds, tokens, route, stopped}.
+        docs/channels.md has the contract."""
+        for channel in self._targets(chat_key):
+            if hasattr(channel, "activity"):
+                await channel.activity(chat_key.split(":", 1)[1], kind, data)
+
+    def stop_turns(self, chat_key: str) -> bool:
+        """Cancel what is running for chat_key's messages, such as a turn: the owner's Stop or
+        Ctrl+C. True if something was running."""
+        running = [t for t in self.tasks if t.get_name() == chat_key and not t.done()]
+        for task in running:
+            task.cancel()
+        return bool(running)
 
     async def ask(self, chat_key: str, person_id: str, text: str, options: list[str]) -> Waiting:
         """Show the question on every channel of the chat and return a task giving person_id's
@@ -162,10 +197,11 @@ class ChannelManager:
 
     async def start(self, handler: OnMessage) -> list[asyncio.Task[None]]:
         """Start every channel. Each gets a callback that runs handler in a task of its own
-        and returns at once, so a turn never holds up its channel (or an answer behind it)."""
+        and returns at once, so a turn never holds up its channel (or an answer behind it).
+        The task is named after the chat key, for stop_turns()."""
 
         async def deliver(msg: Inbound) -> None:
-            self.spawn(handler(msg))
+            self.spawn(handler(msg), msg.chat_key)
 
         return [asyncio.create_task(c.start(deliver)) for g in self.channels.values() for c in g]
 
@@ -198,6 +234,20 @@ class TerminalChannel:
             msg = Inbound("local", "me", "owner", self.owner_name, line, origin="terminal")
             await on_message(msg)
         self.done.set()
+
+    async def activity(self, chat_id: str, kind: str, data: dict[str, Any]) -> None:
+        """The step trail under a turn of yours (docs/terminal.md): plain lines, indented,
+        appended as the turn goes and never redrawn, so it reads the same in any terminal,
+        a pipe or a log."""
+        if kind == "started":
+            print("  working…", flush=True)
+        elif kind == "step":
+            took = "" if data["seconds"] is None else f"  {data['seconds']:.1f}s"
+            print(f"  · {data['label']}{took}", flush=True)
+        elif kind == "thinking":
+            print(f"  ∴ {summary(data['text'])}", flush=True)
+        elif kind == "finished":
+            print(f"  {footer(data)}", flush=True)
 
     def _read(self, loop: asyncio.AbstractEventLoop) -> None:
         """Queue lines until EOF ("") or a quit line; that last one start() still waits for."""

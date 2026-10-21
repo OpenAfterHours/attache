@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unicodedata import combining, normalize
 
-from attache import backends, skills, tools
+from attache import agent, backends, skills, tools
 from attache.config import ChatConfig
 from attache.types import Backend, Endpoint, Inbound, Outbound, Person, Reply, Turn, TurnContext
 
@@ -226,35 +226,47 @@ class Router:
         return False, ""
 
     async def _turn(self, msg: Inbound, sender: Person, msg_id: int, collections=None) -> Reply:
-        """Steps 6-8. collections: a page turn's (page_turn), which db keeps to."""
+        """Steps 6-8. collections: a page turn's (page_turn), which db keeps to. A turn with owner
+        rights is "started" once its route is known and "finished" after the reply is sent, or
+        stopped when it is cancelled (ChannelManager.stop_turns): agent.progress."""
         store, key = self.services.store, msg.chat_key
         chat = self.services.config.chats.get(key)
         owner = sender.role == "owner"
         shared = msg.is_group or not owner  # other people can read the reply: group_chats
+        ctx = TurnContext(key, sender, msg.is_group, self.services, collections=collections)
+        began, route, reply = time.monotonic(), None, None
         try:
-            ep = self.services.config.endpoint_for(key, shared)
-            timeout = float(ep.options.get("timeout", 900))
-            if ep.name not in self.backends:
-                self.backends[ep.name] = self.make_backend(ep)
-            ctx = TurnContext(key, sender, msg.is_group, self.services, collections=collections)
-            history, text = self._conversation(msg, sender, chat, msg_id)
-            system, session = self.system_prompt(sender, msg, chat), store.session_get(key, ep.name)
-            turn = Turn(ctx, ep, system, history, text, tools.build(ctx), session)
-            reply = await asyncio.wait_for(self.backends[ep.name].run(turn), timeout)
-            store.session_set(key, ep.name, reply.session)
-        except TimeoutError:
-            reply = Reply(f"Timed out after {timeout:g} s." if owner else APOLOGY)
-        except Exception as e:
-            logging.getLogger(__name__).exception("turn in %s failed", key)
-            reply = Reply(f"That failed: {type(e).__name__}: {e}" if owner else APOLOGY)
-        if reply.text and sender.role != "page":  # a page shows its own reply
-            store.add_message(key, "assistant", reply.text)
-            out = Outbound(key, reply.text, reply_to=msg.message_id or None)
-            await self.services.channels.send(out)
-        if owner:
-            note = f"{key}: {' '.join(msg.text.split())[:60]}"
-            await asyncio.to_thread(skills.commit, self.services.home, note)
-        return reply
+            try:
+                ep = self.services.config.endpoint_for(key, shared)
+                route = ep.name
+                await agent.progress(ctx, "started", route=route)
+                timeout = float(ep.options.get("timeout", 900))
+                if ep.name not in self.backends:
+                    self.backends[ep.name] = self.make_backend(ep)
+                history, text = self._conversation(msg, sender, chat, msg_id)
+                system = self.system_prompt(sender, msg, chat)
+                session = store.session_get(key, ep.name)
+                turn = Turn(ctx, ep, system, history, text, tools.build(ctx), session)
+                reply = await asyncio.wait_for(self.backends[ep.name].run(turn), timeout)
+                store.session_set(key, ep.name, reply.session)
+            except TimeoutError:
+                reply = Reply(f"Timed out after {timeout:g} s." if owner else APOLOGY)
+            except Exception as e:
+                logging.getLogger(__name__).exception("turn in %s failed", key)
+                reply = Reply(f"That failed: {type(e).__name__}: {e}" if owner else APOLOGY)
+            if reply.text and sender.role != "page":  # a page shows its own reply
+                store.add_message(key, "assistant", reply.text)
+                out = Outbound(key, reply.text, reply_to=msg.message_id or None)
+                await self.services.channels.send(out)
+            if owner:
+                note = f"{key}: {' '.join(msg.text.split())[:60]}"
+                await asyncio.to_thread(skills.commit, self.services.home, note)
+            return reply
+        finally:  # no reply: the turn was stopped
+            usage = reply.usage if reply else {}
+            tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+            done = {"seconds": time.monotonic() - began, "route": route, "stopped": reply is None}
+            await agent.progress(ctx, "finished", tokens=tokens or None, **done)
 
     async def page_turn(self, scope: Scope, prompt: str) -> str:
         """A request from an artifact page (attache.ask, web.py), as the page itself

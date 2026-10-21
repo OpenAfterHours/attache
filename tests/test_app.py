@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import shutil
+import signal
 import socket
 import sqlite3
 import sys
@@ -226,6 +227,126 @@ def slow_router(seconds: float, replies: list[str]) -> type:
             replies.append(msg.text)
 
     return Router
+
+
+async def until(condition: Any, timeout: float = 10.0) -> None:
+    end = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < end, "timed out"
+        await asyncio.sleep(0.01)
+
+
+def test_ctrl_c_in_chat_stops_a_running_turn_then_quits(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replies: list[str] = []
+    built: list[app.Services] = []
+    real_build = app.build
+    monkeypatch.setattr(app, "build", lambda where: built.append(real_build(where)) or built[0])
+    monkeypatch.setattr(app.router, "Router", slow_router(60, replies))
+    monkeypatch.setattr(web, "serve", serving)
+
+    class Stdin:  # one message, then someone who never types again (a daemon thread waits)
+        def __init__(self) -> None:
+            self.lines = ["hello\n"]
+
+        def readline(self) -> str:
+            if self.lines:
+                return self.lines.pop()
+            threading.Event().wait()
+            return ""
+
+    monkeypatch.setattr(sys, "stdin", Stdin())
+    free_home(home)
+
+    def turns() -> list[Any]:  # what is running for the terminal's chat
+        return [t for t in built[0].channels.tasks if t.get_name() == "local:me"] if built else []
+
+    async def main() -> None:
+        theirs = signal.getsignal(signal.SIGINT)  # asyncio.run's own handler
+        run = asyncio.create_task(app.run(home, terminal=True))
+        await until(turns)  # "hello" is being answered
+        ctrl_c = signal.getsignal(signal.SIGINT)
+        assert ctrl_c is not theirs
+        ctrl_c(signal.SIGINT, None)  # as Python calls it for a real Ctrl+C, on any system
+        await until(lambda: not turns())  # stopped (the router's footer then says so)
+        await asyncio.sleep(0.1)
+        assert not run.done()  # Attaché runs on
+        ctrl_c(signal.SIGINT, None)  # nothing running: quit, through asyncio.run's handler
+        await run
+
+    with pytest.raises(KeyboardInterrupt):  # as for Ctrl+C before; cli.main hides it
+        asyncio.run(main())
+    assert replies == []  # the stopped turn never replied
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler  # put back
+
+
+def test_ctrl_c_in_attache_run_is_left_as_it_was(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[Any] = []
+
+    async def serve(app_: Any, sock: socket.socket) -> None:
+        seen.append(signal.getsignal(signal.SIGINT))
+        raise RuntimeError("done looking")
+
+    async def main() -> None:
+        seen.append(signal.getsignal(signal.SIGINT))
+        await app.run(home, terminal=False)
+
+    monkeypatch.setattr(web, "serve", serve)
+    free_home(home)
+    with pytest.raises(SystemExit):
+        asyncio.run(main())
+    assert seen[0] is seen[1]  # still asyncio.run's own
+
+
+class FakeSignal:
+    """The signal module as app.run sees it, on Windows (with SIGBREAK) or not. Nothing real:
+    it only records the handlers."""
+
+    SIGINT = 2
+
+    def __init__(self, windows: bool) -> None:
+        self.handlers: dict[int, Any] = {self.SIGINT: "asyncio.run's"}
+        if windows:
+            self.SIGBREAK = 21
+
+    def getsignal(self, number: int) -> Any:
+        return self.handlers.get(number)
+
+    def signal(self, number: int, handler: Any) -> None:
+        self.handlers[number] = handler
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize("windows", [True, False])
+def test_ctrl_break_quits_quietly_as_ctrl_c_does(
+    windows: bool, terminal: bool, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake, during = FakeSignal(windows), []
+
+    async def serve(app_: Any, sock: socket.socket) -> None:
+        during.append(dict(fake.handlers))
+        raise RuntimeError("done looking")
+
+    class Stdin:  # the terminal, if any, waits for good: the server ends the run
+        def readline(self) -> str:
+            threading.Event().wait()
+            return ""
+
+    monkeypatch.setattr(app, "signal", fake)
+    monkeypatch.setattr(web, "serve", serve)
+    monkeypatch.setattr(sys, "stdin", Stdin())
+    free_home(home)
+    with pytest.raises(SystemExit):
+        asyncio.run(app.run(home, terminal=terminal))
+    ((handlers,),) = [during]
+    # Ctrl+Break (how the tui skill stops `attache run` on Windows) gets asyncio.run's own
+    # SIGINT handler, so it quits as quietly as Ctrl+C, in either mode.
+    assert handlers.get(21) == ("asyncio.run's" if windows else None)
+    assert (handlers[2] == "asyncio.run's") is not terminal  # chat: Ctrl+C stops turns first
+    assert fake.handlers[2] == "asyncio.run's"  # and afterwards, Ctrl+C is as it was
 
 
 def test_piped_chat_waits_for_its_replies(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
