@@ -206,8 +206,9 @@ or the thinking in a chat other people can read. Thinking can quote your mail, a
 name your files and commands.
 
 **Stopping a turn.** `ChannelManager.stop_turns(chat_key)` cancels what is running for that
-chat's messages and returns whether anything was running. The turn then ends with `finished`
-and `stopped: true`, and sends no reply. Ctrl+C in `attache chat` stops a turn of yours this
+chat's messages and returns whether anything was running. That includes messages queued
+behind the running turn, waiting for it to finish: Stop means stop what I asked. The turn
+then ends with `finished` and `stopped: true`, and sends no reply. Ctrl+C in `attache chat` stops a turn of yours this
 way; with none running, it quits as before. The web page's Stop button does the same.
 
 ## Writing a channel

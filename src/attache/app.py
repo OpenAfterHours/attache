@@ -93,17 +93,25 @@ async def run(home: Path, *, terminal: bool) -> None:
     vital = [*servers, beat]  # if one of these stops, so does Attaché
     quitting = [asyncio.create_task(term.done.wait())] if terminal else []
     loop, previous = asyncio.get_running_loop(), signal.getsignal(signal.SIGINT)
+    saved = {signal.SIGINT: previous}  # put back in the finally
     if hasattr(signal, "SIGBREAK"):  # Windows' Ctrl+Break, how the tui skill stops Attaché:
-        signal.signal(signal.SIGBREAK, previous)  # the same quiet shutdown as Ctrl+C gives
+        saved[signal.SIGBREAK] = signal.signal(signal.SIGBREAK, previous)  # quiet, as Ctrl+C
+    # asyncio.run's own handler gives the usual quiet shutdown. With Ctrl+C ignored when
+    # Attaché started (SIG_IGN, say from a background job), there is none: raise, as Python does.
+    quit_now = previous if callable(previous) else signal.default_int_handler
 
     def interrupt(signum: int, frame: object) -> None:
         """Ctrl+C in `attache chat`: stop your turn if one is running (its footer then says
         "stopped"), else quit as before."""
         if not services.channels.stop_turns("local:me"):
-            previous(signum, frame)  # asyncio.run's own handler: the usual quiet shutdown
+            quit_now(signum, frame)
 
-    if terminal:  # from the signal handler to the loop, which is not safe to touch from there
-        signal.signal(signal.SIGINT, lambda *sig: loop.call_soon_threadsafe(interrupt, *sig))
+    def on_ctrl_c(signum: int, frame: object) -> None:
+        """The signal handler: it hands interrupt() to the loop, not safe to touch from here."""
+        loop.call_soon_threadsafe(interrupt, signum, frame)
+
+    if terminal:
+        signal.signal(signal.SIGINT, on_ctrl_c)
     try:
         done, _ = await asyncio.wait([*vital, *quitting], return_when=asyncio.FIRST_COMPLETED)
         if done & set(vital):
@@ -114,7 +122,8 @@ async def run(home: Path, *, terminal: bool) -> None:
             print("Waiting for the last replies; Ctrl+C stops.", flush=True)
             await asyncio.wait(services.channels.tasks, timeout=max(timeouts, default=900))
     finally:  # in this order:
-        signal.signal(signal.SIGINT, previous)  # Ctrl+C as it was (for `attache run`, it still is)
+        for number, handler in saved.items():  # Ctrl+C and Ctrl+Break as they were
+            signal.signal(number, handler)
         await services.channels.stop()  # the turns still running, then every channel, which
         # ends the page's event streams, so the web server's own shutdown is quick and quiet
         everything = [*vital, *warmups, *channel_loops, *quitting]

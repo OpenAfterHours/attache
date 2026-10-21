@@ -258,13 +258,14 @@ class Router:
                 store.add_message(key, "assistant", reply.text)
                 out = Outbound(key, reply.text, reply_to=msg.message_id or None)
                 await self.services.channels.send(out)
-            if owner:
+            if owner:  # a task of its own, unnamed: the turn, and its Stop, end with the reply
                 note = f"{key}: {' '.join(msg.text.split())[:60]}"
-                await asyncio.to_thread(skills.commit, self.services.home, note)
+                commit = asyncio.to_thread(skills.commit, self.services.home, note)
+                self.services.channels.spawn(commit)
             return reply
         finally:  # no reply: the turn was stopped
             usage = reply.usage if reply else {}
-            tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+            tokens = sum(usage.get(key) or 0 for key in agent.TOKENS)
             done = {"seconds": time.monotonic() - began, "route": route, "stopped": reply is None}
             await agent.progress(ctx, "finished", tokens=tokens or None, **done)
 
@@ -326,7 +327,7 @@ class Router:
             sender, name = config.owner.ids.get(channel, "owner"), config.owner.name
             # handle() makes it a group message when the chat is listed in [chats]
             msg = Inbound(channel, cid, sender, name, task["text"], mentioned=True)
-            if job := self.services.channels.spawn(self.handle(msg)):  # None once stopping
+            if job := self.services.channels.spawn(self.handle(msg), key):  # stop_turns finds it
                 self.background[task["id"]] = job
                 job.add_done_callback(lambda _: self.background.pop(task["id"], None))
         else:

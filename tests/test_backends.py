@@ -55,7 +55,9 @@ def run(adapter: Any, turn: Turn) -> Any:
 # Canned responses are real SDK models, so a change in the SDK's shapes fails these tests.
 
 
-def anthropic_message(*content: dict[str, Any], tokens: tuple[int, int] = (1, 1)) -> Message:
+def anthropic_message(
+    *content: dict[str, Any], tokens: tuple[int, int] = (1, 1), cached: int | None = None
+) -> Message:
     return Message.model_validate(
         {
             "id": "msg_1",
@@ -65,7 +67,11 @@ def anthropic_message(*content: dict[str, Any], tokens: tuple[int, int] = (1, 1)
             "content": list(content),
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": tokens[0], "output_tokens": tokens[1]},
+            "usage": {
+                "input_tokens": tokens[0],
+                "output_tokens": tokens[1],
+                "cache_read_input_tokens": cached,
+            },
         }
     )
 
@@ -156,7 +162,7 @@ def test_anthropic_tool_round_trip() -> None:
             {"type": "tool_use", "id": "tu_1", "name": "add", "input": {"a": 2, "b": 3}},
             tokens=(20, 7),
         ),
-        anthropic_message({"type": "text", "text": "5"}, tokens=(30, 1)),
+        anthropic_message({"type": "text", "text": "5"}, tokens=(30, 1), cached=4000),
     )
     endpoint = Endpoint("c", "anthropic", "claude-x", options={"max_tokens": 99})
     adapter = AnthropicAdapter(
@@ -164,7 +170,12 @@ def test_anthropic_tool_round_trip() -> None:
     )
     reply = run(adapter, make_turn(endpoint))
     assert reply.text == "5"
-    assert reply.usage == {"input_tokens": 50, "output_tokens": 8}
+    assert reply.usage == {  # the cached tokens count too (agent.TOKENS)
+        "input_tokens": 50,
+        "output_tokens": 8,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 4000,
+    }
     first, second = create.requests
     assert first["model"] == "claude-x"
     assert first["max_tokens"] == 99

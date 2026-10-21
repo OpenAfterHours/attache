@@ -31,13 +31,13 @@ Attaché, so from inside a turn it would only find the port taken.
 | Key | Does |
 |---|---|
 | Enter | send the message |
-| Esc | stop the turn that is running |
-| ctrl+o | open or fold every turn's steps and thinking |
+| Esc | stop the turn that is running, and the messages waiting behind it |
+| ctrl+o | show every turn's thinking in full, or fold it again |
 | 1 to 9 | answer the open question, while the input box is empty |
 | ctrl+l | show or hide Attaché's own log |
 | ctrl+d, ctrl+q | quit, which stops Attaché too |
 
-A question's options can also be clicked, or typed (a number or the option's name) and sent.
+A question shows its options as numbered lines; pressing the number answers it.
 
 ## How it connects
 

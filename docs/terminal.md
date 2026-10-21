@@ -21,7 +21,7 @@ While a turn of yours runs, Attaché prints short, indented lines of plain text 
 message. They are added as the turn goes and never redrawn, so typing while it works is safe.
 
 ```
-you> what's on tomorrow, and has Dan replied about the boiler?
+what's on tomorrow, and has Dan replied about the boiler?
   working…
   ∴ Calendar first, then mail from Dan.
   · script mail agenda  1.1s
@@ -42,6 +42,10 @@ attaché> Tomorrow you have the dentist at 9. Dan replied on Friday: …
 **Ctrl+C** while a turn runs stops that turn. With nothing running, Ctrl+C quits, as before.
 
 The web page shows the same steps while a turn runs, with a **Stop** button (or Esc).
+
+Stop and Ctrl+C stop what you asked for:
+- the turn that is running, a scheduled one in your chat included (a morning triage, say);
+- the messages you sent while it ran, which were waiting behind it.
 
 The full thinking text is in the full-screen app (ctrl+o), and on the web page when you hover
 over the thinking summary.
@@ -93,7 +97,7 @@ changes every run. Attaché's own output goes to the log pane (ctrl+l).
 | Key | Does |
 |---|---|
 | Enter | Send the message. |
-| Esc | Stop the turn that is running. |
+| Esc | Stop the turn that is running, and the messages waiting behind it, as Stop does. |
 | ctrl+o | Show every turn's thinking in full, or fold it again. |
 | 1 to 9 | Answer the open question, while the input box is empty. |
 | ctrl+l | Show or hide Attaché's own log. |

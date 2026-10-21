@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from attache.agent import TOKENS
 from attache.backends.claude_cli import ClaudeCLI, _spawn, parse_events, prompt
 from attache.types import Endpoint, Person, Tool, Turn, TurnContext
 
@@ -138,7 +139,9 @@ def test_parse_events_on_real_stream() -> None:
     reply = parse_events(STREAM)
     assert reply.text == "ok"
     assert reply.session == {"session_id": SESSION}
-    assert reply.usage == {"cost_usd": 0.00357832, "input_tokens": 2, "output_tokens": 4}
+    cached = {"cache_creation_input_tokens": 17047, "cache_read_input_tokens": 16672}
+    assert reply.usage == {"cost_usd": 0.00357832, "input_tokens": 2, "output_tokens": 4, **cached}
+    assert sum(reply.usage[key] for key in TOKENS) == 33725  # not 6: most of it was cached
 
 
 def test_parse_events_falls_back_to_assistant_text() -> None:
@@ -222,6 +225,12 @@ def test_claude_codes_own_steps_and_thinking_are_reported_as_they_come(tmp_path:
         '{"type":"user","message":{"content":"a string, not blocks"}}\n',
         "[1, 2]\n",  # JSON, but not an event
         "not JSON at all\n",
+        # Malformed events are skipped, and never fail the turn.
+        '{"type":"assistant","message":"not an object"}\n',
+        '{"type":"assistant","message":{"content":"a string"}}\n',
+        '{"type":"assistant","message":{"content":[1, "x", null]}}\n',
+        assistant({"type": "tool_use", "id": "g", "name": "Glob", "input": ["*.py"]}),
+        '{"type":"assistant"}\n',
         json.dumps({"type": "result", "is_error": False, "result": "ok", "session_id": "s"}),
     ]
     turn, handled = make_turn(tmp_path), []
@@ -235,10 +244,11 @@ def test_claude_codes_own_steps_and_thinking_are_reported_as_they_come(tmp_path:
     assert reply.text == "ok"
     assert turn.ctx.services.channels.events == [
         ("thinking", {"text": "Let me look at the files first."}),
-        ("step", {"label": "Bash ls -la", "seconds": None}),  # never the description
+        ("step", {"label": "Bash ls", "seconds": None}),  # the program only, never the description
         ("step", {"label": "Read src/app.py", "seconds": None}),
+        ("step", {"label": "Glob", "seconds": None}),  # its input was not an object
     ]
-    assert handled == [1, 2, 2, 3, 3, 3, 3, 3]  # each one as its line arrived
+    assert handled == [1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4]  # each one as its line arrived
 
 
 def test_run_uses_a_stable_cwd_outside_home(tmp_path: Path) -> None:

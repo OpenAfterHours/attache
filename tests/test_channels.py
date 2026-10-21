@@ -337,6 +337,27 @@ def test_summary_and_footer() -> None:
     assert channels.footer({**finished, "tokens": 812}) == "4.2s · 812 tokens · claude"
     assert channels.footer({**finished, "tokens": None}) == "4.2s · claude"  # not known
     assert channels.footer({**finished, "tokens": 9, "stopped": True}) == "stopped · 4.2s"
+    failed = {"seconds": 0.0, "route": None}  # it failed before a route was chosen
+    assert channels.footer({**failed, "tokens": None}) == "0.0s"
+    assert channels.footer({**failed, "tokens": 12}) == "0.0s · 12 tokens"
+
+
+def test_the_terminal_prints_no_control_characters(capsys: pytest.CaptureFixture[str]) -> None:
+    term = TerminalChannel("Alex", "http://x")
+    # What steered model text could carry: a window title (OSC 0), a clipboard write (OSC 52),
+    # a carriage return to overwrite the line, a cursor move, and C1 CSI (0x9b) and DEL.
+    hostile = "ok\x1b]0;pwned\x07 \x1b]52;c;ZXZpbA==\x07\rfake\x1b[2A\x9b31m\x7f\tend\nnext"
+
+    async def main() -> None:
+        await term.send(Outbound("local:me", hostile, [f"C:/files/{hostile}.pdf"]))
+        await term.activity("me", "step", {"label": f"Bash echo {hostile}", "seconds": None})
+        await term.activity("me", "thinking", {"text": hostile})
+        await term.activity("me", "finished", {"seconds": 1, "tokens": 1, "route": hostile})
+
+    asyncio.run(main())
+    out = capsys.readouterr().out
+    assert not any((ord(c) < 32 and c not in "\t\n") or 0x7F <= ord(c) <= 0x9F for c in out)
+    assert "attaché> ok]0;pwned ]52;c;ZXZpbA==fake[2A31m\tend\nnext" in out  # text stays
 
 
 def test_terminal_trail(capsys: pytest.CaptureFixture[str]) -> None:

@@ -25,7 +25,14 @@ def make_turn(tools: list[Tool], role: str = "owner", chat: str = "local:me") ->
 
 
 def test_label_names_the_tool_and_a_few_arguments_never_contents() -> None:
-    assert label("run", {"command": "ls -la " + "x" * 60, "timeout": 5}) == "run ls -la " + "x" * 33
+    command = 'curl -H "Authorization: Bearer s3cret" https://x.example/a'
+    assert label("run", {"command": command, "timeout": 5}) == "run curl"  # the program only
+    assert label("run", {"command": "x" * 60}) == "run " + "x" * 40
+    url = "https://example.com/files/report.pdf?token=s3cret#page=2"
+    assert label("WebFetch", {"url": url}) == "WebFetch https://example.com/files/report.pdf"
+    spec = {"skill": "docx", "script": "make.py", "args": ['{"title": "My diary"}', "out.docx"]}
+    assert label("script", spec) == "script docx"  # an inline spec is contents
+    assert label("Glob", ["*.py"]) == "Glob" and label(None, None) == "None"  # from a stream
     assert label("db", {"op": "put", "collection": "todos", "data": {"x": 1}}) == "db put todos"
     assert label("script", {"skill": "mail", "script": "mail.py", "args": ["inbox", "--n=5"]}) == (
         "script mail inbox"

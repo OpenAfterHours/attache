@@ -22,7 +22,11 @@ attache run              # web page, reminders and channels, no terminal chat
 attache doctor           # check your setup
 attache skill mail login gmail   # a skill's own setup step, run in your terminal
 attache skill service install    # start Attaché when you log in
+attache skill tui                # a full-screen terminal app (docs/terminal.md)
 ```
+
+While a turn runs, the terminal shows what Attaché is doing: `working…`, each step with its
+time, a line of Claude's thinking, and a footer with time and tokens. Ctrl+C stops a turn.
 
 ![The web page: chat on the left, the Home page with to-dos and reminders on the right](docs/phase-1-ui.png)
 

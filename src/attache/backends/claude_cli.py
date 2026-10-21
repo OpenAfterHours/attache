@@ -23,7 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from attache.agent import label, progress
+from attache.agent import TOKENS, label, progress
 from attache.channels import PIPE, SPAWN, kill_tree
 from attache.types import Endpoint, Reply, Turn, TurnContext
 
@@ -149,15 +149,25 @@ def _event(line: str) -> dict[str, Any]:
     return {}
 
 
+def _blocks(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """An assistant event's content blocks; none for any other event, or a malformed one, so a
+    bad event never fails the turn."""
+    message = event.get("message")
+    if event.get("type") != "assistant" or not isinstance(message, dict):
+        return []
+    return [block for block in message.get("content") or [] if isinstance(block, dict)]
+
+
 async def _report(ctx: TurnContext, event: dict[str, Any]) -> None:
     """Claude Code's thinking, and its own tools as steps (agent.progress; seconds None, as the
     stream doesn't say). Its calls to Attaché's tools (mcp__...) are left out: they come
     through the MCP endpoint, where run_tool reports them."""
-    for block in event["message"]["content"] if event.get("type") == "assistant" else []:
-        if block.get("type") == "thinking":
-            await progress(ctx, "thinking", text=block.get("thinking", ""))
-        elif block.get("type") == "tool_use" and not block["name"].startswith("mcp__"):
-            await progress(ctx, "step", label=label(block["name"], block["input"]), seconds=None)
+    for block in _blocks(event):
+        kind, name = block.get("type"), str(block.get("name"))
+        if kind == "thinking":
+            await progress(ctx, "thinking", text=str(block.get("thinking", "")))
+        elif kind == "tool_use" and not name.startswith("mcp__"):
+            await progress(ctx, "step", label=label(name, block.get("input")), seconds=None)
 
 
 def parse_events(lines: Iterable[str]) -> Reply:
@@ -168,13 +178,13 @@ def parse_events(lines: Iterable[str]) -> Reply:
     Non-JSON lines are ignored."""
     events = [_event(line) for line in lines]
     result = next((e for e in reversed(events) if e.get("type") == "result"), {})
-    blocks = [b for e in events if e.get("type") == "assistant" for b in e["message"]["content"]]
+    blocks = [block for event in events for block in _blocks(event)]
     if result.get("is_error"):
         message = result.get("result") or "; ".join(result.get("errors") or ["claude failed"])
         used_tools = any(b.get("type") == "tool_use" for b in blocks)
         stale = not used_tools and any(s in message.lower() for s in RESET_ON)
         raise (StaleSessionError if stale else RuntimeError)(message)
-    usage = {k: (result.get("usage") or {}).get(k) for k in ("input_tokens", "output_tokens")}
+    usage = {k: (result.get("usage") or {}).get(k) for k in TOKENS}
     usage["cost_usd"] = result.get("total_cost_usd")
     text = result.get("result") or "\n\n".join(b["text"] for b in blocks if b.get("type") == "text")
     return Reply(text, {"session_id": result.get("session_id")}, usage)

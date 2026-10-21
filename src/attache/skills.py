@@ -24,6 +24,9 @@ AUTHOR = ("-c", "user.name=Attaché", "-c", "user.email=attache@localhost")  # n
 # Run from <home>, every git command names <home>'s own repository, so a home with no .git of
 # its own (one inside another repository, say) fails rather than commit or undo in the outer one.
 GIT = ("git", "--git-dir=.git", "--work-tree=.")
+# Never Attaché's own stdin: on Windows, git given a piped one (Git Bash, an IDE's console)
+# waits at start behind the terminal chat's reader thread, so every commit would hang.
+QUIET = {"stdin": subprocess.DEVNULL, "capture_output": True, "encoding": "utf-8"}
 FRONTMATTER = re.compile(r"---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
@@ -88,7 +91,7 @@ def git(home: Path, *args: str) -> str | None:
     """Run git in <home>'s own repository (GIT); stdout, or None when git is missing, the
     repository doesn't exist yet, or the command fails."""
     try:
-        result = subprocess.run([*GIT, *args], cwd=home, capture_output=True, encoding="utf-8")
+        result = subprocess.run([*GIT, *args], cwd=home, **QUIET)
     except OSError:  # no git binary, or no such folder
         return None
     if result.returncode != 0:

@@ -43,8 +43,17 @@ from typing import Any
 LINK = re.compile(r"Open (https?://[^\s/]+)/#t=([\w-]+)")  # what `attache run` prints
 HINT = "Attaché may already be running; stop it or use its web page."
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-HINTS = "ctrl+o steps · esc stop · ctrl+l log · ctrl+d quit"
-STOP_SECONDS = 10.0  # for the child to stop by itself before its tree is killed
+# Its own process group (Windows; start_new_session is ignored there) or session (POSIX), so
+# the terminal's keys never reach it, and a CTRL_BREAK or killpg reaches it alone.
+NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)  # 0 off Windows
+GROUP = {"start_new_session": True, "creationflags": NEW_GROUP}
+
+
+def clean(text: str) -> str:
+    """Text with its control characters taken out (C0 and C1, ESC among them, but not
+    newline and tab) before it reaches the screen: Rich's Text would keep them, and a
+    message could then move the cursor or retitle the terminal."""
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text)
 
 
 def child_argv(env: Mapping[str, str]) -> list[str]:
@@ -62,7 +71,7 @@ def read_link(lines: Iterable[str], seen: MutableSequence[str]) -> tuple[str, st
     for line in lines:
         if match := LINK.search(line):
             return match[1], match[2]
-        seen.append(line.rstrip("\n"))
+        seen.append(clean(line.rstrip("\n")))
     return None
 
 
@@ -78,10 +87,8 @@ def summary(text: str) -> str:
     return sentence if len(sentence) <= 100 else sentence[:99].rstrip() + "…"
 
 
-def tokens_text(count: int | None) -> str:
-    """3.1k tokens for thousands; nothing when the route did not say."""
-    if count is None:
-        return ""
+def tokens_text(count: int) -> str:
+    """3.1k tokens for thousands."""
     return f"{count / 1000:.1f}k tokens" if count >= 1000 else f"{count} tokens"
 
 
@@ -147,6 +154,13 @@ class State:
         """The latest question still waiting, which number keys answer."""
         return next(reversed(self.asks.values()), None)
 
+    def choice(self, key: str) -> tuple[dict[str, Any], str] | None:
+        """(the open question, its option) for a number key such as "2"; else None."""
+        ask = self.open_ask()
+        if ask and key.isdecimal() and 1 <= int(key) <= len(ask["options"]):  # not "²"
+            return ask, ask["options"][int(key) - 1]
+        return None
+
     def activity(self, event: dict[str, Any], now: float) -> None:
         """An "activity" event: {kind: started | step | thinking | finished, ...data}."""
         kind = event.get("kind")
@@ -161,19 +175,21 @@ class State:
             self.turn.thoughts.append(event.get("text") or "")
         elif kind == "finished":
             took = f"{event.get('seconds') or 0.0:.1f}s"
-            used = " · ".join(filter(None, [took, tokens_text(event.get("tokens")), self.route]))
+            count = event.get("tokens")  # None when the route did not say
+            used = " · ".join(filter(None, [took, count and tokens_text(count), self.route]))
             footer = f"stopped · {took}" if event.get("stopped") else used
             self.done = ("■ " if event.get("stopped") else "✓ done · ") + footer
             self.entries.append(("footer", footer))
             self.turn = None
 
-    def status(self, now: float, frame: int) -> str:
-        """The live line above the input box: the running turn's latest step, or Thinking."""
+    def status(self, now: float) -> str:
+        """The live line above the input box: the running turn's latest step, or Thinking,
+        after a spinner that moves on every tenth of a second."""
         if self.turn is None:
             return self.done
         doing = self.turn.steps[-1][0] if self.turn.steps else "Thinking"
         took = now - self.turn.since
-        return f"{SPINNER[frame % len(SPINNER)]} {doing} · {took:.0f}s · esc to stop"
+        return f"{SPINNER[int(now * 10) % len(SPINNER)]} {doing} · {took:.0f}s · esc to stop"
 
     def lines(self) -> list[tuple[str, str]]:
         """The transcript as (style, text) lines, each turn's steps and thinking under it."""
@@ -212,23 +228,18 @@ def turn_lines(turn: Turn, expanded: bool) -> list[tuple[str, str]]:
 
 
 def start(argv: list[str], popen: Callable[..., Any] = subprocess.Popen) -> Any:
-    """Start Attaché in its own process group, so keys pressed in this terminal never reach
-    it, with stdout and stderr on one pipe."""
-    if os.name == "nt":
-        group: dict[str, Any] = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    else:
-        group = {"start_new_session": True}
+    """Start Attaché in its own process group (GROUP), with stdout and stderr on one pipe."""
     pipes = {"stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
     text = {"text": True, "encoding": "utf-8", "errors": "replace", "bufsize": 1}
-    return popen(argv, **pipes, **text, **group)
+    return popen(argv, **pipes, **text, **GROUP)
 
 
 def stop(proc: Any, windows: bool = os.name == "nt", run: Callable[..., Any] = subprocess.run):
-    """Stop the child as Ctrl+C would, wait STOP_SECONDS, then kill its whole tree. (Popen's
+    """Stop the child as Ctrl+C would, wait 10 seconds, then kill its whole tree. (Popen's
     send_signal does nothing once the process has exited.)"""
     proc.send_signal(signal.CTRL_BREAK_EVENT if windows else signal.SIGINT)
     try:
-        proc.wait(STOP_SECONDS)
+        proc.wait(10)
     except subprocess.TimeoutExpired:
         if windows:
             run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
@@ -243,6 +254,7 @@ def make_app(proc: Any, base: str, token: str, seen: MutableSequence[str]) -> An
     Textual's own action_quit; main() then stops the child."""
     import httpx
     from rich.text import Text
+    from textual import events
     from textual.app import App
     from textual.binding import Binding
     from textual.containers import VerticalScroll
@@ -250,23 +262,31 @@ def make_app(proc: Any, base: str, token: str, seen: MutableSequence[str]) -> An
 
     styles = {"bot": "", "you": "bold", "think": "dim italic", "ask": "yellow", "error": "red"}
 
+    class Prompt(Input):
+        """The input box. It takes printable keys before any App binding sees them, so the
+        number keys that answer a question are caught here."""
+
+        async def on_key(self, event: events.Key) -> None:
+            if not self.value and (picked := self.app.state.choice(event.character or "")):
+                event.prevent_default()  # so Input's own handler does not type it
+                await self.app.answer(*picked)
+
     class Tui(App):
         CSS = """
         #chat { height: 1fr; padding: 0 1; }
         #log { height: 12; display: none; }
-        #head, #status, #hints { padding: 0 1; }
         """
         BINDINGS = [  # noqa: RUF012 - Textual reads it from the class; ctrl+q quits already
             Binding("ctrl+o", "steps", "steps"),
             Binding("escape", "stop", "stop", priority=True),
             Binding("ctrl+l", "log", "log"),
             Binding("ctrl+d", "quit", "quit", priority=True),  # Input's delete-right otherwise
-            *(Binding(str(n), f"digit({n})", show=False, priority=True) for n in range(1, 10)),
         ]
 
         def __init__(self) -> None:
             super().__init__()
-            self.state, self.frame, self.goodbye, self.code = State(), 0, "", 0
+            self.state = State()
+            self.goodbye, self.code = "", 0  # set if Attaché stops by itself
             headers = {"X-Attache-Token": token}  # trust_env off: never through a proxy
             self.client = httpx.AsyncClient(base_url=base, headers=headers, trust_env=False)
 
@@ -276,30 +296,35 @@ def make_app(proc: Any, base: str, token: str, seen: MutableSequence[str]) -> An
                 yield Static(id="transcript")
             yield RichLog(id="log", max_lines=2000)
             yield Static(id="status")
-            yield Input(placeholder="Message Attaché", id="input")
-            yield Static(HINTS, id="hints")
+            yield Prompt(placeholder="Message Attaché", id="input")
+            yield Static("ctrl+o steps · esc stop · ctrl+l log · ctrl+d quit", id="hints")
 
         def on_mount(self) -> None:
             log = self.query_one(RichLog)
-            for line in seen:
-                log.write(line)
+            log.write("\n".join(seen))  # what Attaché printed before its link
             threading.Thread(target=self.pump, args=[log], daemon=True).start()
-            self.run_worker(self.listen())
+            self.run_worker(self.listen())  # which draws the chat once it has loaded
             self.set_interval(0.1, self.tick)
-            self.show()
 
         def pump(self, log: RichLog) -> None:
-            """A thread: the child's output into the log, then its exit."""
-            with contextlib.suppress(RuntimeError):  # the app has ended
-                for line in proc.stdout:
-                    seen.append(line.rstrip("\n"))  # a deque: safe from this thread
-                    self.call_from_thread(log.write, seen[-1])
-                self.call_from_thread(self.gone, proc.wait())
+            """A thread: the child's output into the log, then its exit. It reads to the end
+            even once the app has closed, so the pipe never fills while Attaché stops."""
+            for line in proc.stdout:
+                seen.append(clean(line.rstrip("\n")))  # a deque: safe from this thread
+                self.later(log.write, seen[-1])
+            self.later(self.gone, proc.wait())
+
+        def later(self, *call: Any) -> None:
+            """call_from_thread while the app runs; nothing once it has ended."""
+            with contextlib.suppress(RuntimeError):  # it ended just now
+                if self.is_running:  # else the call would be left waiting, never run
+                    self.call_from_thread(*call)
 
         def gone(self, code: int) -> None:
             """Attaché stopped by itself: say so, with its last lines, once the app is closed."""
             last = [line for line in seen if line.strip()][-5:]
-            self.goodbye, self.code = "\n".join([f"Attaché stopped (exit code {code}).", *last]), 1
+            self.goodbye = "\n".join([f"Attaché stopped (exit code {code}).", *last])
+            self.code = 1
             self.exit()
 
         async def listen(self) -> None:
@@ -332,29 +357,28 @@ def make_app(proc: Any, base: str, token: str, seen: MutableSequence[str]) -> An
             self.show()
 
         def show(self) -> None:
+            """Draw everything again. Every string from Attaché goes through clean()."""
             text = Text()
             for style, line in self.state.lines():
-                text.append(line + "\n", style=styles.get(style, "dim"))  # steps, footers
+                text.append(clean(line) + "\n", style=styles.get(style, "dim"))  # steps, footers
             self.query_one("#transcript", Static).update(text)
             self.query_one("#chat").scroll_end(animate=False)
             route = f" · {self.state.route}" if self.state.route else ""
-            self.query_one("#head", Static).update(Text(f"Attaché · local:me{route}", "bold"))
-            self.tick(advance=False)
+            self.query_one("#head", Static).update(Text(clean(f"Attaché · local:me{route}")))
+            self.tick()
 
-        def tick(self, advance: bool = True) -> None:
-            if advance:
-                self.frame += 1  # the spinner's next frame
-            status = self.state.status(time.monotonic(), self.frame)
-            self.query_one("#status", Static).update(Text(status))
+        def tick(self) -> None:
+            status = self.state.status(time.monotonic())
+            self.query_one("#status", Static).update(Text(clean(status)))
 
         async def post(self, path: str, data: dict[str, Any]) -> dict[str, Any] | None:
+            """POST to Attaché: its JSON reply, or None after showing the error."""
             try:
                 reply = await self.client.post(path, json=data)
                 return reply.raise_for_status().json()
             except httpx.HTTPError as error:
                 self.state.entries.append(("error", f"{path}: {error}"))
                 self.show()
-                return None
 
         async def on_input_submitted(self, event: Input.Submitted) -> None:
             """Send a message. Its turn shows from the "started" event, at once."""
@@ -369,14 +393,6 @@ def make_app(proc: Any, base: str, token: str, seen: MutableSequence[str]) -> An
             if reply is not None:
                 self.state.answered(ask["ask_id"], choice if reply.get("ok") else "(closed)")
                 self.show()
-
-        async def action_digit(self, number: int) -> None:
-            """A number key answers the open question while the input box is empty."""
-            prompt, ask = self.query_one(Input), self.state.open_ask()
-            if ask and not prompt.value and number <= len(ask["options"]):
-                await self.answer(ask, ask["options"][number - 1])
-            else:
-                prompt.insert_text_at_cursor(str(number))
 
         async def action_stop(self) -> None:
             await self.post("/api/stop", {})

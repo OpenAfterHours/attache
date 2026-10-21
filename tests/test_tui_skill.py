@@ -89,10 +89,18 @@ def test_start_puts_the_child_in_its_own_group() -> None:
     assert argv == ["attache", "run"]
     assert options["stdout"] == subprocess.PIPE and options["stderr"] == subprocess.STDOUT
     assert options["stdin"] == subprocess.DEVNULL and options["encoding"] == "utf-8"
-    if sys.platform == "win32":  # CTRL_BREAK reaches it; the terminal's Ctrl+C does not
-        assert options["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        assert options["start_new_session"] is True
+    # its own group: CTRL_BREAK and killpg reach it, the terminal's Ctrl+C does not. Each
+    # system ignores the other's option (creationflags is 0 off Windows)
+    assert options["start_new_session"] is True
+    assert options["creationflags"] == getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+
+def test_control_characters_never_reach_the_screen() -> None:
+    hostile = "red\x1b[31m\x1b]0;title\x07 \x9b2J back\rover\x00 é\ttab\nnext\x7f"
+    assert tui.clean(hostile) == "red[31m]0;title 2J backover é\ttab\nnext"
+    seen: list[str] = []
+    tui.read_link(["\x1b[2Jcleared?\n"], seen)
+    assert seen == ["[2Jcleared?"]  # the log pane and the goodbye get clean lines too
 
 
 class Child:
@@ -215,16 +223,16 @@ def test_a_turn_from_start_to_finish() -> None:
     state = tui.State()
     state.activity({"kind": "started", "route": "claude"}, now=100.0)
     assert state.route == "claude"  # for the header
-    assert state.status(now=101.0, frame=0) == "⠋ Thinking · 1s · esc to stop"
+    assert state.status(now=101.0) == "⠋ Thinking · 1s · esc to stop"
     state.activity({"kind": "thinking", "text": "Calendar first. Then mail from Dan."}, 101.0)
     state.activity({"kind": "step", "label": "script mail agenda", "seconds": 1.1}, 102.0)
     state.activity({"kind": "step", "label": "Bash ls -la", "seconds": None}, 103.0)
-    assert state.status(now=105.4, frame=3) == "⠸ Bash ls -la · 5s · esc to stop"
+    assert state.status(now=105.4) == "⠼ Bash ls -la · 5s · esc to stop"
     state.message({"chat_key": "local:me", "text": "Tomorrow: the dentist at 9.", "files": []})
     assert state.turn is not None  # the reply comes before "finished"
     state.activity({"kind": "finished", "seconds": 14.2, "tokens": 3120, "route": "claude"}, 114)
     assert state.turn is None
-    assert state.status(200, 0) == "✓ done · 14.2s · 3.1k tokens · claude"
+    assert state.status(200) == "✓ done · 14.2s · 3.1k tokens · claude"
     assert state.lines() == [
         ("think", "▸ Thinking · Calendar first.   ctrl+o"),
         ("step", "● script mail agenda  ✓ 1.1s"),
@@ -259,7 +267,7 @@ def test_a_stopped_turn() -> None:
     state = tui.State()
     state.activity({"kind": "started", "route": "claude"}, 0)
     state.activity({"kind": "finished", "seconds": 3.24, "tokens": None, "stopped": True}, 3)
-    assert state.status(5, 0) == "■ stopped · 3.2s"
+    assert state.status(5) == "■ stopped · 3.2s"
     assert state.lines()[-1] == ("footer", "stopped · 3.2s") and state.turn is None
 
 
@@ -289,6 +297,10 @@ def test_questions_from_the_stream() -> None:
     state.ask({"ask_id": "q1", "text": "Approve?", "options": ["Approve", "Decline"]})
     state.ask({"ask_id": "q2", "text": "Send?", "options": ["Send", "Not now"]})
     assert state.open_ask()["ask_id"] == "q2"  # the latest is the one number keys answer
+    # what the input box asks when a key is pressed in it while it is empty
+    assert state.choice("2") == (state.asks["q2"], "Not now")
+    assert [state.choice(key) for key in ("0", "3", "a", "", "²")] == [None] * 5
+    assert tui.State().choice("1") is None  # no question open: the key is typed
     state.answered("q2", "(closed)")
     assert state.open_ask()["ask_id"] == "q1"
     assert state.lines() == [
@@ -306,4 +318,3 @@ def test_small_formats() -> None:
     long = tui.summary("word " * 60)
     assert len(long) == 100 and long.endswith("…")
     assert tui.tokens_text(3120) == "3.1k tokens" and tui.tokens_text(980) == "980 tokens"
-    assert tui.tokens_text(None) == ""

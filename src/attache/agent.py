@@ -11,6 +11,7 @@ label() names the tool and a few arguments, never contents.
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -22,6 +23,11 @@ MAX_TOOL_OUTPUT = 20_000  # characters; longer results are cut with a note sayin
 # The only arguments a step's label shows (40 characters each): never text, html, data, body,
 # summary or question. Ours, then Claude Code's own tools' (claude_cli).
 LABELLED = ("skill", "op", "collection", "path", "name", "command", "file_path", "pattern", "url")
+# A label's word: up to the first space, "?" or "#", so a command shows only its program and a
+# URL no query or fragment (where tokens go); 40 characters at most.
+WORD = re.compile(r"[^\s?#]{0,40}")
+# A turn's tokens (the router's "finished"): the cached ones count too, often most of them.
+TOKENS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 
 @dataclass
@@ -61,11 +67,14 @@ async def progress(ctx: TurnContext, kind: str, **data: Any) -> None:
         await ctx.services.channels.activity(ctx.chat_key, kind, **data)
 
 
-def label(name: str, args: dict[str, Any]) -> str:
-    """A step's label: the tool's name and its LABELLED arguments, plus script's first arg (as
-    in "script mail inbox"), at most 80 characters."""
+def label(name: Any, args: Any) -> str:
+    """A step's label: the tool's name and the first word (WORD) of each LABELLED argument, plus
+    script's first arg (as in "script mail inbox") unless it is an inline spec {...}; at most
+    80 characters. args may be anything a model or a stream sent: only a dict has words."""
+    args = args if isinstance(args, dict) else {}
     values = [args.get(key) for key in LABELLED] + list(args.get("args") or [])[:1]
-    return " ".join([name, *(value[:40] for value in values if isinstance(value, str))])[:80]
+    words = [WORD.match(v)[0] for v in values if isinstance(v, str) and not v.startswith("{")]
+    return " ".join([str(name), *words])[:80]
 
 
 async def run_tool(call: ToolCall, turn: Turn) -> str:
