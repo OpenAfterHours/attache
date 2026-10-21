@@ -37,6 +37,14 @@ port = 8765
 # enabled = true
 # number = "+447700900123"  # every other key reaches the program as ATTACHE_<KEY>
 
+# People in [people] with an `email` can write to Attaché by email, mentioning @attache; it
+# answers in the thread. Never put an email address in [owner.ids]. See docs/channels.md.
+# [channels.email]
+# enabled = true
+# account = "gmail"     # a section of skills/mail/accounts.toml: the inbox it watches
+# every = "60"          # seconds between checks
+# mention = "@attache"  # what a message must contain (case and accents don't matter)
+
 # Turns from anyone but you are rate limited. These are the defaults.
 # [limits]
 # per_sender_hour = 20  # turns per person per hour
@@ -70,6 +78,7 @@ key_env = "ANTHROPIC_API_KEY"
 # name = "Sam"
 # role = "member"  # member | guest
 # slack = "U0123"
+# email = "sam@example.com"  # in lower case, as their mail comes From
 
 # Group chats Attaché answers in, keyed "<channel>:<chat id>". Unlisted groups are ignored.
 # [chats."slack:C0123"]

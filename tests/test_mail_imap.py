@@ -349,6 +349,8 @@ def test_list_filters_and_limits() -> None:
     search = [call for call in fake.calls if call[0] == "search"][-1]
     assert search[2] == ["UNSEEN", "SINCE", date(2026, 10, 18), "TEXT", "boiler"]
     assert search[3] == "UTF-8"
+    dates, bodies = (call for call in fake.calls[-2:])  # the exact time before any body
+    assert dates[2:] == ([2, 3, 4], [b"INTERNALDATE"]) and bodies[2] == [3, 4]
     assert backend.list("INBOX", False, 25, None, None) == []
 
 
@@ -500,6 +502,32 @@ def test_a_reply_draft_threads_and_replies_to_all() -> None:
     everyone = backend.draft(None, None, None, "Thursday works.", original, True)
     assert everyone["cc"] == ["ann@example.com", "sam@example.com"]  # not the owner, once each
     assert "quote" not in everyone["body"].lower()  # the original isn't quoted
+
+
+def test_a_reply_to_given_addresses_never_uses_reply_to() -> None:
+    """The email channel answers the From address alone, whatever Reply-To says."""
+    fake = FakeIMAP()
+    original = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))
+    reply = titan(fake).draft(["dan@example.com"], [], None, "Done.", original, False)
+    assert (reply["to"], reply["cc"], reply["bcc"]) == (["dan@example.com"], [], [])
+    assert reply["subject"] == "Re: Boiler service quote"
+    saved = email.message_from_bytes(fake.messages("Brouillons")[1]["raw"])
+    assert saved["In-Reply-To"] == "<quote-1@example.com>"  # still in the thread
+
+
+def test_headers_are_the_block_as_received() -> None:
+    fake = FakeIMAP()
+    native = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))
+    block = titan(fake).headers(native)
+    assert block.splitlines()[:2] == [
+        "From: Dan Price <dan@example.com>",
+        "Reply-To: Dan Price <quotes@example.com>",
+    ]  # top first, as received
+    assert "Message-ID: <quote-1@example.com>" in block and "Hi, attached" not in block
+    fake = FakeIMAP(gmail=True)
+    fake.add("INBOX", fixture("plain"))
+    assert gmail(fake).headers("1801234567890123456").startswith("From: Dan Price")
+    assert SEEN not in fake.messages("INBOX")[1]["flags"]  # a peek: nothing marked read
 
 
 def edit_draft(fake: FakeIMAP, folder: str, change: Any) -> None:

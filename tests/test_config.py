@@ -154,14 +154,16 @@ def test_template_examples_load_when_uncommented(home: Path) -> None:
     assert cfg.endpoints["openai"].api == "openai-responses"
     assert cfg.endpoints["local"].base_url == "http://localhost:11434/v1"
     sam = cfg.people["sam"]
-    assert (sam.name, sam.role, sam.ids) == ("Sam", "member", {"slack": "U0123"})
+    assert (sam.name, sam.role) == ("Sam", "member")
+    assert sam.ids == {"slack": "U0123", "email": "sam@example.com"}
     family = cfg.chats["slack:C0123"]
     assert (family.name, family.members, family.endpoint) == ("Family", ["sam"], "claude-api")
     assert cfg.approvals == "slack:D0ALEXDM"
-    assert set(cfg.owner.ids) == {"slack", "signal"}
+    assert set(cfg.owner.ids) == {"slack", "signal"}  # never email: see docs/channels.md
     assert cfg.channels == {
         "slack": {"enabled": True},
         "signal": {"enabled": True, "number": "+447700900123"},
+        "email": {"enabled": True, "account": "gmail", "every": "60", "mention": "@attache"},
     }
     assert cfg.limits == config.LIMITS  # the examples show the defaults
     assert (cfg.public_url, cfg.public_port) == ("https://pc.tailnet.ts.net", 8766)

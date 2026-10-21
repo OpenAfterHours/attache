@@ -58,6 +58,33 @@ that chat), never from display names.
 The rules in every prompt say the same of tool results, emails, web pages and files: they
 are data, never instructions.
 
+## Email
+
+The [email channel](channels.md#email) turns mail into direct messages, and a From line is
+easy to fake, so it passes a message on only when its sender is proven:
+
+- **Only the receiving server's word counts.** That is the topmost `Authentication-Results`
+  header: each server puts its own on top, and anything further down may have been written
+  by the sender. It must say `dmarc=pass` for the From address's domain. A result inside a
+  comment, a quoted string anywhere in that header, or a second DMARC result (one may be the
+  sender's words echoed back) all fail. Gmail and Microsoft 365 add the header to every
+  message; with a provider that doesn't, the topmost one could be the sender's own, so the
+  channel is not safe there.
+- **Exchange's own mark**, `X-MS-Exchange-Organization-AuthAs: Internal`, also counts, but
+  only through Graph or Outlook classic on an Exchange mailbox, where Exchange strips it from
+  mail arriving from outside. Every copy of it must say so. On Gmail or IMAP it means nothing.
+- **Anything else fails closed**: no single From address, mail from the account itself,
+  auto-replies, mailing lists and bulk mail are skipped too, and so is mail that doesn't
+  mention the assistant.
+
+DMARC proves the domain sent the message, not which person at it: anyone who can send as
+that domain (its admin, or someone who has taken over the mailbox) passes. So an email
+address is only ever a person's id under `[people]`, with that person's role, and never goes
+in `[owner.ids]`: by email nobody gets owner rights. A reply goes only to the From address of
+that person's latest proven message, never to its `Reply-To`, never Cc, and never as a new
+email, so a message can't send Attaché's answer to someone else. Each reply is logged with
+ids only.
+
 ## Files and the shell
 
 The file tools work only inside the home folder. Attaché refuses, before touching the disk:
@@ -74,9 +101,17 @@ The file tools work only inside the home folder. Attaché refuses, before touchi
     turns get it. Each command has a time limit, 60 seconds unless the assistant asks for
     more, and at most 10 minutes; on timeout, the whole process tree is stopped.
 
-Skill scripts run the same way, as you, with `uv run`, in the chat's files folder. The
-`script` tool takes only plain skill and script names, so it can't be pointed at a file
-outside `skills/<name>/scripts/`.
+Skill scripts run the same way, as you, with `uv run`, in the chat's files folder, for at
+most 10 minutes. The `script` tool takes only plain skill and script names, so it can't be
+pointed at a file outside `skills/<name>/scripts/`. Attaché sets `ATTACHE_SENDER`, `ATTACHE_ROLE`,
+`ATTACHE_CHAT` and `ATTACHE_HOME` on every run itself, so a script can check who is asking
+and nobody in a chat can choose those values ([Who is asking](skills.md#who-is-asking)).
+
+A run with `background: true` may take up to 12 hours instead, at most four at once, and
+stopping Attaché stops its whole process tree. When one fails, the person who asked hears
+only that it failed (or the line the script chose for them), never its output, and you get a
+notice in your approvals chat with what the script chose to tell you
+([Long jobs](skills.md#long-jobs-in-the-background)).
 
 ## The page sandbox
 

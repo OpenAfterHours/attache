@@ -241,7 +241,7 @@ def test_for_members() -> None:
 def test_script_member_gating(services: app.Services, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple[list[str], Path]] = []
 
-    async def fake_exec(cmd: list[str], cwd: Path, timeout: float) -> str:
+    async def fake_exec(cmd: list[str], cwd: Path, timeout: float, env: Any = None) -> str:
         seen.append((cmd, cwd))
         return "{}"
 

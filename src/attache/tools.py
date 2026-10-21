@@ -37,10 +37,18 @@ PRIVATE = {".secret", ".git", ".claude", "claude.md", ".mail", ".approvals"}
 WEB = ("http://", "https://")
 # ask's refusal for a fingerprint without the preview its mail command writes (.approvals/)
 NO_PREVIEW = "no preview for that fingerprint: run the mail command that drafts it first"
-NUM, ARRAY = {"type": "number"}, {"type": "array", "items": {"type": "string"}}
-TYPES = {"timeout": NUM, "in_minutes": NUM, "all": {"type": "boolean"}, "data": {"type": "object"}}
-TYPES |= {"args": ARRAY, "files": ARRAY, "options": ARRAY}  # every other argument is a string
+NUM, BOOL = {"type": "number"}, {"type": "boolean"}
+ARRAY = {"type": "array", "items": {"type": "string"}}
+TYPES = {"timeout": NUM, "in_minutes": NUM, "all": BOOL, "background": BOOL}
+# every other argument is a string
+TYPES |= {"data": {"type": "object"}, "args": ARRAY, "files": ARRAY, "options": ARRAY}
 TOOLS: list[Tool] = []
+# Background scripts (script, background true): how many may run at once across Attaché, for
+# how long, and the runs going now.
+MAX_BACKGROUND, BACKGROUND_SECONDS = 4, 12 * 3600
+RUNNING: set[asyncio.Task[Any]] = set()
+STARTED = "Running in the background: its result will be posted in this chat when it ends."
+FAILED = "Sorry, that didn't finish. I've let {} know."
 
 
 def slug(text: str) -> str:
@@ -119,11 +127,12 @@ def _tool(fields: str, roles: frozenset[str] = OWNER, description: str = "") -> 
     return register
 
 
-async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
-    """Run a command (a string runs in the shell); JSON {exit_code, output}. On timeout
-    channels.kill_tree kills the whole process tree and reaps it, so its pipes close."""
-    # start_new_session: on POSIX its own process group, which kill_tree kills as one
-    kw = {"cwd": cwd, "stdin": DEVNULL, "stdout": PIPE, "stderr": STDOUT, "start_new_session": True}
+async def _exec(cmd: str | list[str], cwd: Path, timeout: float, env: dict | None = None) -> str:
+    """Run a command (a string runs in the shell), with env (None: Attaché's own); JSON
+    {exit_code, output}. On timeout or cancellation channels.kill_tree kills the whole process
+    tree and reaps it, so its pipes close."""
+    kw = {"cwd": cwd, "env": env, "stdin": DEVNULL, "stdout": PIPE, "stderr": STDOUT}
+    kw["start_new_session"] = True  # on POSIX its own process group, which kill_tree kills
     if isinstance(cmd, str):
         proc = await asyncio.create_subprocess_shell(cmd, **kw)
     else:
@@ -131,8 +140,9 @@ async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
-        await channels.kill_tree(proc)
         raise TimeoutError(f"stopped after {timeout:g} seconds") from None
+    finally:  # done (then it only reaps), timed out, or cancelled: nothing it started lives on
+        await channels.kill_tree(proc)
     text = out.decode("utf-8", "replace")[-OUTPUT_CAP:]
     return json.dumps({"exit_code": proc.returncode, "output": text}, ensure_ascii=False)
 
@@ -171,11 +181,13 @@ async def run(args: dict[str, Any], ctx: TurnContext) -> str:
     return await _exec(args["command"], ctx.services.home, timeout)
 
 
-@_tool("skill script args?", BOTH)
+@_tool("skill script args? background?", BOTH)
 async def script(args: dict[str, Any], ctx: TurnContext) -> str:
     """Run skills/<skill>/scripts/<script> with `uv run`, in this chat's files folder. Returns
     JSON {exit_code, output}. Without owner rights, args are file names in that folder, web
-    addresses or inline JSON objects ({...}): nothing else with /, \\, : or .. in it."""
+    addresses or inline JSON objects ({...}): nothing else with /, \\, : or .. in it.
+    background: true (when a skill says so) returns at once; the script's result is posted in
+    this chat when it ends."""
     name, file = str(args["skill"]), str(args["script"])
     if not all(channels.PLAIN_NAME.fullmatch(part) for part in (name, file)):  # no drive, ..
         raise PermissionError("give the skill and the script as plain names, without folders")
@@ -183,7 +195,8 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
     path = skill.path / "scripts" / file if skill else None
     if path is None or not path.is_file():
         raise FileNotFoundError(f"skill {name!r} has no script {file!r}")
-    owner = access(ctx.role, ctx.is_group) == "owner"
+    rights = access(ctx.role, ctx.is_group)
+    owner = rights == "owner"
     if not owner and not for_members(skill):
         raise PermissionError(f"skill {name!r} is not available in this chat")
     extra = [str(arg) for arg in args.get("args") or []]
@@ -192,7 +205,45 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
             raise PermissionError(f"{arg!r}: give a file name from this chat's folder, or a URL")
     if not (uv := shutil.which("uv")):
         raise RuntimeError("uv is not installed: see https://docs.astral.sh/uv/")
-    return await _exec([uv, "run", str(path), *extra], chat_files(ctx), 600)
+    cmd, cwd = [uv, "run", str(path), *extra], chat_files(ctx)
+    # Set on every run, over anything inherited, so a script knows who asks, with what rights.
+    env = dict(os.environ, ATTACHE_HOME=str(ctx.services.home.resolve()), ATTACHE_ROLE=rights)
+    env.update(ATTACHE_SENDER=ctx.sender.id, ATTACHE_CHAT=ctx.chat_key)
+    if not args.get("background"):
+        return await _exec(cmd, cwd, 600, env)
+    if len(RUNNING) >= MAX_BACKGROUND:
+        raise RuntimeError(f"{MAX_BACKGROUND} scripts are running in the background; try later")
+    job = ctx.services.channels.spawn(_background(ctx, f"{name}/{file}", cmd, cwd, env))
+    if job:  # None once Attaché is stopping
+        RUNNING.add(job)
+        job.add_done_callback(RUNNING.discard)
+    return json.dumps({"started": True, "note": STARTED})
+
+
+async def _background(ctx: TurnContext, label: str, cmd: list[str], cwd: Path, env: dict) -> None:
+    """A background script's run. When it ends, post the `text` of the JSON object on its
+    last output line in the chat it started in: by default "Done.", or FAILED when it exits
+    non-zero or times out. A failure also goes to the owner's approvals chat, with the
+    object's `owner` detail; in that chat itself, only that. Never the script's own output.
+    Each message is kept in its chat's history. Stopping Attaché cancels it (_exec kills)."""
+    services, owner = ctx.services, ctx.services.config.owner.name
+    try:
+        result = json.loads(await _exec(cmd, cwd, BACKGROUND_SECONDS, env))
+        code, last = result["exit_code"], (result["output"].strip().splitlines() or [""])[-1]
+    except TimeoutError:
+        code, last = None, ""
+    said = json.loads(last) if _spec(last) else {}
+    said = {key: said[key] for key in ("text", "owner") if isinstance(said.get(key), str)}
+    posts = {ctx.chat_key: said.get("text") or ("Done." if code == 0 else FAILED.format(owner))}
+    if code != 0:
+        how = "timed out" if code is None else f"exit {code}"
+        notice = f"{label} for {ctx.sender.name} in {ctx.chat_key} failed ({how})"
+        if "owner" in said:
+            notice += f": {said['owner']}"
+        posts[services.config.approvals] = notice
+    for chat, text in posts.items():
+        services.store.add_message(chat, "assistant", text)
+        await services.channels.send(Outbound(chat, text))
 
 
 def _spec(arg: str) -> bool:

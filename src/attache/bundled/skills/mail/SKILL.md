@@ -35,7 +35,7 @@ to do. Ids look like `gmail:1801234567890123456`; pass them back exactly as give
 | `search --query=Q [--account A] [--folder F] [--limit 25]` | `items`. Gmail understands its own search syntax (`--query=from:dan has:attachment`) |
 | `read ID [--max-chars 8000]` | `item`: the message with `to`, `cc`, `body` (plain text), `truncated`, `attachments` |
 | `folders [--account A]` | `items`: each folder's `path`, `unread` and `total` |
-| `agenda [--days 7]` | Outlook only: `items`, events with recurring meetings expanded |
+| `agenda [--days 7]` | Outlook only: `items`, events with recurring meetings expanded, each with `show_as`: `free`, `tentative`, `busy`, `oof` or `elsewhere` |
 | `tasks` | Outlook only: `items`, Outlook tasks or Microsoft To Do |
 | `move ID... --to FOLDER` | `moved`: the ids after the move (they change outside Gmail). On Gmail the label is added and the message leaves the inbox |
 | `flag ID... [--off]`, `mark-read ID... [--off]` | `changed` |

@@ -162,11 +162,58 @@ file name and a list of arguments:
 ```
 
 The script runs with `uv run`, in the chat's own files folder (`~/.attache/files/<chat>/`),
-with a time limit of 10 minutes. The assistant gets back the exit code and the output, and
-can send the files it made to the chat.
+with a time limit of 10 minutes (12 hours in the
+[background](#long-jobs-in-the-background)). The assistant gets back the exit code and the
+output, and can send the files it made to the chat.
 
 Use `argparse`, print a short result, and exit with a non-zero code and a clear message when
 something fails.
+
+#### Who is asking
+
+Attaché sets these environment variables on every run, over any it would otherwise inherit,
+so nobody in a chat can choose their values:
+
+| Variable | Value |
+|---|---|
+| `ATTACHE_HOME` | the home folder |
+| `ATTACHE_SENDER` | who asked: `owner`, or their key under `[people]`, such as `dan` |
+| `ATTACHE_ROLE` | the rights the request has: `owner` or `member` (you, in a group chat, are `member`) |
+| `ATTACHE_CHAT` | the chat it came from, such as `local:me` or `email:dan@example.com` |
+
+A script that does something not everyone may ask for checks `ATTACHE_ROLE`, and
+`ATTACHE_SENDER` against its own list of people. When `ATTACHE_ROLE` is missing, you ran the
+script yourself (`attache skill NAME ...` in your terminal), so it may treat the caller as
+you. Then `ATTACHE_HOME` may be missing too, so find the home folder from the script's own
+path as well: `Path(__file__).resolve().parents[3]`.
+
+#### Long jobs in the background
+
+For a job that takes longer than a reply should wait, have the skill tell the assistant to
+add `"background": true`:
+
+```json
+{"skill": "jobs", "script": "jobs.py", "args": ["start", "va"], "background": true}
+```
+
+The tool returns at once, and the assistant tells the person the job has started. The script
+runs as it would otherwise, in the same folder and with the same variables, but for up to 12
+hours. At most four run at once, and stopping Attaché stops them. When the script ends,
+Attaché posts one message in the chat it started in. Choose what it says by printing a JSON
+object as the script's last line:
+
+```json
+{"text": "The VA run failed.", "owner": "va exited with code 3 after 14 min. Log: logs/jobs/va.log"}
+```
+
+| How it ended | The chat gets | You get, in your approvals chat |
+|---|---|---|
+| exit code 0 | `text`, or `Done.` | nothing |
+| another exit code, or 12 hours up | `text`, or `Sorry, that didn't finish. I've let <your name> know.` | `<skill>/<script> for <person> in <chat> failed (exit N)`, or `(timed out)`, then `: <owner>` when the script gave one |
+
+The chat never sees the script's output, only `text`, so put nothing in `text` that the person
+who asked shouldn't read. `owner` is for you: what failed and where the log is, never the
+log itself. When the job ran in your approvals chat, you get only the message for you.
 
 ## Sharing a skill with group chats
 

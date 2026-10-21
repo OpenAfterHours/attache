@@ -1,0 +1,11 @@
+# The jobs people may ask Attaché to start: `attache skill jobs setup` copies this file to
+# jobs.toml. Each [table] is a job, and its name (lowercase letters, digits, - and _) is what
+# they ask for. Take out the # signs to use the example, then edit it. The guide is
+# docs/jobs.md.
+
+# [va]
+# label = "the VA run"             # how messages name it
+# command = ["uvx", "va", "run"]   # an argument list, never a shell string
+# cwd = "C:/work/va"               # optional; default the home folder
+# who = ["dan"]                    # people from attache.toml who may start it; you always can
+# timeout_minutes = 180            # optional; default 120, at most 690 (11.5 hours)

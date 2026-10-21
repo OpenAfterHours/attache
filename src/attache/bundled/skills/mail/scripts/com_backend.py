@@ -33,10 +33,12 @@ MEETING = 1  # OlMeetingStatus olMeeting: the recipients are invited
 MARK_NO_DATE = 4  # OlMarkInterval: a follow-up flag without a due date
 FLAGGED = 2  # OlFlagStatus olFlagMarked
 RESPONSES = {"accept": 3, "tentative": 2, "decline": 4}  # OlMeetingResponse
+SHOW_AS = dict(enumerate(["free", "tentative", "busy", "oof", "elsewhere"]))  # OlBusyStatus
 NONE_YEAR = 4501  # Outlook writes "no date" as 1 January 4501
 
 SMTP = "http://schemas.microsoft.com/mapi/proptag/0x5D01001F"  # PR_SENDER_SMTP_ADDRESS
 FLAG = "http://schemas.microsoft.com/mapi/proptag/0x10900003"  # PR_FLAG_STATUS
+HEADERS = "http://schemas.microsoft.com/mapi/proptag/0x007D001F"  # PR_TRANSPORT_MESSAGE_HEADERS
 PREVIEW = "urn:schemas:httpmail:textdescription"  # the body's first 255 characters
 COLUMNS = ["EntryID", "Subject", "SenderName", "SenderEmailAddress", SMTP, "ReceivedTime"]
 COLUMNS += [PREVIEW, "UnRead", FLAG]
@@ -262,13 +264,18 @@ class Backend:
         self, to: list[str], cc: list[str], subject: str, body: str, reply_to: Text, reply_all: bool
     ) -> dict:
         """Save a new message, or a reply to reply_to, in Drafts. A reply's body is only the
-        text given: the original isn't quoted, so the draft is exactly what the owner approves."""
+        text given: the original isn't quoted, so the draft is exactly what the owner approves.
+        A reply goes where Outlook says (Reply-To first) unless `to` is given: the email
+        channel gives the From address."""
         if reply_to:
             original = self._item(reply_to)
             mail = original.ReplyAll() if reply_all else original.Reply()
         else:
             mail = self.app.CreateItem(MAIL_ITEM)
             mail.Subject = subject
+        if to:  # these, and only these
+            while mail.Recipients.Count:
+                mail.Recipients.Remove(1)
             for kind, given in ((TO, to), (CC, cc or [])):
                 for each in given:
                     mail.Recipients.Add(each).Type = kind
@@ -290,6 +297,15 @@ class Backend:
             "body": item.Body or "",
             "attachments": attachments(item),
         }
+
+    def headers(self, native: str) -> str:
+        """The message's internet headers as received, top first; "" when Outlook has none, as
+        for mail that never crossed the internet."""
+        item = self._item(native)
+        try:
+            return item.PropertyAccessor.GetProperty(HEADERS) or ""
+        except Exception:  # Outlook raises for a property the item doesn't have
+            return ""
 
     def send_draft(self, native: str) -> str:
         """Send a draft as plain text, so it carries only the body the owner saw and not an HTML
@@ -430,6 +446,7 @@ class Backend:
             "organizer": item.Organizer or "",
             "attendees": [name.strip() for name in invited if name.strip()],
             "is_recurring": bool(item.IsRecurring),
+            "show_as": SHOW_AS.get(item.BusyStatus, "busy"),
         }
 
     def _item(self, native: str) -> Any:

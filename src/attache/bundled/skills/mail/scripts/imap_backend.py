@@ -292,11 +292,14 @@ class Backend:
         if query:
             criteria += ["X-GM-RAW", query] if self.gmail else ["TEXT", query]
         uids = sorted(self.imap.search(criteria or ["ALL"], charset="UTF-8" if query else None))
-        rows = self._fetch(uids[-limit:], b"FLAGS", b"INTERNALDATE", PARTIAL) if uids else {}
+        uids = uids[-limit:]
+        if since and uids:  # the exact time, before the bodies: the email channel polls often
+            dates = self.imap.fetch(uids, [b"INTERNALDATE"])
+            uids = [uid for uid, row in dates.items() if row[b"INTERNALDATE"] >= since]
+        rows = self._fetch(uids, b"FLAGS", b"INTERNALDATE", PARTIAL) if uids else {}
         return [  # mail.py puts them newest first, across the accounts
             self._summary(self._native(folder, validity, uid, row), folder, row, parse(row))
             for uid, row in rows.items()
-            if not since or row[b"INTERNALDATE"].astimezone(UTC) >= since
         ]
 
     def read(self, native: str, max_chars: int) -> Json:
@@ -348,12 +351,14 @@ class Backend:
     # drafts and sending
 
     def draft(self, to, cc, subject, body, reply_to: str | None, reply_all: bool) -> Json:
-        """Save a new message, or a reply to reply_to (to, cc and subject then come from it),
-        in Drafts. A reply holds only the body given, without the original quoted."""
+        """Save a new message, or a reply to reply_to (cc and subject then come from it, and
+        `to` unless it is given, as the email channel gives the From address so that Reply-To
+        is never used), in Drafts. A reply holds only the body given, without the original
+        quoted."""
         threading = {}
         if reply_to:
             original = parse(self._message(reply_to, b"BODY.PEEK[HEADER]")[2])
-            to = addresses(original, "reply-to") or addresses(original, "from")
+            to = to or addresses(original, "reply-to") or addresses(original, "from")
             others = addresses(original, "to", "cc") if reply_all else []
             mine = {self.user.lower(), *(each.lower() for each in to)}
             cc = list(dict.fromkeys(each for each in others if each.lower() not in mine))
@@ -385,6 +390,12 @@ class Backend:
 
     def get_draft(self, native: str) -> Json:
         return draft_fields(native, self._draft(native)[2])
+
+    def headers(self, native: str) -> str:
+        """The message's header block as received, top first (the email channel's checks)."""
+        row = self._message(native, b"BODY.PEEK[HEADER]")[2]
+        raw = next(value for key, value in row.items() if key.startswith(b"BODY["))
+        return (raw or b"").decode("utf-8", "replace")
 
     def _may_send(self, message_id: str, recipients: int) -> None:
         """Refuse a Message-ID that went to SMTP before, by <home>/.mail/sent.jsonl, and a

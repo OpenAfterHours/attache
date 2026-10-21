@@ -37,6 +37,8 @@ SCOPES = ["Mail.ReadWrite", "Mail.Send", "Calendars.ReadWrite", "Tasks.ReadWrite
 PREFER = 'IdType="ImmutableId", outlook.body-content-type="text"'
 SUMMARY = "id,subject,from,receivedDateTime,bodyPreview,isRead,flag,parentFolderId"
 RESPONSES = {"accept": "accept", "tentative": "tentativelyAccept", "decline": "decline"}
+SHOW_AS = {"free": "free", "tentative": "tentative", "busy": "busy", "oof": "oof"}
+SHOW_AS["workingElsewhere"] = "elsewhere"  # and "unknown", or anything new: busy
 EPOCH = "1900-01-01T00:00:00Z"
 LOGIN_TIMEOUT = 300  # seconds to finish signing in, in the browser
 TRIES, PATIENCE = 3, 30  # a busy Graph gets at most 3 tries and 30 seconds of waiting in all
@@ -266,11 +268,16 @@ class Backend:
         self, to: list[str], cc: list[str], subject: str, body: str, reply_to: Text, reply_all: bool
     ) -> dict:
         """Save a new message, or a reply to reply_to, in Drafts. A reply's body is only the
-        text given: the PATCH replaces the quoted original, so the draft is what's approved."""
+        text given: the PATCH replaces the quoted original, so the draft is what's approved.
+        A reply goes where Graph says (Reply-To first) unless `to` is given: the email channel
+        gives the From address."""
         if reply_to:
             action = "createReplyAll" if reply_all else "createReply"
             created = self.request("POST", f"{msg(reply_to)}/{action}", {})
-            self.request("PATCH", msg(created["id"]), {"body": text(body)})
+            change = {"body": text(body)}
+            if to:  # given: they replace the reply's own recipients
+                change |= {"toRecipients": recipients(to), "ccRecipients": recipients(cc or [])}
+            self.request("PATCH", msg(created["id"]), change)
         else:
             new = {
                 "subject": subject,
@@ -298,6 +305,13 @@ class Backend:
             "attachments": self._attachments(native),
         }
 
+    def headers(self, native: str) -> str:
+        """The message's internet headers as received, top first; "" when Graph has none, as
+        for mail that never crossed the internet."""
+        found = self.request("GET", f"{msg(native)}?$select=internetMessageHeaders", None)
+        pairs = found.get("internetMessageHeaders") or []
+        return "\n".join(f"{each.get('name')}: {each.get('value')}" for each in pairs)
+
     def send_draft(self, native: str) -> str:
         """Send a draft with only the text body the owner saw, which replaces an HTML part
         edited in elsewhere. Returns its id, an immutable id, which the copy in Sent Items
@@ -315,7 +329,7 @@ class Backend:
             "endDateTime": stamp(now + timedelta(days=days)),
             "$orderby": "start/dateTime",
             "$top": 100,
-            "$select": "id,subject,start,end,location,organizer,attendees,type",
+            "$select": "id,subject,start,end,location,organizer,attendees,type,showAs",
         }
         return [self._event(e) for e in self._all("/me/calendarView" + encode(params))]
 
@@ -481,6 +495,7 @@ class Backend:
             "organizer": organizer.get("name") or organizer.get("address") or "",
             "attendees": [e.get("name") or e.get("address") or "" for e in invited],
             "is_recurring": event.get("type") in ("occurrence", "exception"),
+            "show_as": SHOW_AS.get(event.get("showAs"), "busy"),
         }
 
     def _attachments(self, native: str) -> list[dict]:

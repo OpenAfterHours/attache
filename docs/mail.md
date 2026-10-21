@@ -157,6 +157,17 @@ sends, answers invitations and creates events with attendees only after you say 
 
 Moving more than 20 messages at once needs your yes too.
 
+Calendar events from `agenda` carry `show_as` (`free`, `tentative`, `busy`, `oof` or
+`elsewhere`), so a skill can tell busy time from free without reading the event.
+
+### Letting other people email Attaché
+
+The `email` channel watches one of these accounts so the people you list in `attache.toml`
+can write to Attaché by email (`@attache ...`) and get the answer in the same thread. It uses
+this skill's code and sign-in, so set the account up here first. Setup, who gets an answer
+and how replies are kept to the sender are in [Channels](channels.md#email). Those replies
+are the channel's, sent straight away; your own mail still goes only on your Send.
+
 ## How sending works
 
 1. The assistant saves the draft in that account's Drafts folder. The mail command writes a

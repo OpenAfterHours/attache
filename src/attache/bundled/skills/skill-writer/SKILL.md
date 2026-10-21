@@ -79,6 +79,12 @@ dependencies on first use, outside Attaché:
   only as arguments of their own, and check them as the bundled docx script does: a plain
   name in the current folder, with no absolute path, drive, `:` or `..`, and nothing that
   resolves outside the folder (through a link, say).
+- Attaché sets `ATTACHE_SENDER` (`owner` or a `[people]` key) and `ATTACHE_ROLE` (`owner`,
+  `member`, or absent when the owner runs it in a terminal): decide who may do what from
+  those, never from an argument.
+- For a long job, run it with `background: true`: it returns at once, and when it ends, the
+  `text` of the JSON object on its last line is posted in the chat (`owner` goes only to the
+  owner, on failure).
 - Use argparse, print a short result, and exit non-zero with a clear message on failure.
 - Keep each skill's scripts small (bundled skills are capped at 300 lines in total), with no
   network access unless the skill is about a network service.

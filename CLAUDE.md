@@ -32,7 +32,8 @@ src/attache/
   agent.py      shared tool loop for API backends
   backends/     anthropic, openai (chat + responses), claude_cli
   tools.py      the tools a turn may use, filtered by role; ask (with mail approvals),
-                request (survives a restart: _requests), page turns get db only
+                request (survives a restart: _requests), page turns get db only; script
+                sets ATTACHE_* env and runs background jobs (_background)
   router.py     inbound message -> access, trigger, role -> turn -> reply; page_turn()
   channels.py   channel manager (send, ask and answer, turn tasks), terminal channel,
                 sidecar runner for skill channels (protocol: docs/channels.md)
