@@ -68,7 +68,8 @@ easy to fake, so it passes a message on only when its sender is proven:
   by the sender. It must say `dmarc=pass` for the From address's domain. A result inside a
   comment, a quoted string anywhere in that header, or a second DMARC result (one may be the
   sender's words echoed back) all fail. With `authserv_id` set (`mx.google.com` for Gmail),
-  the header must also be that server's. Gmail and Microsoft 365 add the header to every
+  the header's first field, the server name before the first `;`, must also be exactly that
+  name. Gmail and Microsoft 365 add the header to every
   message; with a provider that doesn't, the topmost one could be the sender's own, so the
   channel is not safe there.
 - **Only mail delivered straight to the provider.** Gmail fetching another mailbox by POP,

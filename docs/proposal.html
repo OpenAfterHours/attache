@@ -240,7 +240,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
 <span class="prompt">$</span> uv tool install attache     <span class="c"># keep it</span>
 <span class="prompt">$</span> attache init &amp;&amp; attache run</code></pre>
       <ul class="specline">
-        <li>Python 3.11+</li><li>about 1,500 lines of code</li><li>6 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
+        <li>Python 3.11+</li><li>under 2,150 lines of code</li><li>6 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
       </ul>
     </div>
     <p class="namenote">The name is <code>attache</code>, after the assistant on an ambassador's staff and the case an executive carries. It was unclaimed on PyPI on 19 October 2026, so register it before the first release.</p>
@@ -305,7 +305,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
             <thead><tr><th></th><th>nanoclaw v1</th><th>nanoclaw v2</th><th>OpenClaw</th><th>nanobot</th><th>Attaché</th></tr></thead>
             <tbody>
               <tr><th>Language</th><td>TypeScript</td><td>TypeScript</td><td>TypeScript</td><td>Python</td><td>Python</td></tr>
-              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>2,075 lines of code after phase 3, 2,100 cap</td></tr>
+              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>2,135 lines of code after email requests, 2,150 cap</td></tr>
               <tr><th>Install</th><td>Fork, then <code>/setup</code> in Claude Code</td><td>Same, Docker required</td><td>npm, gateway daemon</td><td><code>uv tool install nanobot-ai</code></td><td><code>uvx attache</code></td></tr>
               <tr><th>Models</th><td>Claude via the Agent SDK</td><td>Claude; Codex, OpenCode, Ollama as skills</td><td>Many, via config</td><td>Native OpenAI and Anthropic SDKs</td><td>Four adapters, any endpoint</td></tr>
               <tr><th>Extending it</th><td>Skills that rewrite your fork</td><td>Skills copy code from registry branches</td><td>Plugins, ClawHub skills</td><td>Built-in channels, skills</td><td>Runtime skills folder, no code changes</td></tr>
@@ -981,23 +981,23 @@ const answer = await attache.ask("Suggest three more items")</code></pre>
           <table>
             <thead><tr><th>Module</th><th>Job</th><th>Code lines</th><th class="bar">Share</th></tr></thead>
             <tbody>
-              <tr><th>cli.py</th><td>init, chat, run, doctor, skills, skill</td><td class="num">120</td><td class="bar"><span style="--w:40.1%"></span></td></tr>
-              <tr><th>app.py</th><td>Wiring, the two servers, clean shutdown</td><td class="num">82</td><td class="bar"><span style="--w:27.4%"></span></td></tr>
-              <tr><th>config.py</th><td>attache.toml and its checks, init_home, restrict</td><td class="num">165</td><td class="bar"><span style="--w:55.2%"></span></td></tr>
-              <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">156</td><td class="bar"><span style="--w:52.2%"></span></td></tr>
-              <tr><th>router.py</th><td>Access, roles, fencing, prompt, limits, turns, page turns</td><td class="num">211</td><td class="bar"><span style="--w:70.6%"></span></td></tr>
-              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">50</td><td class="bar"><span style="--w:16.7%"></span></td></tr>
-              <tr><th>types.py</th><td>Shared types</td><td class="num">92</td><td class="bar"><span style="--w:30.8%"></span></td></tr>
-              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">43</td><td class="bar"><span style="--w:14.4%"></span></td></tr>
-              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">72</td><td class="bar"><span style="--w:24.1%"></span></td></tr>
-              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">115</td><td class="bar"><span style="--w:38.5%"></span></td></tr>
-              <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">25</td><td class="bar"><span style="--w:8.4%"></span></td></tr>
-              <tr><th>tools.py</th><td>Tools by role, path confinement, ask, request, mail approvals</td><td class="num">262</td><td class="bar"><span style="--w:87.6%"></span></td></tr>
-              <tr><th>skills.py</th><td>Discovery, index, git history</td><td class="num">93</td><td class="bar"><span style="--w:31.1%"></span></td></tr>
-              <tr><th>channels.py</th><td>Channel manager, questions and answers, terminal, sidecars</td><td class="num">243</td><td class="bar"><span style="--w:81.3%"></span></td></tr>
-              <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">44</td><td class="bar"><span style="--w:14.7%"></span></td></tr>
-              <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP, attache.ask, share links</td><td class="num">299</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
-              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>2,075</strong></td><td class="bar"></td></tr>
+              <tr><th>cli.py</th><td>init, chat, run, doctor, skills, skill</td><td class="num">120</td><td class="bar"><span style="--w:38.2%"></span></td></tr>
+              <tr><th>app.py</th><td>Wiring, the two servers, clean shutdown</td><td class="num">82</td><td class="bar"><span style="--w:26.1%"></span></td></tr>
+              <tr><th>config.py</th><td>attache.toml and its checks, init_home, restrict</td><td class="num">173</td><td class="bar"><span style="--w:55.1%"></span></td></tr>
+              <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">156</td><td class="bar"><span style="--w:49.7%"></span></td></tr>
+              <tr><th>router.py</th><td>Access, roles, fencing, prompt, limits, turns, page turns</td><td class="num">211</td><td class="bar"><span style="--w:67.2%"></span></td></tr>
+              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">50</td><td class="bar"><span style="--w:15.9%"></span></td></tr>
+              <tr><th>types.py</th><td>Shared types</td><td class="num">92</td><td class="bar"><span style="--w:29.3%"></span></td></tr>
+              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">43</td><td class="bar"><span style="--w:13.7%"></span></td></tr>
+              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">72</td><td class="bar"><span style="--w:22.9%"></span></td></tr>
+              <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">115</td><td class="bar"><span style="--w:36.6%"></span></td></tr>
+              <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">25</td><td class="bar"><span style="--w:8.0%"></span></td></tr>
+              <tr><th>tools.py</th><td>Tools by role, path confinement, ask, request, mail approvals, background scripts</td><td class="num">314</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
+              <tr><th>skills.py</th><td>Discovery, index, git history</td><td class="num">93</td><td class="bar"><span style="--w:29.6%"></span></td></tr>
+              <tr><th>channels.py</th><td>Channel manager, questions and answers, terminal, sidecars</td><td class="num">243</td><td class="bar"><span style="--w:77.4%"></span></td></tr>
+              <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">44</td><td class="bar"><span style="--w:14.0%"></span></td></tr>
+              <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP, attache.ask, share links</td><td class="num">299</td><td class="bar"><span style="--w:95.2%"></span></td></tr>
+              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>2,135</strong></td><td class="bar"></td></tr>
             </tbody>
           </table>
         </div>

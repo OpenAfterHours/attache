@@ -17,8 +17,9 @@ skill, so the people in attache.toml can write to Attaché by email. It answers 
 skills/mail/accounts.toml whose inbox it watches and replies from; ATTACHE_EVERY, the seconds
 between checks (60); ATTACHE_MENTION, what a message must contain ("@attache"; case and accents
 don't matter); ATTACHE_SIGNATURE, the line under each reply (by default it says to start an
-answer with the mention); ATTACHE_AUTHSERV_ID, the receiving server's name that the topmost
-Authentication-Results must start with (optional: "mx.google.com" for Gmail). It imports the
+answer with the mention); ATTACHE_AUTHSERV_ID, the authserv-id the topmost
+Authentication-Results must have: its first field, before the first ";", must be exactly this
+name, case aside (optional: "mx.google.com" for Gmail). It imports the
 mail skill's mail.py from the home folder and uses its backends, so signing in, `login` and
 `doctor` are the mail skill's. Without a usable account, or with a mail skill older than this
 channel, it says why on stderr and waits for `stop`.
@@ -78,6 +79,7 @@ MAX_TEXT = 4000  # characters passed on: the subject line and the new part of th
 KEEP = 500  # ids remembered as looked at, and messages remembered as passed on
 LIMIT = 50  # messages looked at in one check, oldest first; the rest wait for the next
 MOST = 1000  # messages listed in one check
+TRIES = 3  # failed checks of one message before it is given up
 OVERLAP = timedelta(minutes=5)  # a check looks back this far from the newest mail it saw
 HOUR = 3600.0
 NOT_EXCHANGE = 3  # OlExchangeStoreType olNotExchange: an Outlook store Exchange doesn't fill
@@ -159,7 +161,8 @@ def dmarc_pass(results: str, domain: str) -> bool:
 def authenticated(head: Message, address: str, exchange: bool, authserv: str = "") -> bool:
     """Whether the From address is the real sender's. Only the topmost Authentication-Results
     counts: the receiving server prepends its own, and any below it may be the sender's. With
-    `authserv`, it must also start with that server's name. On Exchange,
+    `authserv`, its first field (the authserv-id, before the first ";", comments dropped) must
+    also be exactly that name, case aside. On Exchange,
     X-MS-Exchange-Organization-AuthAs: Internal counts too, as Exchange strips that header from
     mail arriving from outside the organisation; every copy must say so. That means Exchange
     took the message as internal, not that a person is proven. Anything else fails."""
@@ -246,11 +249,14 @@ class Inbox:
     mention: str = "@attache"
     signature: str = SIGNATURE.format("@attache")
     authserv: str = ""  # the server the topmost Authentication-Results must name, if set
+    tries: dict[str, int] = field(default_factory=dict)  # id -> checks of it that failed
 
     def check(self) -> None:
         """Look at up to LIMIT new messages, oldest first, passing on those for Attaché. Each
-        is marked done, and saved, before Attaché hears of it, so none is passed on twice; the
-        watermark never passes one left for the next check."""
+        is marked done, and saved, before Attaché hears of it, so none is passed on twice. The
+        watermark never passes one left for the next check, nor one whose check failed: that
+        is tried again next time, and after TRIES failed checks given up, with a warning, so
+        the watermark can't stay pinned while `done` (the last 500) rolls over."""
         backend = self.mail.backend(self.account)
         exchange = on_exchange(self.mail.settings(self.account)["backend"], backend)
         since = datetime.fromisoformat(self.state.since)
@@ -258,19 +264,26 @@ class Inbox:
         if len(items) >= MOST:
             log("warning", f"{MOST} new messages at once: older ones may be missed")
         waiting = [item for item in items if item["id"] not in self.state.done]
+        failed = []  # this time; the watermark waits for them
         for item in waiting[:LIMIT]:
             try:
                 found = self.consider(backend, item["id"], exchange)
-            except Exception as error:  # tried again next time, while it is still listed
-                log("warning", f"couldn't check message {item['id']}: {error}")
-                continue
+            except Exception as error:
+                tries = self.tries[item["id"]] = self.tries.get(item["id"], 0) + 1
+                if tries < TRIES:
+                    log("warning", f"couldn't check message {item['id']}: {error}")
+                    failed.append(item)
+                    continue
+                log("warning", f"gave up on message {item['id']} after {TRIES} failed checks")
+                found = None
             self.state.done.append(item["id"])
             if isinstance(found, str):
                 log("info", f"skipped message {item['id']}: {found}")
             elif found:
                 self.state.save()  # before Attaché hears of it: never passed on twice
                 emit(found)
-        marks = [received(i) - OVERLAP for i in items[-1:]] + [received(i) for i in waiting[LIMIT:]]
+        left = [received(i) for i in failed + waiting[LIMIT:]]
+        marks = [received(i) - OVERLAP for i in items[-1:]] + left
         self.state.since = max(since, min(marks, default=since)).isoformat()
         self.state.save()
 
@@ -429,6 +442,7 @@ def main() -> int:
     Attaché would only restart it, and it can't run until the setup is fixed."""
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    sys.stderr.reconfigure(encoding="utf-8")  # Attaché passes it on: "Attaché", not cp1252
     commands: queue.Queue[Json | None] = queue.Queue()
     threading.Thread(target=read_commands, args=(commands,), daemon=True).start()
     try:

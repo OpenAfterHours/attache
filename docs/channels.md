@@ -135,9 +135,9 @@ A message is passed on only when all of these hold:
   `dmarc=pass` with `header.from` equal to the From address's domain. The receiving server
   puts its own header on top; any further down may have been written by the sender, so they
   never count. Gmail (`mx.google.com`) and Microsoft 365 add one to every message: use the
-  channel only with a provider that does. With `authserv_id` set, the topmost header must
-  also start with that server's name (`mx.google.com` for Gmail; Microsoft 365 names none, so
-  leave it unset there). On Exchange (Graph, or Outlook classic on an Exchange mailbox),
+  channel only with a provider that does. With `authserv_id` set, the topmost header's first
+  field, its server name before the first `;`, must be exactly that name (case aside):
+  `mx.google.com` for Gmail. Microsoft 365 names no server there, so leave it unset. On Exchange (Graph, or Outlook classic on an Exchange mailbox),
   `X-MS-Exchange-Organization-AuthAs: Internal` also counts. Exchange removes that header
   from mail coming from outside, so it means Exchange took the message as internal, not that
   a person is proven: a relay inside your organisation, or a delegate using Send As or Send
@@ -169,7 +169,9 @@ these must not be relied on:
   unsent in Drafts.
 - If that message can't be found any more, because you moved or filed it (Outlook classic
   and Titan ids change then), the reply goes as a new email to the same address, under
-  "Re:" and its subject, with the same check.
+  "Re:" and its subject, with the same check. The same happens if making the reply fails
+  part way (Graph busy, say); a reply draft half made by then stays unsent in Drafts, to
+  delete there.
 - Attaché never writes to an address that hasn't written to it. With no message from an
   address, the reply is dropped, with a warning in the log.
 - Replies are text: files are not attached. A question with options ends with "Reply 1 for

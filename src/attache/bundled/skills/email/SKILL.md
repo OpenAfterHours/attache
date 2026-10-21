@@ -54,7 +54,8 @@ email = "dan@example.com"  # the address Dan's mail comes From
   From line is easier to fake than a chat login, and owner rights include files, the shell
   and memory. The owner writes to Attaché in their own chats.
 - `authserv_id` only for Gmail or another IMAP account whose server names itself in its
-  `Authentication-Results`; Microsoft 365 doesn't, so leave it unset there.
+  `Authentication-Results`: the header's first field, before the first `;`, must then be
+  exactly that name. Microsoft 365 names none, so leave it unset there.
 
 ## Who gets an answer
 

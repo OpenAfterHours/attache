@@ -530,6 +530,43 @@ def test_a_message_that_fails_is_tried_again(inbox: Any, fake: FakeBackend, caps
     assert [m["message_id"] for m in messages(capsys)] == ["m1"]
 
 
+def test_the_watermark_waits_for_a_message_that_failed(
+    inbox: Any, fake: FakeBackend, capsys
+) -> None:
+    """A message hours older than the newest (after a night off, say) whose check fails is
+    still listed next time: the watermark stays at it."""
+    fake.add("m1", gmail(), BODY, when=NOW - timedelta(hours=2))
+    fake.add("m2", gmail(), BODY, when=NOW - timedelta(minutes=1))
+    fake.broken = {"m1"}
+    inbox.state.since = (NOW - timedelta(hours=3)).isoformat()
+    inbox.check()
+    assert [m["message_id"] for m in messages(capsys)] == ["m2"]
+    assert datetime.fromisoformat(inbox.state.since) == NOW - timedelta(hours=2)
+    fake.broken = set()
+    inbox.check()
+    assert [m["message_id"] for m in messages(capsys)] == ["m1"]
+    assert datetime.fromisoformat(inbox.state.since) == NOW - timedelta(minutes=1) - channel.OVERLAP
+
+
+def test_a_message_that_keeps_failing_is_given_up(inbox: Any, fake: FakeBackend, capsys) -> None:
+    """After TRIES failed checks, so the watermark isn't pinned while `done` rolls over."""
+    fake.add("m1", gmail(), BODY, when=NOW - timedelta(hours=2))
+    fake.add("m2", gmail(), BODY, when=NOW - timedelta(minutes=1))
+    fake.broken = {"m1"}
+    inbox.state.since = (NOW - timedelta(hours=3)).isoformat()
+    for _ in range(channel.TRIES):
+        assert datetime.fromisoformat(inbox.state.since) <= NOW - timedelta(hours=2)
+        inbox.check()
+    logs = [e["text"] for e in events(capsys) if e["type"] == "log"]
+    assert logs == ["couldn't check message m1: connection reset"] * 2 + [
+        "gave up on message m1 after 3 failed checks"  # an id, never an address
+    ]
+    assert "m1" in inbox.state.done and "m1" not in inbox.state.admitted
+    assert datetime.fromisoformat(inbox.state.since) == NOW - timedelta(minutes=1) - channel.OVERLAP
+    inbox.check()
+    assert [call[1] for call in fake.calls if call[0] == "headers"].count("m1") == 3
+
+
 def admitted(inbox: Any, fake: FakeBackend, *natives: str) -> None:
     for n, native in enumerate(natives):
         fake.add(native, gmail(), BODY, when=NOW - timedelta(seconds=len(natives) - n))
