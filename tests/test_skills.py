@@ -89,6 +89,19 @@ def test_git_missing(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert skills.undo(home, "pdf") is None
 
 
+def test_git_never_gets_attaches_stdin(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # On Windows, git given a piped stdin waits behind the terminal chat's reader thread.
+    seen: list[dict[str, Any]] = []
+
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert skills.git(home, "status") == "ok\n"
+    assert seen[0]["stdin"] is subprocess.DEVNULL and seen[0]["cwd"] == home
+
+
 @needs_git
 def test_git_failure_and_no_repo(home: Path) -> None:
     assert skills.git(home, "no-such-command") is None

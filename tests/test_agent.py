@@ -4,13 +4,65 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
-from attache.agent import MAX_TOOL_OUTPUT, Step, run_tool, tool_loop, tool_spec
+from attache.agent import MAX_TOOL_OUTPUT, Step, label, run_tool, tool_loop, tool_spec
 from attache.types import Endpoint, Person, Tool, ToolCall, Turn, TurnContext
 
 
-def make_turn(tools: list[Tool]) -> Turn:
-    ctx = TurnContext("local:me", Person("owner", "Phil", "owner"), False, SimpleNamespace())
+class Hub:
+    """Records ChannelManager.activity events."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def activity(self, chat_key: str, kind: str, **data: Any) -> None:
+        self.events.append((chat_key, kind, data))
+
+
+def make_turn(tools: list[Tool], role: str = "owner", chat: str = "local:me") -> Turn:
+    services = SimpleNamespace(channels=Hub())
+    ctx = TurnContext(chat, Person("owner", "Phil", role), chat.startswith("slack:C"), services)
     return Turn(ctx, Endpoint("test", "anthropic", "m"), "system", [], "hi", tools)
+
+
+def test_label_names_the_tool_and_a_few_arguments_never_contents() -> None:
+    command = 'curl -H "Authorization: Bearer s3cret" https://x.example/a'
+    assert label("run", {"command": command, "timeout": 5}) == "run curl"  # the program only
+    assert label("run", {"command": "x" * 60}) == "run " + "x" * 40
+    url = "https://example.com/files/report.pdf?token=s3cret#page=2"
+    assert label("WebFetch", {"url": url}) == "WebFetch https://example.com/files/report.pdf"
+    spec = {"skill": "docx", "script": "make.py", "args": ['{"title": "My diary"}', "out.docx"]}
+    assert label("script", spec) == "script docx"  # an inline spec is contents
+    assert label("Glob", ["*.py"]) == "Glob" and label(None, None) == "None"  # from a stream
+    assert label("db", {"op": "put", "collection": "todos", "data": {"x": 1}}) == "db put todos"
+    assert label("script", {"skill": "mail", "script": "mail.py", "args": ["inbox", "--n=5"]}) == (
+        "script mail inbox"
+    )
+    secret = {"path": "notes/a.md", "content": "my diary", "text": "t", "html": "<p>h</p>"}
+    assert label("write_file", secret) == "write_file notes/a.md"
+    for kept_out in ("body", "summary", "question", "data", "html", "text", "content"):
+        assert label("x", {kept_out: "contents"}) == "x"
+    assert label("Read", {"file_path": "src/app.py"}) == "Read src/app.py"  # Claude Code's own
+    assert len(label("artifact", {"name": "n" * 40, "path": "p" * 40, "op": "o" * 40})) == 80
+
+
+def test_run_tool_reports_each_call_as_a_step_for_the_owner_only() -> None:
+    def boom(args: dict[str, Any], ctx: TurnContext) -> str:
+        raise ValueError("bad input")
+
+    tools = [make_tool("db", lambda a, c: "[]"), make_tool("boom", boom)]
+    turn = make_turn(tools)
+    asyncio.run(run_tool(ToolCall("1", "db", {"op": "list", "collection": "todos"}), turn))
+    asyncio.run(run_tool(ToolCall("2", "boom", {}), turn))  # a failed call is a step too
+    events = turn.ctx.services.channels.events
+    assert [(key, kind, data["label"]) for key, kind, data in events] == [
+        ("local:me", "step", "db list todos"),
+        ("local:me", "step", "boom"),
+    ]
+    assert all(isinstance(data["seconds"], float) for _, _, data in events)
+    for role, chat in [("member", "slack:DSAM"), ("owner", "slack:CFAM"), ("page", "local:me")]:
+        other = make_turn(tools, role, chat)  # no owner rights: a member, a group, or a page
+        asyncio.run(run_tool(ToolCall("3", "db", {"op": "list"}), other))
+        assert other.ctx.services.channels.events == []
 
 
 def make_tool(name: str, fn: Any) -> Tool:

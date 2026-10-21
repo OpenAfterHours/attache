@@ -12,7 +12,7 @@ import tokenize
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "attache"
-CORE_LIMIT = 2100  # 1,600 in phase 1, 1,900 in phase 2; phase 3's sharing, page turns and fixes
+CORE_LIMIT = 2180  # 1,600 / 1,900 / 2,100 by phase 3; then the terminal's progress events
 SKILL_SCRIPT_LIMIT = 300
 SKILL_LIMITS = {"mail": 1350}  # shared and IMAP ~600, Outlook COM and Graph ~700 (owner's call)
 

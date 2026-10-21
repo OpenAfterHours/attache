@@ -2,7 +2,7 @@
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is under 2,100 lines of Python code, the cap
+folder of skills it can edit itself. The core is under 2,180 lines of Python code, the cap
 CI enforces; everything else is a skill.
 
 > **Status:** phase 3 of the [roadmap](docs/proposal.html): the local core, terminal and web
@@ -22,7 +22,11 @@ attache run              # web page, reminders and channels, no terminal chat
 attache doctor           # check your setup
 attache skill mail login gmail   # a skill's own setup step, run in your terminal
 attache skill service install    # start Attaché when you log in
+attache skill tui                # a full-screen terminal app (docs/terminal.md)
 ```
+
+While a turn runs, the terminal shows what Attaché is doing: `working…`, each step with its
+time, a line of Claude's thinking, and a footer with time and tokens. Ctrl+C stops a turn.
 
 ![The web page: chat on the left, the Home page with to-dos and reminders on the right](docs/phase-1-ui.png)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from attache.agent import Step, api_key, tool_spec
+from attache.agent import TOKENS, Step, api_key, tool_spec
 from attache.types import Endpoint, ToolCall, Turn
 
 
@@ -47,7 +47,7 @@ class AnthropicAdapter:
         state.append({"role": "assistant", "content": blocks})
         text = "".join(b.text for b in resp.content if b.type == "text")
         calls = [ToolCall(b.id, b.name, b.input) for b in resp.content if b.type == "tool_use"]
-        usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+        usage = {key: getattr(resp.usage, key, None) for key in TOKENS}  # None: not cached
         return Step(text, calls, usage)
 
     def add_results(self, state: list[dict[str, Any]], results: list[tuple[ToolCall, str]]) -> None:

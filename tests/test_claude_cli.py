@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from attache.agent import TOKENS
 from attache.backends.claude_cli import ClaudeCLI, _spawn, parse_events, prompt
 from attache.types import Endpoint, Person, Tool, Turn, TurnContext
 
@@ -45,6 +46,16 @@ TOOL_NAMES = ["read_file", "write_file", "edit_file", "run", "script", "send", "
 TOOLS = [Tool(name, name, {"type": "object"}, _noop) for name in TOOL_NAMES]
 
 
+class Hub:
+    """Records ChannelManager.activity events."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    async def activity(self, chat_key: str, kind: str, **data: Any) -> None:
+        self.events.append((kind, data))
+
+
 class Runner:
     """Fake runner: records each call, including what the gateway and temp files held while
     claude was "running", then replays the given stdout lines."""
@@ -69,7 +80,7 @@ def make_turn(
     session: dict[str, Any] | None = None,
     history: list[dict[str, str]] | None = None,
 ) -> Turn:
-    services = SimpleNamespace(gateway={}, web_url=WEB_URL, home=home)
+    services = SimpleNamespace(gateway={}, web_url=WEB_URL, home=home, channels=Hub())
     ctx = TurnContext("local:me", Person("p", "Phil", role), False, services)
     return Turn(
         ctx, ENDPOINT, "You are Attaché.", history or [], "Reply with: ok", TOOLS, session or {}
@@ -128,7 +139,9 @@ def test_parse_events_on_real_stream() -> None:
     reply = parse_events(STREAM)
     assert reply.text == "ok"
     assert reply.session == {"session_id": SESSION}
-    assert reply.usage == {"cost_usd": 0.00357832, "input_tokens": 2, "output_tokens": 4}
+    cached = {"cache_creation_input_tokens": 17047, "cache_read_input_tokens": 16672}
+    assert reply.usage == {"cost_usd": 0.00357832, "input_tokens": 2, "output_tokens": 4, **cached}
+    assert sum(reply.usage[key] for key in TOKENS) == 33725  # not 6: most of it was cached
 
 
 def test_parse_events_falls_back_to_assistant_text() -> None:
@@ -194,6 +207,48 @@ def test_run_serves_tools_over_http_mcp_and_cleans_up(tmp_path: Path) -> None:
     assert rest == "You are Attaché."
     assert turn.ctx.services.gateway == {}  # token closed
     assert not call["temp"].exists()  # the turn's temp files are gone
+
+
+def assistant(*blocks: dict[str, Any]) -> str:
+    return json.dumps({"type": "assistant", "message": {"content": list(blocks)}}) + "\n"
+
+
+def test_claude_codes_own_steps_and_thinking_are_reported_as_they_come(tmp_path: Path) -> None:
+    def tool(name: str, **args: str) -> dict[str, Any]:
+        return {"type": "tool_use", "id": name, "name": name, "input": args}
+
+    stream = [
+        assistant({"type": "thinking", "thinking": "Let me look at the files first."}),
+        assistant(tool("Bash", command="ls -la", description="List the files")),
+        assistant(tool("mcp__attache__db", op="list", collection="todos")),  # run_tool's to report
+        assistant({"type": "text", "text": "Reading it."}, tool("Read", file_path="src/app.py")),
+        '{"type":"user","message":{"content":"a string, not blocks"}}\n',
+        "[1, 2]\n",  # JSON, but not an event
+        "not JSON at all\n",
+        # Malformed events are skipped, and never fail the turn.
+        '{"type":"assistant","message":"not an object"}\n',
+        '{"type":"assistant","message":{"content":"a string"}}\n',
+        '{"type":"assistant","message":{"content":[1, "x", null]}}\n',
+        assistant({"type": "tool_use", "id": "g", "name": "Glob", "input": ["*.py"]}),
+        '{"type":"assistant"}\n',
+        json.dumps({"type": "result", "is_error": False, "result": "ok", "session_id": "s"}),
+    ]
+    turn, handled = make_turn(tmp_path), []
+
+    async def runner(argv: list[str], stdin_text: str, cwd: Path, env: dict[str, str]) -> Any:
+        for line in stream:
+            yield line
+            handled.append(len(turn.ctx.services.channels.events))  # before the next line
+
+    reply = asyncio.run(ClaudeCLI(ENDPOINT, runner).run(turn))
+    assert reply.text == "ok"
+    assert turn.ctx.services.channels.events == [
+        ("thinking", {"text": "Let me look at the files first."}),
+        ("step", {"label": "Bash ls", "seconds": None}),  # the program only, never the description
+        ("step", {"label": "Read src/app.py", "seconds": None}),
+        ("step", {"label": "Glob", "seconds": None}),  # its input was not an object
+    ]
+    assert handled == [1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4]  # each one as its line arrived
 
 
 def test_run_uses_a_stable_cwd_outside_home(tmp_path: Path) -> None:

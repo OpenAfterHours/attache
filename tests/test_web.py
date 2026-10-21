@@ -72,6 +72,14 @@ class FakeChannels:
         self.answers.append((ask_id, person_id, choice))
         return ask_id == "a1" and choice == "Approve"
 
+    def stop_turns(self, chat_key: str) -> bool:
+        """Stands in for ChannelManager.stop_turns: True the first time, as if a turn ran."""
+        self.stopped = [*getattr(self, "stopped", []), chat_key]
+        return len(self.stopped) == 1
+
+    async def activity(self, chat_key: str, kind: str, **data: Any) -> None:
+        """Stands in for ChannelManager.activity: MCP tool calls now report their steps."""
+
 
 @pytest.fixture
 def services(home: Path) -> Any:
@@ -148,6 +156,11 @@ def test_index_holds_no_token(env: Any) -> None:
     assert "access-control-allow-origin" not in r.headers
     assert not re.search(r"""(src|href)=["']?(https?:)?//""", r.text)  # no external requests
     assert ".innerHTML" not in r.text and "insertAdjacentHTML" not in r.text
+    # A turn's progress: the latest step, its thinking dimmed, Stop or Esc, and a footer.
+    assert 'events.addEventListener("activity"' in r.text
+    assert "thinking.step.textContent = `${event.label}…`" in r.text
+    assert 'api("POST", "/api/stop")' in r.text and 'event.key === "Escape"' in r.text
+    assert '["stopped", time]' in r.text and "tokens`, route]" in r.text
     assert 'sandbox="allow-scripts allow-forms"' in r.text
     assert "new tab" not in r.text.lower() and "allow-popups" not in r.text
 
@@ -729,6 +742,58 @@ def test_answer_goes_to_the_channel_manager_as_the_owner(env: Any) -> None:
     bad = {**UI, "Content-Type": "application/json"}
     assert env.client.post("/api/answer", headers=bad, content=b"[1]").status_code == 400
     assert len(env.sv.channels.answers) == 2
+
+
+# a turn's progress, and stopping it
+
+
+def test_activity_reaches_only_the_attache_page(services: Any) -> None:
+    """Steps and thinking may quote the owner's mail or files: never for pages or links."""
+    channel = web.WebChannel()
+    scopes = [
+        web.Scope("_ui", None),
+        web.Scope("home", None),  # an owner page that may read every collection
+        web.Scope("family", frozenset({"todos"}), "slack:C1"),  # a chat's page, or a share link
+    ]
+    finished = {"seconds": 4.2, "tokens": 3100, "route": "claude", "stopped": False}
+
+    async def scenario() -> list[list[tuple[str, dict[str, Any]]]]:
+        streams = [channel.stream(scope) for scope in scopes]
+        for stream in streams:
+            await anext(stream)
+        await channel.activity("me", "started", {"route": "claude"})
+        await channel.activity("me", "step", {"label": "script mail inbox", "seconds": 1.25})
+        await channel.activity("me", "thinking", {"text": "The boiler mail is newest. Then…"})
+        await channel.activity("me", "finished", finished)
+        return [await drain(stream) for stream in streams]
+
+    ui, owner_page, chat_page = asyncio.run(scenario())
+    assert ui == [
+        ("activity", {"kind": "started", "route": "claude"}),
+        ("activity", {"kind": "step", "label": "script mail inbox", "seconds": 1.25}),
+        ("activity", {"kind": "thinking", "text": "The boiler mail is newest. Then…"}),
+        ("activity", {"kind": "finished", **finished}),
+    ]
+    assert owner_page == [] and chat_page == []
+
+
+def test_stop_stops_the_owners_turns_from_the_attache_page_only(
+    env: Any, public: TestClient
+) -> None:
+    assert env.client.post("/api/stop", headers=UI).json() == {"stopped": True}
+    assert env.client.post("/api/stop", headers=UI).json() == {"stopped": False}  # none left
+    assert env.sv.channels.stopped == ["local:me", "local:me"]
+    page(env.sv, "home")
+    assert env.client.post("/api/stop", headers=auth("home")).status_code == 403
+    assert env.client.post("/api/stop").status_code == 401
+    assert env.client.get("/api/stop", headers=UI).status_code == 405
+    _, header = share(env)
+    assert public.post("/api/stop", headers=header).status_code == 404
+    r = env.client.options(
+        "/api/stop", headers={**PREFLIGHT, "Access-Control-Request-Method": "POST"}
+    )
+    assert "access-control-allow-origin" not in r.headers  # no CORS: pages can't call it
+    assert env.sv.channels.stopped == ["local:me", "local:me"]
 
 
 def test_snapshot_url_lets_the_render_browser_open_the_page(env: Any) -> None:

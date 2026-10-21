@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -96,17 +97,22 @@ class Backend:
         self.log.append(f"end {turn.ctx.chat_key}")
         if self.error:
             raise self.error
-        return Reply(f"reply {len(self.turns)}", {"n": len(self.turns)})
+        usage = {"input_tokens": 6, "output_tokens": 34, "cache_read_input_tokens": 1194}
+        return Reply(f"reply {len(self.turns)}", {"n": len(self.turns)}, usage)
 
 
 class Channel:
     def __init__(self, name: str) -> None:
         self.name, self.sent, self.asked = name, [], []
+        self.activities: list[tuple[str, dict[str, Any], int]] = []  # with the number sent
 
     async def start(self, on_message: Any) -> None: ...
 
     async def send(self, msg: Outbound) -> None:
         self.sent.append(msg)
+
+    async def activity(self, chat_id: str, kind: str, data: dict[str, Any]) -> None:
+        self.activities.append((kind, data, len(self.sent)))
 
     async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
         self.asked.append(text)
@@ -132,14 +138,23 @@ class World:
         self.endpoints.append(endpoint)
         return self.backend
 
+    def handled(self, msg: Inbound) -> Reply | None:
+        """router.handle(msg), and then what it left running, such as an owner turn's commit."""
+
+        async def main() -> Reply | None:
+            reply = await self.router.handle(msg)
+            await asyncio.gather(*self.services.channels.tasks)
+            return reply
+
+        return asyncio.run(main())
+
     def me(self, text: str) -> Reply | None:
-        msg = Inbound("local", "me", "owner", "Alex", text, origin="terminal")
-        return asyncio.run(self.router.handle(msg))
+        return self.handled(Inbound("local", "me", "owner", "Alex", text, origin="terminal"))
 
     def say(self, text: str, sender: str = "USAM", chat: str = "CFAM", **kw: Any) -> Reply | None:
         group = kw.pop("is_group", not chat.startswith("D"))
         msg = Inbound("slack", chat, sender, kw.pop("name", "Someone"), text, group, **kw)
-        return asyncio.run(self.router.handle(msg))
+        return self.handled(msg)
 
 
 @pytest.fixture
@@ -676,3 +691,65 @@ def test_scheduled_turns_stop_with_attache(world: World) -> None:
 
     asyncio.run(main())
     assert not world.router.background and len(world.backend.turns) == 1
+
+
+def test_a_turn_with_owner_rights_reports_started_and_finished(world: World) -> None:
+    world.me("hi")
+    (started, route, _), (finished, done, sent_before) = world.local.activities
+    assert (started, route) == ("started", {"route": "own"})
+    assert finished == "finished" and sent_before == 2  # after the reply (and the echo) went out
+    assert (done["tokens"], done["route"], done["stopped"]) == (1234, "own", False)  # cache too
+    assert isinstance(done["seconds"], float)
+    world.say("@Attaché hi", name="Sam")  # a member's turn: nobody sees its progress
+    world.say("@Attaché hi", sender="UALEX", name="Alex")  # the owner in a group: nor this one
+    assert world.slack.activities == [] and len(world.local.activities) == 2
+
+
+def test_a_stopped_turn_says_so_and_sends_no_reply(world: World) -> None:
+    world.backend.delay = 5
+
+    async def main() -> None:
+        turn = asyncio.create_task(world.router.handle(Inbound("local", "me", "owner", "A", "go")))
+        await asyncio.sleep(0.05)
+        turn.cancel()  # as ChannelManager.stop_turns does
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+    asyncio.run(main())
+    kinds = [(kind, data.get("stopped")) for kind, data, _ in world.local.activities]
+    assert kinds == [("started", None), ("finished", True)]
+    assert world.local.activities[1][1]["tokens"] is None and world.local.sent == []
+
+
+def test_the_commit_runs_after_the_turn_in_a_task_of_its_own(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def slow_commit(home: Path, message: str) -> None:
+        time.sleep(0.2)
+        world.commits.append(message)
+
+    monkeypatch.setattr(router.skills, "commit", slow_commit)
+
+    async def main() -> None:
+        await world.router.handle(Inbound("local", "me", "owner", "Alex", "hi"))
+        assert world.local.activities[-1][0] == "finished" and world.commits == []  # turn over
+        assert not world.services.channels.stop_turns("local:me")  # nothing of the chat's to stop
+        await asyncio.gather(*world.services.channels.tasks)
+
+    asyncio.run(main())
+    assert world.commits == ["local:me: hi"]  # and the commit still happened
+
+
+def test_a_scheduled_turn_can_be_stopped(world: World) -> None:
+    world.backend.delay = 5
+    task = {"id": 8, "chat_key": "local:me", "kind": "turn", "text": "triage", "by": "owner"}
+
+    async def main() -> None:
+        await world.router.fire(task)
+        await asyncio.sleep(0.05)
+        assert world.services.channels.stop_turns("local:me")  # Ctrl+C or the page's Stop
+        await asyncio.gather(*world.router.background.values(), return_exceptions=True)
+
+    asyncio.run(main())
+    kinds = [(kind, data.get("stopped")) for kind, data, _ in world.local.activities]
+    assert kinds == [("started", None), ("finished", True)] and world.local.sent == []

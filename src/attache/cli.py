@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -91,7 +92,9 @@ def _skill(home: Path, argv: list[str]) -> int:
     if not channels.PLAIN_NAME.fullmatch(name) or not script.is_file():
         hint = "new bundled skills arrive with `attache init`, which never overwrites"
         raise SystemExit(f"No skills/{name}/scripts/{name}.py in {home}: {hint}.")
-    return subprocess.run(["uv", "run", str(script), *rest]).returncode
+    # ATTACHE_CLI: how to start this same Attaché, for a skill that runs one (the tui skill)
+    env = {**os.environ, "ATTACHE_CLI": json.dumps([sys.executable, "-m", "attache"])}
+    return subprocess.run(["uv", "run", str(script), *rest], env=env).returncode
 
 
 def _doctor(home: Path) -> int:

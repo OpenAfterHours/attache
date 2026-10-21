@@ -70,6 +70,30 @@ def choose(options: list[str], text: str) -> str | None:
     return None
 
 
+def summary(thinking: str) -> str:
+    """Thinking in one line: its first sentence, cut at 100 characters."""
+    first = re.split(r"(?<=[.!?])\s", " ".join(thinking.split()), maxsplit=1)[0]
+    return first if len(first) <= 100 else first[:99] + "…"
+
+
+def footer(turn: dict[str, Any]) -> str:
+    """The line under a finished turn: "4.2s · 3.1k tokens · claude", or "stopped · 4.2s"."""
+    took, tokens = f"{turn['seconds']:.1f}s", turn.get("tokens")
+    if turn.get("stopped"):
+        return f"stopped · {took}"
+    parts = [took, turn.get("route")]  # route None: the turn failed before choosing one
+    if tokens is not None:  # None: the backend didn't say
+        parts.insert(1, f"{tokens / 1000:.1f}k tokens" if tokens >= 1000 else f"{tokens} tokens")
+    return " · ".join(part for part in parts if part)
+
+
+def show(text: str) -> None:
+    """Print text for the terminal without control characters (C0 and C1, but not newline or
+    tab): model text an email steered could otherwise retitle the window, rewrite earlier
+    lines or set the clipboard with escape sequences."""
+    print(re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text), flush=True)
+
+
 async def kill_tree(proc: asyncio.subprocess.Process) -> None:
     """Kill a process and every process it started, then reap it. On POSIX it must lead its
     own session (start_new_session=True), so its children share its process group."""
@@ -93,13 +117,14 @@ class ChannelManager:
     def add(self, channel: Channel) -> None:
         self.channels.setdefault(channel.name, []).append(channel)
 
-    def spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any] | None:
+    def spawn(self, coro: Coroutine[Any, Any, Any], key: str = "") -> asyncio.Task[Any] | None:
         """Run coro in a task that is kept until it is done; stop() cancels it. Once stop()
-        has begun, coro is closed unrun and None returned."""
+        has begun, coro is closed unrun and None returned. With a chat key, the work is that
+        chat's, such as a turn: the task is named after it, so stop_turns() can find it."""
         if self.closing:
             coro.close()
             return None
-        task = asyncio.create_task(coro)
+        task = asyncio.create_task(coro, name=key or None)  # None: asyncio's own "Task-7"
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return task
@@ -114,6 +139,25 @@ class ChannelManager:
     async def send(self, msg: Outbound) -> None:
         for channel in self._targets(msg.chat_key):
             await channel.send(msg)
+
+    async def activity(self, chat_key: str, kind: str, **data: Any) -> None:
+        """How a turn with owner rights is going, for the chat's channels that show it (those
+        with an activity() method; others are skipped): kind "started" {route}, "step"
+        {label, seconds}, "thinking" {text} or "finished" {seconds, tokens, route, stopped}.
+        docs/channels.md has the contract."""
+        for channel in self._targets(chat_key):
+            if hasattr(channel, "activity"):
+                await channel.activity(chat_key.split(":", 1)[1], kind, data)
+
+    def stop_turns(self, chat_key: str) -> bool:
+        """Cancel what is running for chat_key's messages, such as a turn: the owner's Stop or
+        Ctrl+C. That includes messages queued behind the running turn (each waits for the
+        chat's lock in a task of its own): Stop means stop what I asked. True if something
+        was running."""
+        running = [t for t in self.tasks if t.get_name() == chat_key and not t.done()]
+        for task in running:
+            task.cancel()
+        return bool(running)
 
     async def ask(self, chat_key: str, person_id: str, text: str, options: list[str]) -> Waiting:
         """Show the question on every channel of the chat and return a task giving person_id's
@@ -162,10 +206,11 @@ class ChannelManager:
 
     async def start(self, handler: OnMessage) -> list[asyncio.Task[None]]:
         """Start every channel. Each gets a callback that runs handler in a task of its own
-        and returns at once, so a turn never holds up its channel (or an answer behind it)."""
+        and returns at once, so a turn never holds up its channel (or an answer behind it).
+        The task is named after the chat key, for stop_turns()."""
 
         async def deliver(msg: Inbound) -> None:
-            self.spawn(handler(msg))
+            self.spawn(handler(msg), msg.chat_key)
 
         return [asyncio.create_task(c.start(deliver)) for g in self.channels.values() for c in g]
 
@@ -199,6 +244,20 @@ class TerminalChannel:
             await on_message(msg)
         self.done.set()
 
+    async def activity(self, chat_id: str, kind: str, data: dict[str, Any]) -> None:
+        """The step trail under a turn of yours (docs/terminal.md): plain lines, indented,
+        appended as the turn goes and never redrawn, so it reads the same in any terminal,
+        a pipe or a log."""
+        if kind == "started":
+            show("  working…")
+        elif kind == "step":
+            took = "" if data["seconds"] is None else f"  {data['seconds']:.1f}s"
+            show(f"  · {data['label']}{took}")
+        elif kind == "thinking":
+            show(f"  ∴ {summary(data['text'])}")
+        elif kind == "finished":
+            show(f"  {footer(data)}")
+
     def _read(self, loop: asyncio.AbstractEventLoop) -> None:
         """Queue lines until EOF ("") or a quit line; that last one start() still waits for."""
         # Keep sys.stdin.readline: a daemon thread blocked in sys.stdin.buffer crashes the
@@ -212,7 +271,7 @@ class TerminalChannel:
         if msg.author and msg.origin == "terminal":
             return  # typed here, so it is already on screen
         who = f"{msg.author} (web)" if msg.author else "attaché"
-        print(f"{who}> {msg.text}" + "".join(f"\n  file: {f}" for f in msg.files), flush=True)
+        show(f"{who}> {msg.text}" + "".join(f"\n  file: {f}" for f in msg.files))
 
     async def ask(self, chat_id: str, ask_id: str, text: str, options: list[str]) -> bool:
         """A question shows as numbered text here; a typed reply answers it."""
