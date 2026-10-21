@@ -41,9 +41,9 @@ Attaché runs on Windows, macOS and Linux.
     `uv tool upgrade attache`, then run `attache init` to add any new bundled skills; it never
     overwrites your files. To start Attaché at login, run `attache skill service install`.
 
-!!! note "Before the first PyPI release"
+!!! note "The latest, unreleased version"
 
-    Until the first release reaches PyPI, install from GitHub instead:
+    To try what's on `main` before it reaches PyPI, install from GitHub instead:
 
     ```bash
     uvx --from git+https://github.com/OpenAfterHours/attache attache
