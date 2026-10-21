@@ -66,6 +66,7 @@ INTERFACE = {
     "mark_read": ["natives", "on"],
     "draft": ["to", "cc", "subject", "body", "reply_to", "reply_all"],
     "get_draft": ["native"],
+    "headers": ["native"],
     "send_draft": ["native"],
     "agenda": ["days"],
     "tasks": [],
@@ -110,9 +111,16 @@ def recipient(address: str, kind: int = 1, x500: str | None = None) -> SimpleNam
 class Recipients(list):
     resolved = False
 
+    @property
+    def Count(self) -> int:
+        return len(self)
+
     def Add(self, address: str) -> SimpleNamespace:
         self.append(found := recipient(address))
         return found
+
+    def Remove(self, index: int) -> None:  # 1-based, as COM's
+        del self[index - 1]
 
     def ResolveAll(self) -> bool:
         self.resolved = True
@@ -157,6 +165,19 @@ class Items(list):
         return self[self._next - 1] if self._next <= len(self) else None
 
 
+class Properties:
+    """An item's PropertyAccessor: MAPI properties by DASL name. A missing one raises, as in
+    Outlook ("The property ... is unknown or cannot be found")."""
+
+    def __init__(self, values: dict[str, Any]) -> None:
+        self.values = values
+
+    def GetProperty(self, name: str) -> Any:
+        if name not in self.values:
+            raise OSError(f"The property {name!r} is unknown or cannot be found.")
+        return self.values[name]
+
+
 class Item(SimpleNamespace):
     """A mail item, meeting request, appointment or task, filed in a Folder (Parent)."""
 
@@ -166,8 +187,10 @@ class Item(SimpleNamespace):
         defaults |= {"UnRead": False, "FlagStatus": 0, "Attachments": [], "Parent": None}
         defaults |= {"EntryID": None, "smtp": None, "Complete": False, "IsRecurring": False}
         defaults |= {"BodyFormat": 2}  # olFormatHTML, Outlook's default for new mail
+        defaults |= {"BusyStatus": 2}  # olBusy, an appointment's default
         super().__init__(**(defaults | fields))
         self.Recipients = fields.get("Recipients", Recipients())
+        self.PropertyAccessor = Properties(fields.get("properties", {}))
         self.outlook, self.calls = outlook, []
 
     def Save(self) -> None:
@@ -198,7 +221,8 @@ class Item(SimpleNamespace):
         self.FlagStatus = 0
 
     def Reply(self) -> Item:
-        to = Recipients([recipient(self.Sender.smtp)])
+        """As Outlook: to the message's Reply-To addresses, if it has any, else the sender."""
+        to = Recipients(map(recipient, getattr(self, "reply_to", None) or [self.Sender.smtp]))
         quote = f"\r\n> {self.Body}"
         return Item(
             self.outlook,
@@ -284,6 +308,17 @@ class Table:
         return SimpleNamespace(GetValues=lambda: values)
 
 
+BOILER_HEADERS = (  # PR_TRANSPORT_MESSAGE_HEADERS, as Outlook keeps it
+    "Received: from mail.example.com (203.0.113.5) by DB9PR01MB5678.outlook.com;\r\n"
+    " Sun, 18 Oct 2026 15:42:01 +0000\r\n"
+    "Authentication-Results: spf=pass (sender IP is 203.0.113.5)\r\n"
+    " smtp.mailfrom=example.com; dmarc=pass action=none header.from=example.com\r\n"
+    "From: Dan Price <dan@example.com>\r\n"
+    "Reply-To: <quotes@example.com>\r\n"
+    "Subject: Boiler service quote\r\n"
+)
+
+
 class Outlook:
     """Outlook.Application with one mailbox: you@outlook.com."""
 
@@ -319,6 +354,7 @@ class Outlook:
             Recipients=Recipients(
                 [recipient("you@outlook.com"), recipient("sam@example.com", com.CC)]
             ),
+            properties={com.HEADERS: BOILER_HEADERS},
         )
         self.digest = self.mail(
             self.inbox,
@@ -683,6 +719,24 @@ def test_com_reply_drafts_hold_only_the_new_text(classic: Any, outlook: Outlook)
     assert everyone["cc"] == ["sam@example.com"]
 
 
+def test_com_a_reply_to_given_addresses_never_uses_reply_to(classic: Any, outlook: Outlook) -> None:
+    """The email channel answers the From address alone, whatever Reply-To says."""
+    outlook.boiler.reply_to = ["quotes@example.com"]
+    native = outlook.boiler.EntryID
+    assert classic.draft(None, None, None, "Hi.", native, False)["to"] == ["quotes@example.com"]
+    draft = classic.draft(["dan@example.com"], [], None, "Done.", native, False)
+    assert (draft["to"], draft["cc"], draft["bcc"]) == (["dan@example.com"], [], [])
+    assert draft["subject"] == "RE: Boiler service quote"  # still a reply, in the thread
+    assert outlook.find(draft["id"]).Recipients.resolved
+
+
+def test_com_headers(classic: Any, outlook: Outlook) -> None:
+    assert classic.headers(outlook.boiler.EntryID) == BOILER_HEADERS
+    assert classic.headers(outlook.digest.EntryID) == ""  # Outlook has none for it
+    with pytest.raises(ValueError, match="ids change"):
+        classic.headers("0000DEAD")
+
+
 def test_com_send_draft(classic: Any, outlook: Outlook) -> None:
     draft = classic.draft(["dan@example.com"], [], "Thursday", "See you at 9.", None, False)
     item = outlook.find(draft["id"])
@@ -721,6 +775,7 @@ def test_com_agenda(classic: Any, outlook: Outlook) -> None:
         "organizer": "Sam Lee",
         "attendees": ["Sam Lee", "You"],
         "is_recurring": False,
+        "show_as": "busy",
     }
     start = datetime.fromisoformat(planning["start"])
     assert start.utcoffset() is not None
@@ -728,6 +783,17 @@ def test_com_agenda(classic: Any, outlook: Outlook) -> None:
         second=start.second, microsecond=0
     )
     assert events[1]["is_recurring"] and events[1]["location"] == "Teams"
+
+
+@pytest.mark.parametrize(
+    ("status", "shown"),
+    [(0, "free"), (1, "tentative"), (2, "busy"), (3, "oof"), (4, "elsewhere"), (9, "busy")],
+)
+def test_com_agenda_shows_busy_status(
+    classic: Any, outlook: Outlook, status: int, shown: str
+) -> None:
+    outlook.planning.BusyStatus = status  # OlBusyStatus; one Outlook adds later counts as busy
+    assert classic.agenda(7)[0]["show_as"] == shown
 
 
 def test_com_tasks(classic: Any, outlook: Outlook) -> None:
@@ -1263,6 +1329,48 @@ def test_graph_reply_drafts_hold_only_the_new_text(cloud: Any, fake: FakeGraph) 
     assert everyone["id"] == "AAMk-all" and everyone["cc"] == ["sam@example.com"]
 
 
+def test_graph_a_reply_to_given_addresses_never_uses_reply_to(cloud: Any, fake: FakeGraph) -> None:
+    """The email channel answers the From address alone, whatever Reply-To says."""
+    drafts(fake)
+    create = fake.routes["POST /me/messages/AAMk-boiler/createReply"]
+
+    def to_reply_to(body: Any) -> dict:  # as Graph does when the message has a Reply-To
+        created = create(body)
+        created["toRecipients"] = [{"emailAddress": {"address": "quotes@example.com"}}]
+        return created
+
+    fake.routes["POST /me/messages/AAMk-boiler/createReply"] = to_reply_to
+    draft = cloud.draft(["dan@example.com"], [], None, "Done.", "AAMk-boiler", False)
+    assert (draft["to"], draft["cc"], draft["bcc"]) == (["dan@example.com"], [], [])
+    assert fake.calls[1] == (
+        "PATCH",
+        "/me/messages/AAMk-reply",
+        {
+            "body": {"contentType": "Text", "content": "Done."},
+            "toRecipients": [{"emailAddress": {"address": "dan@example.com"}}],
+            "ccRecipients": [],
+        },
+    )
+
+
+def test_graph_headers(cloud: Any, fake: FakeGraph) -> None:
+    fake.routes["GET /me/messages/AAMk-boiler"] = {
+        "internetMessageHeaders": [
+            {"name": "Received", "value": "from mail.example.com by outlook.com"},
+            {"name": "Authentication-Results", "value": "dmarc=pass header.from=example.com"},
+            {"name": "From", "value": "Dan Price <dan@example.com>"},
+        ]
+    }
+    assert cloud.headers("AAMk-boiler") == (
+        "Received: from mail.example.com by outlook.com\n"
+        "Authentication-Results: dmarc=pass header.from=example.com\n"
+        "From: Dan Price <dan@example.com>"
+    )
+    assert fake.calls[-1][1] == "/me/messages/AAMk-boiler?$select=internetMessageHeaders"
+    fake.routes["GET /me/messages/AAMk-boiler"] = {"id": "AAMk-boiler"}  # mail sent inside
+    assert cloud.headers("AAMk-boiler") == ""
+
+
 def test_graph_new_draft_and_send(cloud: Any, fake: FakeGraph) -> None:
     drafts(fake)
     draft = cloud.draft(
@@ -1326,8 +1434,40 @@ def test_graph_agenda(cloud: Any, fake: FakeGraph) -> None:
         "organizer": "Sam Lee",
         "attendees": ["You", "dan@example.com"],
         "is_recurring": True,
+        "show_as": "busy",  # the fixture gives no showAs
     }
     assert not events[1]["is_recurring"] and events[1]["location"] == ""
+    assert "showAs" in params["$select"].split(",")
+
+
+@pytest.mark.parametrize(
+    ("given", "shown"),
+    [
+        ("free", "free"),
+        ("tentative", "tentative"),
+        ("busy", "busy"),
+        ("oof", "oof"),
+        ("workingElsewhere", "elsewhere"),
+        ("unknown", "busy"),
+        ("somethingNew", "busy"),
+    ],
+)
+def test_graph_agenda_shows_free_or_busy(cloud: Any, fake: FakeGraph, given: str, shown: str):
+    fake.routes["GET /me/calendarView"]["value"][0]["showAs"] = given
+    assert cloud.agenda(7)[0]["show_as"] == shown
+
+
+def test_graph_all_day_events_keep_their_day(cloud: Any, fake: FakeGraph) -> None:
+    """Without a Prefer: outlook.timezone, an all-day event comes as UTC midnights; read as
+    UTC they would start the evening before in the Americas, or at 01:00 in Paris."""
+    holiday = fake.routes["GET /me/calendarView"]["value"][1]
+    holiday |= {"isAllDay": True, "showAs": "oof"}
+    holiday["start"] = {"dateTime": "2026-10-23T00:00:00.0000000", "timeZone": "UTC"}
+    holiday["end"] = {"dateTime": "2026-10-24T00:00:00.0000000", "timeZone": "UTC"}
+    event = cloud.agenda(7)[1]
+    assert event["start"] == datetime(2026, 10, 23).astimezone().isoformat()  # local midnight
+    assert event["end"] == datetime(2026, 10, 24).astimezone().isoformat()
+    assert "isAllDay" in fake.params(0)["$select"].split(",")
 
 
 def test_graph_tasks_come_from_to_do(cloud: Any, fake: FakeGraph) -> None:

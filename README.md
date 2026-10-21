@@ -2,13 +2,14 @@
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is under 2,180 lines of Python code, the cap
+folder of skills it can edit itself. The core is under 2,240 lines of Python code, the cap
 CI enforces; everything else is a skill.
 
 > **Status:** phase 3 of the [roadmap](docs/proposal.html): the local core, terminal and web
 > chat; Slack and Signal with group chats, approvals and rate limits; email (Outlook, Gmail,
-> Titan) with a morning triage; Word, Excel and PowerPoint files; share links; and starting at
-> login. The cloud arrives in phase 4.
+> Titan) with a morning triage; email requests from people you list, for your free slots or a
+> job you defined; Word, Excel and PowerPoint files; share links; and starting at login. The
+> cloud arrives in phase 4.
 
 **Documentation:** <https://openafterhours.github.io/attache/>.
 
@@ -73,6 +74,11 @@ key_env = "ANTHROPIC_API_KEY"
 - **Mail** is one skill with the same commands for Outlook (Outlook classic on this PC, or
   Microsoft Graph), Gmail and Titan. Bodies come back marked untrusted, every action is logged,
   and nothing is sent until you pick Send: see [docs/mail.md](docs/mail.md).
+- **Email requests.** People you list can write `@attache` in an email to you. Attaché checks
+  the message really came from them (DMARC), then answers in the thread: free slots from your
+  diary, never what is in it ([docs/diary.md](docs/diary.md)), or a job you defined, run in the
+  background, with "done" or "failed" back to them and the details to you
+  ([docs/jobs.md](docs/jobs.md)). Setup is in [docs/channels.md](docs/channels.md).
 - **Share links.** With `[web] public_url` set and Tailscale Funnel pointed at a second local
   port, a group's page gets a link that works on anyone's phone, for that group's shared data
   only: see [docs/pages.md](docs/pages.md).

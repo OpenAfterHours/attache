@@ -42,6 +42,8 @@ dev = [
     "pytest>=8",
     "httpx",  # starlette.testclient
     "ruff>=0.10",
+    "icalendar>=6.1",  # the diary skill's tests (its script declares its own)
+    "recurring-ical-events>=3.3",  # likewise
 ]
 # The documentation site (zensical.toml): `uv run --group docs zensical serve` or `build`.
 docs = ["zensical>=0.0.45"]

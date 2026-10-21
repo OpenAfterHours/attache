@@ -5,7 +5,9 @@ other channel is a skill that ships a small program, a **sidecar**, which Attach
 `uv run`. A sidecar has its own dependencies (declared in its PEP 723 header), so the core never
 installs them, and it can be written in any language as long as it speaks the protocol below.
 
-Phase 2 ships two: **Slack** (`skills/slack`) and **Signal** (`skills/signal`).
+Phase 2 ships two: **Slack** (`skills/slack`) and **Signal** (`skills/signal`). A third,
+**email** (`skills/email`), lets the people you list write to Attaché by email; see
+[Email](#email).
 
 ## Turning a channel on
 
@@ -70,6 +72,113 @@ Each is a whole number of at least 1. The two daily budgets are separate pools: 
 public chat (`guests = "public"`) and requests from pages (`attache.ask`) draw on
 `guest_daily`, so they can never use up the turns your members have. When a limit is hit,
 Attaché says so once and then stays quiet until the window resets.
+
+## Email
+
+The `email` channel watches the inbox of one account of the [mail skill](mail.md) and turns
+each new message that asks for `@attache` into a direct message from its sender. Attaché's
+answer goes back by email, as a reply in the same thread.
+
+### Setting it up
+
+1. Set the account up in the mail skill and check it: `attache skill mail doctor` says `ok`.
+   Give it a `user = "you@example.com"` line in `accounts.toml` if it has none (Outlook
+   accounts often don't), so that mail from your own address is never taken for a request.
+   If your home was made before the email channel (0.0.2 or earlier), update the mail skill
+   first: see [Updating the mail skill](mail.md#updating-the-mail-skill). Until then the
+   channel refuses to start, and says so.
+2. Turn the channel on and list who may write:
+
+    ```toml
+    [channels.email]
+    enabled = true
+    account = "gmail"          # a section of skills/mail/accounts.toml
+    # every = "60"             # seconds between checks
+    # mention = "@attache"     # what a message must contain; case and accents don't matter
+    # signature = "..."        # the line under each reply; by default it says to start
+    #                          # an answer with the mention
+    # authserv_id = "mx.google.com"   # Gmail: the server whose results count (below)
+
+    [people.dan]
+    name = "Dan"
+    email = "dan@example.com"  # the From address, which is also the chat id
+    ```
+
+3. Restart `attache run`. The first start answers nothing already in the inbox: only mail
+   that arrives from then on. The channel checks every minute, at most 50 messages at a time,
+   oldest first (a backlog is worked through over the next checks), and keeps what it has
+   seen in `files/inbox/email/.state.json`, so a restart answers nothing twice.
+
+Chat keys look like `email:dan@example.com`: each sender is a direct chat of their own, never
+a group. Case doesn't matter in the address. The person's role applies as in any direct
+message, so a `guest` is ignored.
+
+**An email address in `[owner.ids]` is refused**, and so is an email chat as your
+`approvals` chat. An email proves at best its sender's domain, and owner rights include
+files, the shell and your memory. Write to Attaché in your own chats.
+
+### Who gets an answer
+
+A message is passed on only when all of these hold:
+
+- **Its new part mentions Attaché.** The new part is the text above the quoted history (`On …
+  wrote:`, `>` lines, `-----Original Message-----` or Outlook's `From:`/`Sent:` block); that
+  history is cut before Attaché sees the text, which is at most 4,000 characters. A mention
+  in the subject or in the quoted history doesn't count, so "thanks" in a thread called
+  "@attache run the VA" is not a new request. To ask again, write `@attache` again.
+- **It isn't one of Attaché's own.** A new part holding the reply signature is skipped, and
+  so is anything automatic (below), so two assistants can't answer each other for ever.
+  Replies sent through IMAP (Gmail, Titan) also carry `Auto-Submitted: auto-replied`.
+- **A person sent it**, not the account itself: no `Auto-Submitted` (other than `no`),
+  `List-Id` or `List-Unsubscribe`, and no `Precedence` of `bulk`, `list` or `junk`.
+- **The sender is proven.** The topmost `Authentication-Results` header must say
+  `dmarc=pass` with `header.from` equal to the From address's domain. The receiving server
+  puts its own header on top; any further down may have been written by the sender, so they
+  never count. Gmail (`mx.google.com`) and Microsoft 365 add one to every message: use the
+  channel only with a provider that does. With `authserv_id` set, the topmost header's first
+  field, its server name before the first `;`, must be exactly that name (case aside):
+  `mx.google.com` for Gmail. Microsoft 365 names no server there, so leave it unset. On Exchange (Graph, or Outlook classic on an Exchange mailbox),
+  `X-MS-Exchange-Organization-AuthAs: Internal` also counts. Exchange removes that header
+  from mail coming from outside, so it means Exchange took the message as internal, not that
+  a person is proven: a relay inside your organisation, or a delegate using Send As or Send
+  on Behalf, gets it too. Everything else fails, so mail that was forwarded, or comes from a
+  domain without DMARC, gets no answer.
+- **Attaché knows the address**: it is someone's `email` under `[people]`.
+
+Only one of these skips leaves a trace: a message that asks for Attaché from an unproven
+sender is logged by its id ("sender not authenticated"), never its address or subject. Mail
+that was never for Attaché (no mention, a newsletter, your own) is skipped without a line, as
+Attaché's log shows in your terminal. An unknown address is the core's to ignore.
+
+**Not supported**: mail that doesn't reach the inbox straight from the sender's server. The
+topmost `Authentication-Results` may then not be your provider's verdict on the sender, so
+these must not be relied on:
+
+- Gmail's "Check mail from other accounts" (POP) fetching another mailbox into this one;
+- mail imported, or moved in from another account or archive;
+- a filtering gateway (Mimecast, Proofpoint and the like) in front of the provider, which
+  then judges the gateway, not the sender.
+
+### Replies
+
+- A reply answers the message it is about: the one the turn came from, in that thread. A
+  message from a reminder or a background job (the VA finishing, say) answers that person's
+  latest message.
+- It goes to that message's From address and nobody else: never to its `Reply-To`, never Cc
+  or reply-all. The draft is checked before it goes; one addressed any other way stays
+  unsent in Drafts.
+- If that message can't be found any more, because you moved or filed it (Outlook classic
+  and Titan ids change then), the reply goes as a new email to the same address, under
+  "Re:" and its subject, with the same check. The same happens if making the reply fails
+  part way (Graph busy, say); a reply draft half made by then stays unsent in Drafts, to
+  delete there.
+- Attaché never writes to an address that hasn't written to it. With no message from an
+  address, the reply is dropped, with a warning in the log.
+- Replies are text: files are not attached. A question with options ends with "Reply 1 for
+  Approve, 2 for Decline."
+- Each reply is sent straight away, as the answer to that person's own request, logged by
+  message id, and audited in `logs/mail.jsonl` with ids only. The mail skill's Send button
+  is for your own mail, not for these.
 
 ## The sidecar protocol
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -33,14 +34,23 @@ SHELL = "cmd.exe" if os.name == "nt" else "sh"
 # mail logins, and .approvals the owner's approvals for mail sends (see ask).
 PRIVATE = {".secret", ".git", ".claude", "claude.md", ".mail", ".approvals"}
 # Script arguments that are data, never paths, so they may hold / and : without owner rights:
-# web addresses, and inline JSON objects (_spec; members pass docx, xlsx and pptx specs so).
+# web addresses, and inline JSON objects (_json; members pass docx, xlsx and pptx specs so).
 WEB = ("http://", "https://")
 # ask's refusal for a fingerprint without the preview its mail command writes (.approvals/)
 NO_PREVIEW = "no preview for that fingerprint: run the mail command that drafts it first"
-NUM, ARRAY = {"type": "number"}, {"type": "array", "items": {"type": "string"}}
-TYPES = {"timeout": NUM, "in_minutes": NUM, "all": {"type": "boolean"}, "data": {"type": "object"}}
-TYPES |= {"args": ARRAY, "files": ARRAY, "options": ARRAY}  # every other argument is a string
+NUM, BOOL = {"type": "number"}, {"type": "boolean"}
+ARRAY = {"type": "array", "items": {"type": "string"}}
+TYPES = {"timeout": NUM, "in_minutes": NUM, "all": BOOL, "background": BOOL}
+# every other argument is a string
+TYPES |= {"data": {"type": "object"}, "args": ARRAY, "files": ARRAY, "options": ARRAY}
 TOOLS: list[Tool] = []
+# Background scripts (script, background true): how many may run at once across Attaché (all
+# of them for the owner; one fewer for everyone else together, and one each), for how long, and
+# the runs going now, each with who started it ("" with owner rights).
+MAX_BACKGROUND, BACKGROUND_SECONDS = 4, 12 * 3600
+RUNNING: dict[asyncio.Task[Any], str] = {}
+STARTED = "Running in the background: its result will be posted in this chat when it ends."
+FAILED = "Sorry, that didn't finish. I've let {} know."
 
 
 def slug(text: str) -> str:
@@ -119,11 +129,13 @@ def _tool(fields: str, roles: frozenset[str] = OWNER, description: str = "") -> 
     return register
 
 
-async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
-    """Run a command (a string runs in the shell); JSON {exit_code, output}. On timeout
-    channels.kill_tree kills the whole process tree and reaps it, so its pipes close."""
-    # start_new_session: on POSIX its own process group, which kill_tree kills as one
-    kw = {"cwd": cwd, "stdin": DEVNULL, "stdout": PIPE, "stderr": STDOUT, "start_new_session": True}
+async def _exec(cmd: str | list[str], cwd: Path, timeout: float, env: dict | None = None) -> dict:
+    """Run a command (a string runs in the shell), with env (None: Attaché's own). Returns
+    {exit_code, output}, the output being stdout and stderr together, its last OUTPUT_CAP
+    characters. On timeout or cancellation channels.kill_tree kills the whole process tree
+    and reaps it, so its pipes close."""
+    kw = {"cwd": cwd, "env": env, "stdin": DEVNULL, "stdout": PIPE, "stderr": STDOUT}
+    kw["start_new_session"] = True  # on POSIX its own process group, which kill_tree kills
     if isinstance(cmd, str):
         proc = await asyncio.create_subprocess_shell(cmd, **kw)
     else:
@@ -131,10 +143,10 @@ async def _exec(cmd: str | list[str], cwd: Path, timeout: float) -> str:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
     except TimeoutError:
-        await channels.kill_tree(proc)
         raise TimeoutError(f"stopped after {timeout:g} seconds") from None
-    text = out.decode("utf-8", "replace")[-OUTPUT_CAP:]
-    return json.dumps({"exit_code": proc.returncode, "output": text}, ensure_ascii=False)
+    finally:  # done (then it only reaps), timed out, or cancelled: nothing it started lives on
+        await channels.kill_tree(proc)
+    return {"exit_code": proc.returncode, "output": out.decode("utf-8", "replace")[-OUTPUT_CAP:]}
 
 
 @_tool("path")
@@ -168,14 +180,16 @@ RUN = f"Run a {SHELL} command in the home folder; timeout in seconds, default 60
 @_tool("command timeout?", description=RUN + " Returns JSON {exit_code, output}.")
 async def run(args: dict[str, Any], ctx: TurnContext) -> str:
     timeout = min(float(args.get("timeout") or 60), 600)
-    return await _exec(args["command"], ctx.services.home, timeout)
+    return json.dumps(await _exec(args["command"], ctx.services.home, timeout), ensure_ascii=False)
 
 
-@_tool("skill script args?", BOTH)
+@_tool("skill script args? background?", BOTH)
 async def script(args: dict[str, Any], ctx: TurnContext) -> str:
     """Run skills/<skill>/scripts/<script> with `uv run`, in this chat's files folder. Returns
     JSON {exit_code, output}. Without owner rights, args are file names in that folder, web
-    addresses or inline JSON objects ({...}): nothing else with /, \\, : or .. in it."""
+    addresses or inline JSON objects ({...}): nothing else with /, \\, : or .. in it.
+    background: true (when a skill says so) returns at once; the script's result is posted in
+    this chat when it ends."""
     name, file = str(args["skill"]), str(args["script"])
     if not all(channels.PLAIN_NAME.fullmatch(part) for part in (name, file)):  # no drive, ..
         raise PermissionError("give the skill and the script as plain names, without folders")
@@ -183,24 +197,87 @@ async def script(args: dict[str, Any], ctx: TurnContext) -> str:
     path = skill.path / "scripts" / file if skill else None
     if path is None or not path.is_file():
         raise FileNotFoundError(f"skill {name!r} has no script {file!r}")
-    owner = access(ctx.role, ctx.is_group) == "owner"
+    rights = access(ctx.role, ctx.is_group)
+    owner = rights == "owner"
     if not owner and not for_members(skill):
         raise PermissionError(f"skill {name!r} is not available in this chat")
     extra = [str(arg) for arg in args.get("args") or []]
     for arg in extra:  # without owner rights, nothing that could name a path, but data
-        if not owner and re.search(r"[/\\:]|\.\.", arg) and not (arg.startswith(WEB) or _spec(arg)):
+        if not owner and re.search(r"[/\\:]|\.\.", arg) and not (arg.startswith(WEB) or _json(arg)):
             raise PermissionError(f"{arg!r}: give a file name from this chat's folder, or a URL")
     if not (uv := shutil.which("uv")):
         raise RuntimeError("uv is not installed: see https://docs.astral.sh/uv/")
-    return await _exec([uv, "run", str(path), *extra], chat_files(ctx), 600)
+    cmd, cwd = [uv, "run", str(path), *extra], chat_files(ctx)
+    # Set on every run, over anything inherited, so a script knows who asks, with what rights,
+    # and whether it runs in the background.
+    env = dict(os.environ, ATTACHE_HOME=str(ctx.services.home.resolve()), ATTACHE_ROLE=rights)
+    env.update(ATTACHE_SENDER=ctx.sender.id, ATTACHE_CHAT=ctx.chat_key, ATTACHE_BACKGROUND="")
+    if not args.get("background"):
+        return json.dumps(await _exec(cmd, cwd, 600, env), ensure_ascii=False)
+    starter = "" if owner else ctx.sender.id
+    others = [who for who in RUNNING.values() if who]  # runs started without owner rights
+    if len(RUNNING) >= MAX_BACKGROUND or (starter and len(others) >= MAX_BACKGROUND - 1):
+        raise RuntimeError("too many scripts are running in the background; try again later")
+    if starter in others:
+        raise RuntimeError("your last background script is still running; try when it ends")
+    env["ATTACHE_BACKGROUND"] = "1"
+    job = ctx.services.channels.spawn(_background(ctx, f"{name}/{file}", cmd, cwd, env))
+    if job is None:
+        raise RuntimeError("Attaché is stopping; try again once it is back")
+    RUNNING[job] = starter
+    job.add_done_callback(RUNNING.pop)
+    return json.dumps({"started": True, "note": STARTED})
 
 
-def _spec(arg: str) -> bool:
-    """Whether a script argument is inline JSON for an object: a spec, and so data."""
+async def _background(ctx: TurnContext, label: str, cmd: list[str], cwd: Path, env: dict) -> None:
+    """A background script's run, in a task of its own: when it ends, _report its result.
+    Any error, such as one starting it or sending a message, is logged and reported as a
+    failure. Stopping Attaché cancels it, and _exec kills the script."""
     try:
-        return isinstance(json.loads(arg), dict)
+        result = await _exec(cmd, cwd, BACKGROUND_SECONDS, env)
+        failure = f"exit {result['exit_code']}" if result["exit_code"] else ""
+        await _report(ctx, label, failure, _last_object(result["output"]))
+    except TimeoutError:
+        await _report(ctx, label, "timed out", {})
+    except Exception as e:
+        logging.getLogger(__name__).exception("background script %s failed", label)
+        await _report(ctx, label, f"error: {type(e).__name__}", {})  # its text may quote output
+
+
+async def _report(ctx: TurnContext, label: str, failure: str, said: dict[str, str]) -> None:
+    """Post a background run's result in the chat it started in: said's `text`, else "Done.",
+    or FAILED after a failure. A failure also goes to the owner's approvals chat as a notice,
+    with said's `owner` quoted; in that chat itself, the notice alone. Never the script's own
+    output. Each message is kept in its chat's history as the assistant's."""
+    services = ctx.services
+    default = FAILED.format(services.config.owner.name) if failure else "Done."
+    posts = {ctx.chat_key: said.get("text") or default}
+    if failure:
+        notice = f"{label} for {ctx.sender.name} in {ctx.chat_key} failed ({failure})"
+        if "owner" in said:  # quoted: a script may echo someone else's words there
+            notice += ": " + quote(said["owner"])
+        posts[services.config.approvals] = notice  # in the approvals chat, in place of the text
+    for chat, text in posts.items():
+        services.store.add_message(chat, "assistant", text)
+        await services.channels.send(Outbound(chat, text))
+
+
+def _last_object(output: str) -> dict[str, str]:
+    """The string fields of the JSON object on the last non-empty line of output ({} if none).
+    Lines end only at \\n: JSON may hold a raw U+2028, which splitlines() would split at."""
+    lines = [line for line in output.split("\n") if line.strip()]
+    found = _json(lines[-1]) if lines else {}
+    return {key: value for key, value in found.items() if isinstance(value, str)}
+
+
+def _json(text: str) -> dict[str, Any]:
+    """text as a JSON object; {} when it is not one. A script argument that is one (with a /,
+    \\, : or .. in it, so never empty) is a spec, and so data."""
+    try:
+        found = json.loads(text)
     except ValueError:
-        return False
+        return {}
+    return found if isinstance(found, dict) else {}
 
 
 @_tool("text files?", BOTH)

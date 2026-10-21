@@ -1,0 +1,33 @@
+# The diary skill's settings: `attache skill diary setup` copies this file to diary.toml.
+# Then run `attache skill diary doctor`. The guide is docs/diary.md.
+# The diary only ever offers free slots: never what is in your calendars.
+
+share_with = []             # people from attache.toml who may be offered slots, such as ["dan"];
+                            # you always can
+days = ["mon", "tue", "wed", "thu", "fri"]
+hours = "09:00-17:30"
+horizon_days = 14           # how far ahead slots go: at most 31
+minutes = 30                # meeting length when none is asked for
+gap_minutes = 15            # kept free around other meetings
+
+# Your calendars. Busy time is the union of them all; delete the one you don't use.
+[[calendar]]
+source = "outlook"
+account = "outlook"         # a section of skills/mail/accounts.toml, with backend com or graph
+
+# [[calendar]]
+# source = "google"
+# name = "personal"         # then, in a terminal: attache skill diary login personal
+
+# Preferences. A date ("2026-10-27") is a one-off; a weekday ("tue") with `until` is a habit.
+# `hours` and `until` are optional. `note` is yours alone: it is never shown to anyone.
+
+# [[prefer]]                # offered first
+# when = "tue"
+# hours = "13:00-17:00"
+# until = "2026-11-30"      # ignored after this date
+# note = "afternoons suit me"
+
+# [[avoid]]                 # never offered
+# when = "2026-10-26"
+# note = "finishing the report"

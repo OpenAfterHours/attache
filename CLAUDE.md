@@ -32,7 +32,8 @@ src/attache/
   agent.py      shared tool loop for API backends
   backends/     anthropic, openai (chat + responses), claude_cli
   tools.py      the tools a turn may use, filtered by role; ask (with mail approvals),
-                request (survives a restart: _requests), page turns get db only
+                request (survives a restart: _requests), page turns get db only; script
+                sets ATTACHE_* env and runs background jobs (_background)
   router.py     inbound message -> access, trigger, role -> turn -> reply; page_turn()
   channels.py   channel manager (send, ask and answer, turn tasks), terminal channel,
                 sidecar runner for skill channels (protocol: docs/channels.md)
@@ -47,12 +48,14 @@ src/attache/
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 2,180 lines of code in
-   `src/attache` (target about 2,165; 1,600 in phase 1, 1,900 in phase 2, raised by the owner
-   for phase 3's sharing and page turns). Blank lines, comments and docstrings don't count, so
-   never make code denser to fit: write the readable version. Bundled skills are excluded;
-   each bundled skill's scripts have a 300-line cap (1,350 for `mail`, which has three
-   backends). If a feature doesn't fit, it belongs in a skill.
+1. **Size is a test.** `tests/test_budget.py` fails above 2,240 lines of code in
+   `src/attache` (target about 2,235; 1,600 in phase 1, 1,900 in phase 2, 2,100 in
+   phase 3, 2,180 for the terminal's progress, then 2,240 for email requests' script
+   identity and background runs; each raise the owner's call). Blank lines, comments and
+   docstrings don't count, so never make code denser to fit: write the readable version.
+   Bundled skills are excluded; each bundled skill's scripts have a 300-line cap (1,390
+   for `mail`, which has three backends). If a feature doesn't fit, it belongs in a
+   skill.
 2. **No new runtime dependencies** without discussion. Skill scripts declare their own with
    PEP 723 headers and run through `uv run`.
 3. **Tests run offline.** No network, no API keys, no real `claude` binary. Inject fakes
