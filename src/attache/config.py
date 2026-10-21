@@ -96,7 +96,12 @@ def load(home: Path | None = None) -> Config:
     owner = Person("owner", own.get("name", "you"), "owner", _ids(own))
     people = {}
     for pid, table in raw.get("people", {}).items():
-        people[pid] = Person(pid, table.get("name", pid), table.get("role", "member"), _ids(table))
+        # Owner rights are yours alone, never by email, and scripts trust ATTACHE_SENDER "owner"
+        # to mean you: so neither a person's key nor their role may be "owner".
+        role = table.get("role", "member")
+        if pid == "owner" or role not in ("member", "guest"):
+            raise ValueError(f'{path}: [people.{pid}]: "owner" is you; others are member or guest')
+        people[pid] = Person(pid, table.get("name", pid), role, _ids(table))
     chat_keys = [f.name for f in fields(ChatConfig) if f.name != "key"]
     chats = {}
     for key, table in raw.get("chats", {}).items():
@@ -121,6 +126,9 @@ def load(home: Path | None = None) -> Config:
             raise ValueError(f"{path}: [limits] {key} must be a whole number of at least 1")
     approvals = str(own.get("approvals", "local:me"))
     channel, _, chat_id = approvals.partition(":")
+    # An email proves only its sender's domain (DMARC), so email never gives owner rights.
+    if "email" in owner.ids or channel == "email":
+        raise ValueError(f"{path}: no email in [owner] or approvals: email proves only a domain")
     enabled = channels.get(channel, {}).get("enabled", False)
     direct = approvals == "local:me" or (enabled and chat_id != "")
     if not direct or approvals in chats:  # questions go to your own direct chat, never a group
@@ -158,10 +166,14 @@ def _check(path: Path, section: str, table: dict[str, Any], known: list[str]) ->
 
 
 def _ids(table: dict[str, Any]) -> dict[str, str]:
-    """Channel ids from an `ids` subtable and from plain `<channel> = "<id>"` keys."""
+    """Channel ids from an `ids` subtable and from plain `<channel> = "<id>"` keys. An email
+    address is kept in lower case, as the email channel gives its sender."""
     ids = {key: value for key, value in table.items() if key not in PERSON_KEYS}
     ids.update(table.get("ids", {}))
-    return {channel: str(sender) for channel, sender in ids.items() if sender}
+    ids = {channel: str(sender) for channel, sender in ids.items() if sender}
+    if "email" in ids:
+        ids["email"] = ids["email"].lower()
+    return ids
 
 
 def restrict(path: Path) -> None:

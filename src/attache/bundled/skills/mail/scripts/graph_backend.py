@@ -124,8 +124,11 @@ def stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def local(when: dict) -> str:
-    """Graph's {dateTime, timeZone: "UTC"} as an ISO local time with its offset."""
+def local(when: dict, all_day: bool = False) -> str:
+    """Graph's {dateTime, timeZone: "UTC"} as an ISO local time with its offset. An all-day
+    event's midnight is its date's own, not UTC's: it becomes local midnight, the same day."""
+    if all_day:
+        return datetime.fromisoformat(when["dateTime"][:10]).astimezone().isoformat()
     moment = datetime.fromisoformat(when["dateTime"][:19]).replace(tzinfo=UTC)
     return moment.astimezone().isoformat()
 
@@ -329,7 +332,7 @@ class Backend:
             "endDateTime": stamp(now + timedelta(days=days)),
             "$orderby": "start/dateTime",
             "$top": 100,
-            "$select": "id,subject,start,end,location,organizer,attendees,type,showAs",
+            "$select": "id,subject,start,end,location,organizer,attendees,type,showAs,isAllDay",
         }
         return [self._event(e) for e in self._all("/me/calendarView" + encode(params))]
 
@@ -489,8 +492,8 @@ class Backend:
         return {
             "id": event["id"],
             "subject": event.get("subject") or "",
-            "start": local(event["start"]),
-            "end": local(event["end"]),
+            "start": local(event["start"], event.get("isAllDay", False)),
+            "end": local(event["end"], event.get("isAllDay", False)),
             "location": (event.get("location") or {}).get("displayName") or "",
             "organizer": organizer.get("name") or organizer.get("address") or "",
             "attendees": [e.get("name") or e.get("address") or "" for e in invited],

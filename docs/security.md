@@ -67,23 +67,33 @@ easy to fake, so it passes a message on only when its sender is proven:
   header: each server puts its own on top, and anything further down may have been written
   by the sender. It must say `dmarc=pass` for the From address's domain. A result inside a
   comment, a quoted string anywhere in that header, or a second DMARC result (one may be the
-  sender's words echoed back) all fail. Gmail and Microsoft 365 add the header to every
+  sender's words echoed back) all fail. With `authserv_id` set (`mx.google.com` for Gmail),
+  the header must also be that server's. Gmail and Microsoft 365 add the header to every
   message; with a provider that doesn't, the topmost one could be the sender's own, so the
   channel is not safe there.
+- **Only mail delivered straight to the provider.** Gmail fetching another mailbox by POP,
+  mail imported or moved in from elsewhere, and a filtering gateway in front of the provider
+  all put a different verdict, or none, on top. None of them is supported.
 - **Exchange's own mark**, `X-MS-Exchange-Organization-AuthAs: Internal`, also counts, but
   only through Graph or Outlook classic on an Exchange mailbox, where Exchange strips it from
-  mail arriving from outside. Every copy of it must say so. On Gmail or IMAP it means nothing.
+  mail arriving from outside. Every copy of it must say so. It means Exchange treats the
+  message as internal, not that a person is proven: a relay inside the organisation, or a
+  delegate with Send As or Send on Behalf, can produce it. On Gmail or IMAP it means nothing.
 - **Anything else fails closed**: no single From address, mail from the account itself,
-  auto-replies, mailing lists and bulk mail are skipped too, and so is mail that doesn't
-  mention the assistant.
+  auto-replies, mailing lists and bulk mail are skipped too, and so is mail whose new part
+  (above the quoted history) doesn't mention the assistant or holds the reply signature.
+  Attaché's own replies through IMAP say `Auto-Submitted: auto-replied`, so assistants can't
+  keep answering each other.
 
 DMARC proves the domain sent the message, not which person at it: anyone who can send as
 that domain (its admin, or someone who has taken over the mailbox) passes. So an email
-address is only ever a person's id under `[people]`, with that person's role, and never goes
-in `[owner.ids]`: by email nobody gets owner rights. A reply goes only to the From address of
-that person's latest proven message, never to its `Reply-To`, never Cc, and never as a new
-email, so a message can't send Attaché's answer to someone else. Each reply is logged with
-ids only.
+address is only ever a person's id under `[people]`, with that person's role: one in
+`[owner.ids]`, or an email chat as the approvals chat, is refused, and by email nobody gets
+owner rights. A reply goes only to the From address of a message that person sent, never to
+its `Reply-To` and never Cc. Attaché never writes to an address that hasn't written to it; if
+the message has since been moved, the reply goes to that same address as a new email. Each
+reply is logged with ids only. A mail skill older than the channel, whose replies would
+follow `Reply-To`, is refused: see [Updating the mail skill](mail.md#updating-the-mail-skill).
 
 ## Files and the shell
 

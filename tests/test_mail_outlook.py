@@ -1457,6 +1457,19 @@ def test_graph_agenda_shows_free_or_busy(cloud: Any, fake: FakeGraph, given: str
     assert cloud.agenda(7)[0]["show_as"] == shown
 
 
+def test_graph_all_day_events_keep_their_day(cloud: Any, fake: FakeGraph) -> None:
+    """Without a Prefer: outlook.timezone, an all-day event comes as UTC midnights; read as
+    UTC they would start the evening before in the Americas, or at 01:00 in Paris."""
+    holiday = fake.routes["GET /me/calendarView"]["value"][1]
+    holiday |= {"isAllDay": True, "showAs": "oof"}
+    holiday["start"] = {"dateTime": "2026-10-23T00:00:00.0000000", "timeZone": "UTC"}
+    holiday["end"] = {"dateTime": "2026-10-24T00:00:00.0000000", "timeZone": "UTC"}
+    event = cloud.agenda(7)[1]
+    assert event["start"] == datetime(2026, 10, 23).astimezone().isoformat()  # local midnight
+    assert event["end"] == datetime(2026, 10, 24).astimezone().isoformat()
+    assert "isAllDay" in fake.params(0)["$select"].split(",")
+
+
 def test_graph_tasks_come_from_to_do(cloud: Any, fake: FakeGraph) -> None:
     tasks = cloud.tasks()
     assert [(t["id"], t["subject"], t["due"], t["done"]) for t in tasks] == [

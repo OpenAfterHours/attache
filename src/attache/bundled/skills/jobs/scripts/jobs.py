@@ -16,7 +16,10 @@ sends it to them). Neither ever holds what the job printed: that goes to its log
 <home>/logs/jobs/NAME-YYYYmmdd-HHMMSS.log, which nothing here reads. The last 20 are kept.
 
 Who is asking comes from what the core sets, ATTACHE_ROLE and ATTACHE_SENDER, never from the
-arguments. Without ATTACHE_ROLE, it is the owner, running this in their own terminal.
+arguments. Without ATTACHE_ROLE, it is the owner, running this in their own terminal. Anyone
+else's model reads a foreground run's output, so there `owner` is left out, and `start` runs
+only in the background (ATTACHE_BACKGROUND=1, which the core sets on background runs alone).
+`setup` is the owner's.
 
 `start` runs the job's argument list without a shell and waits for it (the core runs it in
 the background). One run per job at a time: the lock is a system lock on
@@ -63,7 +66,6 @@ class JobError(Exception):
     """A refusal or a failure: `text` for the person who asked, `owner` for the owner alone."""
 
     def __init__(self, text: str, owner: str | None = None) -> None:
-        super().__init__(text)
         self.text, self.owner = text, owner
 
 
@@ -82,6 +84,11 @@ def caller() -> tuple[str, bool]:
     return os.environ.get("ATTACHE_SENDER") or ("owner" if owner else ""), owner
 
 
+def background() -> bool:
+    """Whether the core runs this in the background, so that only it reads the result."""
+    return os.environ.get("ATTACHE_BACKGROUND") == "1"
+
+
 def strings(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(each, str) and each for each in value)
 
@@ -91,11 +98,11 @@ def checked(name: str, job: Any) -> Json:
     defaults = {"label": name, "who": [], "timeout_minutes": 120, "cwd": "."}
     job = {**defaults, **job} if isinstance(job, dict) else {}
     limit = job.get("timeout_minutes")
-    valid = PLAIN.fullmatch(name) and strings(job.get("command")) and job["command"]
     # who as a list: `in` on a string would match part of a name
-    valid = valid and strings(job["who"]) and isinstance(job["label"], str)
-    valid = valid and isinstance(job["cwd"], str) and type(limit) in (int, float)
-    if not valid or not 0 < limit <= MAX_MINUTES:
+    lists = strings(job.get("command")) and job["command"] and strings(job["who"])
+    texts = isinstance(job.get("label"), str) and isinstance(job.get("cwd"), str)
+    timed = type(limit) in (int, float) and 0 < limit <= MAX_MINUTES
+    if not (PLAIN.fullmatch(name) and lists and texts and timed):
         need = f"a lowercase name, command and who as lists, timeout_minutes to {MAX_MINUTES}"
         raise JobError("The jobs can't be read just now.", f"jobs.toml: [{name}] needs {need}")
     return job
@@ -105,7 +112,7 @@ def load(home: Path) -> dict[str, Json]:
     """The jobs in jobs.toml, checked."""
     path = home / "skills" / "jobs" / "jobs.toml"
     if not path.is_file():
-        raise JobError("No jobs are set up.", f"no {path}: run `attache skill jobs setup`")
+        raise JobError("No jobs are set up.", "no jobs.toml: run `attache skill jobs setup`")
     jobs = tomllib.loads(path.read_text(encoding="utf-8-sig"))  # Notepad may write a BOM
     return {name: checked(name, job) for name, job in jobs.items()}
 
@@ -132,15 +139,8 @@ def take(path: Path) -> int | None:
     return fd
 
 
-def note(fd: int, text: str) -> None:
-    """Replace the text of a lock file this process holds."""
-    os.ftruncate(fd, 0)
-    os.lseek(fd, 0, os.SEEK_SET)
-    os.write(fd, text.encode("utf-8"))
-
-
 def let_go(fd: int) -> None:
-    note(fd, "")  # not running: see since()
+    os.ftruncate(fd, 0)  # not running: see since()
     if os.name == "nt":  # now: Windows may take its time over a lock left to close
         os.lseek(fd, LOCK_AT, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
@@ -196,12 +196,15 @@ def wait(proc: subprocess.Popen, seconds: float) -> bool:
 def run(home: Path, name: str, job: Json, who: str, fd: int) -> Json:
     """Run a locked job to its end, its output into a new log."""
     now = datetime.now()
-    note(fd, json.dumps({"pid": os.getpid(), "since": now.isoformat(timespec="seconds")}))
+    record = {"pid": os.getpid(), "since": now.isoformat(timespec="seconds")}
+    os.ftruncate(fd, 0)  # the text a killed run left
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, json.dumps(record).encode("utf-8"))
     log = home / LOGS / f"{name}-{now:%Y%m%d-%H%M%S}.log"
     where = f"started by {who}. Log: {log.relative_to(home).as_posix()}"
     if os.name != "nt" and "ATTACHE_ROLE" in os.environ:  # under Attaché: see wait()
-        with contextlib.suppress(OSError):
-            os.setpgid(0, 0)
+        # Fails only for a session leader, which a script under uv never is: loud, if ever.
+        os.setpgid(0, 0)
     with log.open("ab") as out:  # "a": a run in the same second keeps the last one's log
         prune(log.parent, name)
         began = time.monotonic()
@@ -235,7 +238,8 @@ def run(home: Path, name: str, job: Json, who: str, fd: int) -> Json:
 
 def list_jobs(home: Path, args: argparse.Namespace) -> Json:
     """The jobs this caller may start."""
-    (who, owner), found = caller(), []
+    who, owner = caller()
+    found = []
     for name, job in load(home).items():
         if owner or who in job["who"]:
             at = since(home / LOGS / f"{name}.lock")
@@ -244,7 +248,11 @@ def list_jobs(home: Path, args: argparse.Namespace) -> Json:
 
 
 def start(home: Path, args: argparse.Namespace) -> Json:
-    (who, owner), name, jobs = caller(), args.name, load(home)
+    who, owner = caller()
+    if not owner and not background():  # before anything: their model would read the result
+        raise JobError("Start it in the background.")
+    name = args.name
+    jobs = load(home)
     if name not in jobs:  # every name in jobs is plain, so an odd one stops here, never echoed
         what = f"{name!r}, which isn't in jobs.toml" if PLAIN.fullmatch(name) else "a bad name"
         raise JobError(NOT_YOURS, f"{who} asked to start {what}")
@@ -262,6 +270,8 @@ def start(home: Path, args: argparse.Namespace) -> Json:
 
 
 def setup(home: Path, args: argparse.Namespace) -> Json:
+    if not caller()[1]:
+        raise JobError("Only the owner can set up jobs.")
     target = home / "skills" / "jobs" / "jobs.toml"
     created = not target.exists()
     if created:
@@ -281,8 +291,7 @@ def parser() -> Parser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):  # labels in any script, even down a Windows pipe
-        sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")  # labels in any script, even down a Windows pipe
     # $ATTACHE_HOME, which Attaché sets; else the home this script is installed in
     home = Path(os.environ.get("ATTACHE_HOME") or HERE.parents[2]).resolve()
     try:
@@ -293,6 +302,8 @@ def main(argv: list[str] | None = None) -> int:
     except (Exception, KeyboardInterrupt) as error:  # whatever happens, the last line is JSON
         what = f"jobs.py failed for {caller()[0]}: {type(error).__name__}: {error}"
         result = {"ok": False, "text": "That couldn't be done just now.", "owner": what}
+    if not caller()[1] and not background():  # their model reads this: `owner` isn't for it
+        result.pop("owner", None)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0 if result["ok"] else 1
 

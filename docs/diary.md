@@ -17,8 +17,8 @@ through the `email` channel. They get slots; only you can change how it works.
 
 | Offered | Never shown |
 |---|---|
-| Free slots: start, end and a label such as `Tue 27 Oct, 14:00–14:30` | Titles, attendees, organisers, places and descriptions |
-| Your time zone | Why a time isn't free, or which calendar it is in |
+| Free slots: start, end and a label such as `Tue 27 Oct, 14:00–14:30 GMT` | Titles, attendees, organisers, places and descriptions |
+| Your time zone, in each label | Why a time isn't free, or which calendar it is in |
 | The meeting length asked for | The notes on your preferences |
 | | The secret address of a Google calendar |
 
@@ -37,9 +37,10 @@ How it holds:
   include it.
 
 What someone can still work out: free slots are what is left after the busy time. A person who
-asks many times, for different days and lengths, could map roughly when you are busy, though
-never what with or with whom. Preferred days come first, so the order hints at your
-preferences. Share the diary with people you would tell "Tuesday morning is no good" anyway.
+runs `slots` many times, with different `--from`, `--minutes` and `--count`, can map your free
+and busy time fairly closely, though never what a meeting is or who it is with. Preferred days
+come first, so the order hints at your preferences too. `share_with` is the control: share the
+diary only with people you would tell "Tuesday morning is no good" anyway.
 
 ## Setting up
 
@@ -81,6 +82,11 @@ account = "outlook"   # the [section] of skills/mail/accounts.toml
 The diary runs the mail skill's `agenda` for that account and keeps only start and end times.
 IMAP accounts (Gmail, Titan) have no calendar here; for a Google calendar, use its secret
 address, below.
+
+The mail skill must be up to date: the diary relies on its `agenda` saying whether each item
+shows as free or busy. An older copy of the skill doesn't, so every item counts as busy,
+including the ones you marked free. See
+[Updating the mail skill](mail.md#updating-the-mail-skill).
 
 ### Google
 
@@ -137,7 +143,9 @@ How slots are chosen:
   asked for (up to ten).
 
 Times are in this computer's time zone, and stay right across the change to and from summer
-time. An all-day event that isn't marked free blocks the whole day.
+time. Each label ends with its own slot's zone: its short name, such as `BST` or `CET`, or,
+where the system's name is long (as on Windows), its offset, such as `UTC+1`. An all-day event
+that isn't marked free blocks the whole day.
 
 ## Preferences
 
@@ -201,6 +209,8 @@ share_with = ["dan", "priya"]
 - Nobody can book a time through the diary, not even the assistant. When someone picks a slot,
   the assistant passes it on to you with `request`; you send the invitation.
 - In a group chat, everyone in the group sees the slots offered to the person who asked.
+  That includes you: you get slots in a group chat too, though you act there with a member's
+  rights. The jobs skill is deliberately stricter there.
 - Members can't run `setup`, `login` or `doctor`, or change the settings.
 
 Remove someone from `share_with` to stop. Nothing else needs undoing.

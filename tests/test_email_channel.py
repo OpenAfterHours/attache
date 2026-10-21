@@ -152,6 +152,19 @@ def test_the_pass_must_be_for_the_from_domain() -> None:
     assert proven(gmail(shouting), "dan@example.com")
 
 
+def test_the_receiving_server_can_be_named() -> None:
+    """authserv_id: the topmost results must be that server's, not merely the topmost."""
+    dan = "dan@example.com"
+    assert channel.authenticated(head(gmail()), dan, False, "mx.google.com")
+    assert channel.authenticated(head(gmail()), dan, False, "MX.Google.com")
+    assert not channel.authenticated(head(gmail()), dan, False, "mx.titan.email")
+    bare = gmail("dmarc=pass header.from=example.com")  # a server that names nobody
+    assert proven(bare) and not channel.authenticated(head(bare), dan, False, "mx.google.com")
+    assert not channel.authenticated(head(m365()), dan, False, "mx.google.com")
+    sam = "sam@corp.example"
+    assert channel.authenticated(head(INTERNAL), sam, True, "mx.google.com")  # Exchange's own
+
+
 @pytest.mark.parametrize(
     "results",
     [
@@ -298,6 +311,7 @@ class FakeBackend:
         self.drafts: dict[str, dict[str, Any]] = {}
         self.sent: list[dict[str, Any]] = []
         self.broken: set[str] = set()  # ids whose headers can't be read just now
+        self.moved: set[str] = set()  # ids no longer there (Outlook's change on a move)
         self.redirect: list[str] | None = None  # a backend that ignored `to`
         self.on_list: Any = None
 
@@ -332,9 +346,11 @@ class FakeBackend:
 
     def draft(self, to, cc, subject, body, reply_to, reply_all) -> dict[str, Any]:
         self.note("draft", to, cc, subject, body, reply_to, reply_all)
+        if reply_to in self.moved:
+            raise LookupError("no such message (it may have moved)")
         native = f"draft-{len(self.drafts) + 1}"
         self.drafts[native] = {"id": native, "to": self.redirect or to, "cc": cc, "bcc": []}
-        self.drafts[native] |= {"subject": "Re: x", "body": body, "attachments": []}
+        self.drafts[native] |= {"subject": subject or "Re: x", "body": body, "attachments": []}
         return self.drafts[native]
 
     def send_draft(self, native: str) -> str:
@@ -377,7 +393,7 @@ def messages(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
     return [e for e in events(capsys) if e["type"] == "message"]
 
 
-BODY = "Can you run it today?\n\nOn Mon, 19 Oct 2026, Phil <you@gmail.com> wrote:\n> Sure."
+BODY = "@attache can you run it today?\n\nOn Mon, 19 Oct 2026, Phil <you@gmail.com> wrote:\n> Hi"
 
 
 def test_a_first_start_never_answers_old_mail(inbox: Any, fake: FakeBackend, capsys) -> None:
@@ -385,7 +401,8 @@ def test_a_first_start_never_answers_old_mail(inbox: Any, fake: FakeBackend, cap
     inbox.check()
     assert messages(capsys) == []
     since = fake.calls[0][4]
-    assert since >= NOW - timedelta(seconds=1) and fake.calls[0][:4] == ("list", None, False, 50)
+    assert since >= NOW - timedelta(seconds=1)
+    assert fake.calls[0][:4] == ("list", None, False, channel.MOST)
     fake.add("new", gmail(), BODY, when=datetime.now(UTC) + timedelta(seconds=1))
     inbox.check()
     assert [m["message_id"] for m in messages(capsys)] == ["new"]
@@ -401,14 +418,15 @@ def test_an_admitted_message(inbox: Any, fake: FakeBackend, home: Path, capsys) 
         "chat_id": "dan@example.com",
         "sender_id": "dan@example.com",
         "sender_name": "Dan Price",
-        "text": "Subject: @attache run the VA\n\nCan you run it today?",
+        "text": "Subject: @attache run the VA\n\n@attache can you run it today?",
         "is_group": False,
         "mentioned": True,
         "message_id": "m1",
         "files": [],
     }
     saved = json.loads((home / "inbox" / ".state.json").read_text(encoding="utf-8"))
-    assert saved["done"] == ["m1"] and saved["latest"] == {"dan@example.com": "m1"}
+    assert saved["done"] == ["m1"]
+    assert saved["admitted"] == {"m1": ["dan@example.com", "@attache run the VA"]}
     assert ("read", "m1", 4000) in fake.calls  # no more than the text passed on
 
 
@@ -424,32 +442,70 @@ def test_nothing_is_passed_on_twice_across_restarts(
     assert datetime.fromisoformat(first.state.since) == NOW - channel.OVERLAP
     again = make_inbox(home, mail_py, fake, monkeypatch)  # a restart, from the state file
     again.check()
-    assert messages(capsys) == [] and again.state.latest == {"dan@example.com": "m1"}
+    assert messages(capsys) == [] and again.state.latest("dan@example.com") == "m1"
     assert again.state.since == first.state.since
 
 
-def test_skipped_mail_is_logged_by_id_only(inbox: Any, fake: FakeBackend, capsys) -> None:
+def test_only_an_unproven_sender_is_logged(inbox: Any, fake: FakeBackend, capsys) -> None:
+    """The log shows in the owner's terminal: mail never meant for Attaché leaves no line."""
     own = DAN.replace("Dan Price <dan@example.com>", "You <You@Gmail.com>")
     fake.add("own", gmail(sender=own), BODY)
     fake.add("auto", gmail(sender=DAN + "Auto-Submitted: auto-replied\n"), BODY)
     fake.add("list", gmail(sender=DAN + "List-Id: <va.lists.example>\n"), BODY)
     fake.add("forged", gmail(GOOGLE_FAIL, FORGED), BODY)
     fake.add("quiet", gmail(), "Can you run it?", subject="The VA")
-    fake.add("quoted", gmail(), "Thanks!\n\n> @attache run the VA", subject="Re: the VA")
     inbox.state.since = (NOW - timedelta(minutes=1)).isoformat()
     inbox.check()
-    logs = [e for e in events(capsys) if e["type"] == "log"]
-    assert [e["text"] for e in logs] == [
-        "skipped message own: from this account",
-        "skipped message auto: automatic or list mail",
-        "skipped message list: automatic or list mail",
-        "skipped message forged: sender not authenticated",
-        "skipped message quiet: no mention",
-        "skipped message quoted: no mention",  # a mention in the quoted history doesn't count
-    ]
-    assert {e["level"] for e in logs} == {"info"}
-    assert [call[1] for call in fake.calls if call[0] == "read"] == ["quiet", "quoted"]
-    assert inbox.state.latest == {}  # only the proven are read at all, and none admitted
+    (log,) = events(capsys)
+    assert log == {
+        "type": "log",
+        "level": "info",
+        "text": "skipped message forged: sender not authenticated",  # an id, never an address
+    }
+    assert [call[1] for call in fake.calls if call[0] == "read"] == ["forged", "quiet"]
+    assert inbox.state.done == ["own", "auto", "list", "forged", "quiet"]
+    assert inbox.state.admitted == {}
+
+
+def test_the_mention_must_be_in_the_new_part(inbox: Any, fake: FakeBackend, capsys) -> None:
+    """A subject keeps its mention through a whole thread, and quoted history repeats it: only
+    the words just written ask for Attaché."""
+    fake.add("thanks", gmail(), "Thanks!\n\nOn Tue, Attaché <you@gmail.com> wrote:\n> @attache")
+    fake.add("subject", gmail(), "Thanks!", subject="Re: @attache run the VA")
+    fake.add("again", gmail(), "@Attaché and on Friday?\n\n> @attache run the VA")
+    inbox.state.since = (NOW - timedelta(minutes=1)).isoformat()
+    inbox.check()
+    (message,) = messages(capsys)
+    assert message["message_id"] == "again"
+    assert message["text"] == "Subject: @attache run the VA\n\n@Attaché and on Friday?"
+
+
+def test_a_reply_holding_the_signature_is_never_answered(
+    inbox: Any, fake: FakeBackend, capsys
+) -> None:
+    """Attaché's own replies say to start with @attache, so another assistant's reply (or one
+    quoted without markers) would loop: the signature in the new part stops it."""
+    signed = f"Done, the VA has started.\n\n{inbox.signature}"
+    fake.add("loop", gmail(), signed.replace("\n\nSent", "\n\n  sent").replace(". ", ".\n"))
+    fake.add("plain", gmail(), f"@attache thanks\n\n> {inbox.signature}")  # quoted: fine
+    inbox.state.since = (NOW - timedelta(minutes=1)).isoformat()
+    inbox.check()
+    assert [m["message_id"] for m in messages(capsys)] == ["plain"]
+    assert "@attache" in inbox.signature  # it tells people how to answer
+
+
+def test_a_busy_inbox_is_worked_through_oldest_first(inbox: Any, fake: FakeBackend, capsys) -> None:
+    """More than LIMIT at once: the oldest first, and the watermark waits for the rest."""
+    for n in range(120):  # one a minute, for two hours
+        fake.add(f"m{n:03}", gmail(), BODY, when=NOW - timedelta(minutes=120 - n))
+    inbox.state.since = (NOW - timedelta(hours=3)).isoformat()
+    inbox.check()
+    assert [m["message_id"] for m in messages(capsys)] == [f"m{n:03}" for n in range(50)]
+    assert datetime.fromisoformat(inbox.state.since) == NOW - timedelta(minutes=70)  # m050
+    inbox.check()
+    inbox.check()
+    assert [m["message_id"] for m in messages(capsys)] == [f"m{n:03}" for n in range(50, 120)]
+    assert datetime.fromisoformat(inbox.state.since) == NOW - timedelta(minutes=1) - channel.OVERLAP
 
 
 def test_the_text_is_capped(inbox: Any, fake: FakeBackend, capsys) -> None:
@@ -490,15 +546,60 @@ def test_a_reply_goes_to_the_from_address_alone(
 ) -> None:
     admitted(inbox, fake, "m1", "m2")  # Dan's mail has a Reply-To: it is never used
     capsys.readouterr()
-    inbox.answer(send(reply_to="m1"))
-    signed = "Started.\n\nSent by Attaché, an assistant."
+    inbox.answer(send(reply_to="m2"))
+    signed = f"Started.\n\n{inbox.signature}"
     drafted = [call for call in fake.calls if call[0] == "draft"]
-    assert drafted == [("draft", ["dan@example.com"], [], None, signed, "m2", False)]  # latest
-    assert [d["id"] for d in fake.sent] == ["draft-1"] and capsys.readouterr().out == ""
+    assert drafted == [("draft", ["dan@example.com"], [], None, signed, "m2", False)]
+    assert [d["id"] for d in fake.sent] == ["draft-1"]
+    assert events(capsys) == [{"type": "log", "level": "info", "text": "replied to message m2"}]
     (line,) = (home / "logs" / "mail.jsonl").read_text(encoding="utf-8").splitlines()
     audit = json.loads(line)
     assert audit["command"] == "email-reply" and audit["account"] == "gmail" and audit["ok"]
     assert audit["ids"] == ["gmail:m2", "gmail:draft-1"] and "Started" not in line
+    assert fake.extra == {"Auto-Submitted": "auto-replied"}  # IMAP marks the reply so
+
+
+def test_a_reply_goes_in_the_thread_it_answers(
+    inbox: Any, fake: FakeBackend, monkeypatch, capsys
+) -> None:
+    """The core names the message it answers; reminders and background jobs name none."""
+    admitted(inbox, fake, "m1", "m2")
+    fake.add("sam1", gmail(sender=DAN.replace("dan@example.com", "sam@example.com")), BODY)
+    inbox.check()
+    replied = []
+    monkeypatch.setattr(inbox, "reply", lambda address, native, body: replied.append(native))
+    for reply_to in ("m1", None, "sam1", "gone"):
+        inbox.answer(send(reply_to=reply_to))
+    assert replied == ["m1", "m2", "m2", "m2"]  # another person's message, or none: the latest
+
+
+def test_a_moved_message_is_answered_in_a_new_email(
+    inbox: Any, fake: FakeBackend, home: Path, capsys
+) -> None:
+    """Outlook's ids change when the owner files a message: a job's result hours later still
+    reaches the person, to them alone, under the same subject."""
+    admitted(inbox, fake, "m1")
+    capsys.readouterr()
+    fake.moved = {"m1"}
+    inbox.answer(send(reply_to="m1"))
+    drafts = [call for call in fake.calls if call[0] == "draft"]
+    body = f"Started.\n\n{inbox.signature}"
+    assert drafts[-1] == (
+        "draft",
+        ["dan@example.com"],
+        [],
+        "Re: @attache run the VA",
+        body,
+        None,
+        False,
+    )
+    assert fake.sent[0]["subject"] == "Re: @attache run the VA"
+    inbox.state.admitted["m1"][1] = "RE: the VA"
+    inbox.answer(send(reply_to="m1"))
+    assert fake.sent[1]["subject"] == "RE: the VA"  # never "Re: RE:"
+    fake.redirect = ["quotes@example.com"]
+    inbox.answer(send(reply_to="m1"))
+    assert len(fake.sent) == 2  # the same guard: to the sender alone
 
 
 def test_never_a_cold_email(inbox: Any, fake: FakeBackend, home: Path, capsys) -> None:
@@ -537,7 +638,7 @@ def test_ask_numbers_the_options(inbox: Any, fake: FakeBackend) -> None:
     question = {"type": "ask", "chat_id": "dan@example.com", "ask_id": "a1", "text": "Run it?"}
     inbox.answer(question | {"options": ["Approve", "Decline"]})
     asked = "Run it?\n\nReply 1 for Approve, 2 for Decline."
-    assert fake.sent[0]["body"] == f"{asked}\n\n{channel.SIGNATURE}"
+    assert fake.sent[0]["body"] == f"{asked}\n\n{inbox.signature}"
 
 
 def stdin(monkeypatch: pytest.MonkeyPatch, text: str) -> io.TextIOWrapper:
@@ -609,28 +710,60 @@ def test_without_an_account_it_explains_and_waits_for_stop(
     assert "the mail skill isn't installed" in capsys.readouterr().err
 
 
-def test_open_inbox_uses_the_installed_mail_skill(home: Path, monkeypatch) -> None:
+@pytest.fixture
+def installed(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home with the bundled skills; mail.py and its backends are imported from it, and
+    forgotten again afterwards."""
     skills.install_bundled(home)
     accounts = '[gmail]\nbackend = "imap"\nuser = "You@Gmail.com"\n[work]\nbackend = "com"\n'
     (home / "skills" / "mail" / "accounts.toml").write_text(accounts, encoding="utf-8")
     monkeypatch.setattr(sys, "path", list(sys.path))
-    sys.modules.pop("mail", None)
-    try:
-        monkeypatch.setenv("ATTACHE_ACCOUNT", "gmail")
-        monkeypatch.setenv("ATTACHE_FILES", str(home / "files" / "inbox" / "email"))
-        monkeypatch.setenv("ATTACHE_MENTION", "@bot")
-        found = channel.open_inbox(home)
-        assert found.account == "gmail" and found.own == {"you@gmail.com"}
-        assert found.mention == "@bot" and found.signature == channel.SIGNATURE
-        assert found.state.path == home / "files" / "inbox" / "email" / ".state.json"
-        assert Path(found.skill.__file__).parent == home / "skills" / "mail" / "scripts"
-        monkeypatch.setenv("ATTACHE_ACCOUNT", "work")
-        assert channel.open_inbox(home).own == set()  # no user: nothing known as its own
-        monkeypatch.setenv("ATTACHE_ACCOUNT", "titan")
-        with pytest.raises(Exception, match="no account 'titan'"):
-            channel.open_inbox(home)
-    finally:
-        sys.modules.pop("mail", None)
+    names = ("mail", "imap_backend", "com_backend", "graph_backend")
+    for name in names:
+        sys.modules.pop(name, None)
+    yield home
+    for name in names:
+        sys.modules.pop(name, None)
+
+
+def test_open_inbox_uses_the_installed_mail_skill(installed: Path, monkeypatch) -> None:
+    home = installed
+    monkeypatch.setenv("ATTACHE_ACCOUNT", "gmail")
+    monkeypatch.setenv("ATTACHE_FILES", str(home / "files" / "inbox" / "email"))
+    monkeypatch.setenv("ATTACHE_MENTION", "@bot")
+    found = channel.open_inbox(home)
+    assert found.account == "gmail" and found.own == {"you@gmail.com"}
+    assert found.mention == "@bot" and found.signature == channel.SIGNATURE.format("@bot")
+    assert found.authserv == ""
+    assert found.state.path == home / "files" / "inbox" / "email" / ".state.json"
+    assert Path(found.skill.__file__).parent == home / "skills" / "mail" / "scripts"
+    monkeypatch.setenv("ATTACHE_ACCOUNT", "work")
+    monkeypatch.setenv("ATTACHE_SIGNATURE", "  Sent by Dan's assistant.  ")
+    monkeypatch.setenv("ATTACHE_AUTHSERV_ID", "mx.google.com")
+    work = channel.open_inbox(home)
+    assert work.own == set()  # no user: nothing known as its own
+    assert work.signature == "Sent by Dan's assistant." and work.authserv == "mx.google.com"
+    monkeypatch.setenv("ATTACHE_ACCOUNT", "titan")
+    with pytest.raises(Exception, match="no account 'titan'"):
+        channel.open_inbox(home)
+
+
+def test_a_mail_skill_older_than_the_channel_is_refused(
+    installed: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`attache init` never overwrites skills/mail, so a home from 0.0.2 keeps backends whose
+    replies follow Reply-To. The channel waits, saying what to do, and never polls."""
+    old = installed / "skills" / "mail" / "scripts" / "imap_backend.py"
+    old.write_text("class Backend:\n    def list(self, *args):\n        raise AssertionError\n")
+    monkeypatch.setenv("ATTACHE_ACCOUNT", "gmail")
+    stdin(monkeypatch, '{"type": "stop"}\n')
+    assert channel.main() == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert (
+        f"the mail skill in {installed / 'skills' / 'mail'} is older than this channel" in out.err
+    )
+    assert "see docs/mail.md, Updating the mail skill" in out.err
 
 
 def test_the_state_file(tmp_path: Path, capsys) -> None:
@@ -638,9 +771,12 @@ def test_the_state_file(tmp_path: Path, capsys) -> None:
     state = channel.State.load(path)
     assert datetime.fromisoformat(state.since) >= NOW and state.done == []
     state.done += [str(n) for n in range(600)]
+    state.admitted |= {str(n): [f"p{n % 3}@example.com", f"S{n}"] for n in range(600)}
     state.save()
     again = channel.State.load(path)
     assert again.done == [str(n) for n in range(100, 600)] and again.since == state.since
+    assert list(again.admitted) == [str(n) for n in range(100, 600)]  # the last 500 too
+    assert again.latest("p0@example.com") == "597" and again.latest("x@example.com") is None
     assert [p.name for p in tmp_path.iterdir()] == [".state.json"]  # written by a rename
     path.write_text("{not json", encoding="utf-8")
     fresh = channel.State.load(path)

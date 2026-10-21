@@ -24,8 +24,9 @@ items, for example `args: ["slots", "--minutes", "45", "--from", "2026-10-27"]`:
 | `--days 7` | How many days to search. Default: as far ahead as the diary goes. |
 | `--from 2026-10-27` | The first day to search, as a date. Times of day can't be given. |
 
-It prints `{"ok": true, "timezone": "BST", "minutes": 30, "slots": [{"start", "end",
-"label"}]}`, in the owner's local time.
+It prints `{"ok": true, "minutes": 30, "slots": [{"start", "end", "label"}]}`, in the owner's
+local time. Each label ends with that slot's zone, as in `Tue 27 Oct, 14:00–14:30 GMT` or
+`14:00–14:30 UTC+1`; keep it, since summer time can change between two slots.
 
 - Offer exactly those slots, by their `label`, in the order given. Never add, stretch or merge
   times, and never suggest a time that isn't listed.

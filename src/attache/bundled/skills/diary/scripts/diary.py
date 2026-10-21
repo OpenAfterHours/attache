@@ -40,6 +40,7 @@ import sys
 import tomllib
 import urllib.error
 import urllib.request
+import warnings
 from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,17 @@ def aware(value: date) -> datetime:
     if not isinstance(value, datetime):
         return at(value, time())
     return value if value.tzinfo else local(value)
+
+
+def zone(moment: datetime) -> str:
+    """The zone of a local time, short: its name (BST, CET), or where that is long, as Windows'
+    "GMT Daylight Time" is, its offset (UTC+1, UTC-3:30)."""
+    name = moment.tzname() or ""
+    if name.isalpha() and len(name) <= 5:
+        return name
+    minutes = int((moment.utcoffset() or timedelta()).total_seconds()) // 60
+    hours, rest = divmod(abs(minutes), 60)
+    return f"UTC{'-' if minutes < 0 else '+'}{hours}" + (f":{rest:02}" if rest else "")
 
 
 def span(text: Any) -> tuple[time, time]:
@@ -195,9 +207,13 @@ def shared(cfg: Json) -> bool:
 def outlook_busy(home: Path, account: str, days: int) -> list[Block]:
     """The account's busy times, from the mail skill's agenda. Free and working-elsewhere
     items don't count; an item without show_as does."""
+    # The uv running this script ($UV, which uv sets), else the one on PATH, looked up from the
+    # home folder (main moved there): never a uv.exe a member put in their chat's folder.
+    if not (uv := os.environ.get("UV") or shutil.which("uv")):
+        raise RuntimeError("uv isn't on PATH: see https://docs.astral.sh/uv/")
     script = home / "skills" / "mail" / "scripts" / "mail.py"
-    argv = ["uv", "run", str(script), "agenda", "--account", account, "--days", str(days)]
-    done = subprocess.run(argv, capture_output=True, encoding="utf-8", timeout=300)
+    argv = [uv, "run", str(script), "agenda", "--account", account, "--days", str(days)]
+    done = subprocess.run(argv, cwd=home, capture_output=True, encoding="utf-8", timeout=300)
     try:  # never its output in an error: that is the calendar itself
         found = json.loads(done.stdout)
     except ValueError:
@@ -332,10 +348,11 @@ def slots(home: Path, args: argparse.Namespace) -> Json:
     minutes = args.minutes or cfg["minutes"]
     chosen = spread(free(cfg, blocks, now, minutes, first, last), args.count)
     shown = []
-    for begins, ends in chosen:
-        label = f"{begins:%a} {begins.day} {begins:%b}, {begins:%H:%M}\u2013{ends:%H:%M}"
+    for begins, ends in chosen:  # each with its own zone: summer time may end in between
+        when = f"{begins:%a} {begins.day} {begins:%b}, {begins:%H:%M}\u2013{ends:%H:%M}"
+        label = f"{when} {zone(begins)}"
         shown.append({"start": begins.isoformat(), "end": ends.isoformat(), "label": label})
-    return {"timezone": now.tzname(), "minutes": minutes, "slots": shown}
+    return {"minutes": minutes, "slots": shown}
 
 
 def setup(home: Path, args: argparse.Namespace) -> Json:
@@ -397,7 +414,12 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     # $ATTACHE_HOME, which Attaché sets; else the home this script is installed in
     home = Path(os.environ.get("ATTACHE_HOME") or HERE.parents[2])
+    # Parsers' warnings go to stderr, which the core shows the model with the output.
+    warnings.simplefilter("ignore")
     try:
+        # Out of the chat's files folder, which a member can fill: Windows runs a program from
+        # the current folder before searching PATH.
+        os.chdir(home)
         args = parser().parse_args(argv)
         if args.command != "slots" and not owner():
             raise DiaryError(f"only the owner can run {args.command}")

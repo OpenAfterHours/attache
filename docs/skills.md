@@ -44,8 +44,8 @@ than one long system prompt.
 
 ## The bundled skills
 
-`attache init` copies four skills into your home. They are your copies: change them as you
-like.
+`attache init` copies every bundled skill into your home; `attache skills list` shows them.
+They are your copies: change them as you like. These four are the core ones:
 
 | Skill | What it does | Members |
 |---|---|---|
@@ -180,12 +180,14 @@ so nobody in a chat can choose their values:
 | `ATTACHE_SENDER` | who asked: `owner`, or their key under `[people]`, such as `dan` |
 | `ATTACHE_ROLE` | the rights the request has: `owner` or `member` (you, in a group chat, are `member`) |
 | `ATTACHE_CHAT` | the chat it came from, such as `local:me` or `email:dan@example.com` |
+| `ATTACHE_BACKGROUND` | `1` in a [background](#long-jobs-in-the-background) run, empty otherwise |
 
 A script that does something not everyone may ask for checks `ATTACHE_ROLE`, and
 `ATTACHE_SENDER` against its own list of people. When `ATTACHE_ROLE` is missing, you ran the
 script yourself (`attache skill NAME ...` in your terminal), so it may treat the caller as
 you. Then `ATTACHE_HOME` may be missing too, so find the home folder from the script's own
-path as well: `Path(__file__).resolve().parents[3]`.
+path as well: `Path(__file__).resolve().parents[3]`. A script meant only for the background
+can refuse other people's foreground runs: `ATTACHE_BACKGROUND` is never inherited.
 
 #### Long jobs in the background
 
@@ -198,7 +200,8 @@ add `"background": true`:
 
 The tool returns at once, and the assistant tells the person the job has started. The script
 runs as it would otherwise, in the same folder and with the same variables, but for up to 12
-hours. At most four run at once, and stopping Attaché stops them. When the script ends,
+hours. At most four run at once: you may use all four, everyone else three between them,
+one each at a time. Stopping Attaché stops them. When the script ends,
 Attaché posts one message in the chat it started in. Choose what it says by printing a JSON
 object as the script's last line:
 
@@ -209,7 +212,7 @@ object as the script's last line:
 | How it ended | The chat gets | You get, in your approvals chat |
 |---|---|---|
 | exit code 0 | `text`, or `Done.` | nothing |
-| another exit code, or 12 hours up | `text`, or `Sorry, that didn't finish. I've let <your name> know.` | `<skill>/<script> for <person> in <chat> failed (exit N)`, or `(timed out)`, then `: <owner>` when the script gave one |
+| another exit code, 12 hours up, or an error | `text`, or `Sorry, that didn't finish. I've let <your name> know.` | `<skill>/<script> for <person> in <chat> failed (exit N)`, or `(timed out)` or `(error: <its type>)`, then `: "<owner>"`, quoted as a JSON string, when the script gave one |
 
 The chat never sees the script's output, only `text`, so put nothing in `text` that the person
 who asked shouldn't read. `owner` is for you: what failed and where the log is, never the

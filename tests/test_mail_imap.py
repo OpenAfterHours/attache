@@ -515,6 +515,23 @@ def test_a_reply_to_given_addresses_never_uses_reply_to() -> None:
     assert saved["In-Reply-To"] == "<quote-1@example.com>"  # still in the thread
 
 
+def test_the_email_channels_replies_say_they_are_automatic() -> None:
+    """Its `extra` marks them Auto-Submitted, so another assistant never answers them; the
+    owner's own drafts carry no such header."""
+    fake = FakeIMAP()
+    original = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))
+    backend = titan(fake)
+    mine = backend.draft(None, None, None, "Thursday works.", original, False)
+    backend.extra = {"Auto-Submitted": "auto-replied"}
+    reply = backend.draft(["dan@example.com"], [], None, "Started.", original, False)
+    for draft in (mine, reply):
+        backend.send_draft(draft["id"])
+    (owners, _), (channels, to_addrs) = fake.sent
+    assert owners["Auto-Submitted"] is None
+    assert channels["Auto-Submitted"] == "auto-replied" and to_addrs == ["dan@example.com"]
+    assert channels["In-Reply-To"] == "<quote-1@example.com>"
+
+
 def test_headers_are_the_block_as_received() -> None:
     fake = FakeIMAP()
     native = imap.encode_id("INBOX", 7, fake.add("INBOX", fixture("plain")))

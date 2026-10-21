@@ -166,7 +166,31 @@ The `email` channel watches one of these accounts so the people you list in `att
 can write to Attaché by email (`@attache ...`) and get the answer in the same thread. It uses
 this skill's code and sign-in, so set the account up here first. Setup, who gets an answer
 and how replies are kept to the sender are in [Channels](channels.md#email). Those replies
-are the channel's, sent straight away; your own mail still goes only on your Send.
+are the channel's, sent straight away; your own mail still goes only on your Send. The
+channel needs this skill as it ships with the same release: in a home made with 0.0.2 or
+earlier, [update it](#updating-the-mail-skill) first.
+
+## Updating the mail skill
+
+`attache init` adds the bundled skills a home is missing, but never overwrites one it has, so
+upgrading Attaché leaves `skills/mail` as it was. The email channel refuses an older one ("the
+mail skill in … is older than this channel"), since its replies could go to a Reply-To
+address. To update it, in a terminal:
+
+1. Stop `attache run`.
+2. Move `~/.attache/skills/mail` out of the home folder, for example to `~/mail-skill-old`.
+   Not elsewhere under `skills/`: Attaché would find it there as a second mail skill.
+3. Run `attache init`. It puts the current mail skill in place and leaves everything else
+   that exists alone.
+4. Copy `accounts.toml` from the old folder into `~/.attache/skills/mail/`.
+5. Run `attache skill mail doctor`, then start `attache run` again.
+
+`accounts.toml` is the only file of yours in that folder, unless you edited the skill's
+`SKILL.md` or scripts yourself: carry such changes over by hand. Nothing you signed in with
+lives there, so nothing needs a new login: the passwords stay in your keyring (`attache-mail`),
+and the Graph sign-in (`.mail/graph-cache.bin`), the send records (`.mail/sent.jsonl`),
+approvals (`.approvals/`) and the audit log (`logs/mail.jsonl`) stay in the home folder. In
+PowerShell, write `$HOME` for `~`.
 
 ## How sending works
 

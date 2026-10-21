@@ -238,6 +238,16 @@ def test_load_accepts_a_byte_order_mark(home: Path) -> None:
             '[chats."slack:C1"]\nname = "Family"\n',
             r"\[owner\] approvals must be",
         ),
+        # Email proves only a domain (DMARC), so it never gives owner rights.
+        ('[owner]\nemail = "alex@example.com"\n', r"no email in \[owner\] or approvals"),
+        ('[owner.ids]\nemail = "alex@example.com"\n', r"email proves only a domain"),
+        (
+            '[owner]\napprovals = "email:alex@example.com"\n[channels.email]\nenabled = true\n',
+            r"no email in \[owner\] or approvals",
+        ),
+        ('[people.owner]\nname = "Me"\n', r'\[people\.owner\]: "owner" is you'),  # scripts' id
+        ('[people.dan]\nrole = "owner"\n', r'\[people\.dan\]: "owner" is you; others are member'),
+        ('[people.dan]\nrole = "admin"\n', r"\[people\.dan\]: .* member or guest"),
     ],
 )
 def test_load_errors_name_the_file_and_section(home: Path, text: str, message: str) -> None:
@@ -260,6 +270,14 @@ def test_public_url_and_port(home: Path) -> None:
         assert (cfg.port, cfg.public_port) == (65535, 65534)  # the next one down: in range
     write(home, '[web]\nport = "65535"\n')  # as a string too
     assert config.load(home).public_port == 65534
+
+
+def test_email_ids_are_kept_in_lower_case(home: Path) -> None:
+    people = '[people.dan]\nemail = "Dan@Example.COM"\nslack = "UDAN"\n'
+    write(home, people + '[people.kim]\nrole = "guest"\n[people.kim.ids]\nemail = "KIM@x.org"\n')
+    cfg = config.load(home)
+    assert cfg.people["dan"].ids == {"email": "dan@example.com", "slack": "UDAN"}  # only email
+    assert cfg.person("email", "kim@x.org") is cfg.people["kim"]  # as the sidecar gives it
 
 
 def test_person(cfg: config.Config) -> None:

@@ -196,9 +196,9 @@ def test_run(services: app.Services) -> None:
 def test_run_caps_its_timeout(services: app.Services, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[float] = []
 
-    async def fake_exec(cmd: Any, cwd: Path, timeout: float) -> str:
+    async def fake_exec(cmd: Any, cwd: Path, timeout: float) -> dict[str, Any]:
         seen.append(timeout)
-        return "{}"
+        return {}
 
     monkeypatch.setattr(tools, "_exec", fake_exec)
     call(ctx(services), "run", command="x", timeout=5000)
@@ -221,7 +221,7 @@ def test_run_timeout_kills_the_whole_tree(services: app.Services) -> None:
 
 def test_exec_caps_output(home: Path) -> None:
     loud = [sys.executable, "-c", "print('x' * 30000 + 'end')"]
-    out = json.loads(asyncio.run(tools._exec(loud, home, 30)))
+    out = asyncio.run(tools._exec(loud, home, 30))
     assert len(out["output"]) == tools.OUTPUT_CAP and out["output"].rstrip().endswith("end")
 
 
@@ -241,9 +241,9 @@ def test_for_members() -> None:
 def test_script_member_gating(services: app.Services, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple[list[str], Path]] = []
 
-    async def fake_exec(cmd: list[str], cwd: Path, timeout: float, env: Any = None) -> str:
+    async def fake_exec(cmd: list[str], cwd: Path, timeout: float, env: Any = None) -> dict:
         seen.append((cmd, cwd))
-        return "{}"
+        return {}
 
     monkeypatch.setattr(tools, "_exec", fake_exec)
     shared = add_skill(services.home, "shared", "metadata:\n  attache-roles: owner member\n")

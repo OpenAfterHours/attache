@@ -10,7 +10,9 @@ get a copy APPENDed to `sent_folder`.
 
 Drafts are plain text, APPENDed to the folder flagged \\Drafts (SPECIAL-USE) with a Message-ID
 of their own. send_draft rebuilds the message from what get_draft gives (to, cc, bcc, subject,
-body), so nothing goes that the owner wasn't shown, and refuses a draft with other parts. Until
+body), so nothing goes that the owner wasn't shown, and refuses a draft with other parts. Only
+the threading headers and Auto-Submitted are kept: the email channel sets `extra` to
+{"Auto-Submitted": "auto-replied"} on its replies, which mail.py's drafts never have. Until
 the SMTP server has the message, every failure is a ValueError: nothing went. Just before SMTP
 the Message-ID is recorded in <home>/.mail/sent.jsonl with its number of recipients, and a
 recorded Message-ID is never sent again. Those records also count `send_limit_hour`.
@@ -141,6 +143,7 @@ class Backend:
         self.gmail = settings.get("kind") == "gmail"
         self._imap = client
         self._smtp = getattr(client, "smtp", None) or self._smtp_session
+        self.extra: dict[str, str] = {}  # headers for each new draft: the email channel's mark
 
     # signing in
 
@@ -369,7 +372,7 @@ class Backend:
                 threading = {"In-Reply-To": str(parent), "References": references}
         message_id = make_msgid(domain=self.user.rpartition("@")[2] or "localhost")
         fields = {"to": to, "cc": cc or [], "subject": subject, "body": body}
-        msg = compose(self.user, fields, {"Message-ID": message_id, **threading})
+        msg = compose(self.user, fields, {"Message-ID": message_id, **threading, **self.extra})
         drafts = self._special(rb"\Drafts", "Drafts")
         self.imap.append(drafts, msg.as_bytes(policy=policy.SMTP), flags=[DRAFT, SEEN])
         native = self._find(drafts, message_id)
@@ -429,7 +432,7 @@ class Backend:
             folder, uid, msg = self._draft(native)
             draft = draft_fields(native, msg)
             recipients = draft["to"] + draft["cc"] + draft["bcc"]
-            keep = ("Message-ID", "In-Reply-To", "References")
+            keep = ("Message-ID", "In-Reply-To", "References", "Auto-Submitted")
             headers = {name: str(msg[name]) for name in keep if msg[name]}
             outgoing = compose(self.user, draft, headers)
             self._may_send(headers["Message-ID"], len(recipients))

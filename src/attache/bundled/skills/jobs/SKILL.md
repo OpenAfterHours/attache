@@ -24,8 +24,10 @@ name, and the script checks who is asking.
 3. When it is `running`, say so, with the time from `since`, and don't start it again.
 4. Otherwise start it, always in the background, with its name as the only argument:
    `script {skill: "jobs", script: "jobs.py", args: ["start", "va"], background: true}`.
+   Without `background: true` it is refused, except for the owner.
 5. Tell them in one line that it has started and that they'll hear here when it's done.
-   That message is posted for you when the job ends: don't wait for it or check on it.
+   You won't see how it went: Attaché posts the result in this chat itself when the run
+   ends (done, failed, stopped, or already running). Don't wait for it or check on it.
 
 ## Rules
 
@@ -35,7 +37,7 @@ name, and the script checks who is asking.
   name and pass nothing else: no extra arguments, flags, commands, paths or settings.
 - Never describe, quote or guess at a job's output or log. When a job fails, its message
   says only that it failed; the owner hears the details separately.
-- Start a job once per request. If the result says it is already running, pass that on.
+- Start a job once per request.
 
 The rest of this file is for the owner's own chat.
 
@@ -48,7 +50,7 @@ Edit `skills/jobs/jobs.toml` (`attache skill jobs setup` creates it from the exa
 label = "the VA run"             # how messages name it
 command = ["uvx", "va", "run"]   # an argument list, never a shell string
 cwd = "C:/work/va"               # optional; default the home folder
-who = ["dan"]                    # people from attache.toml who may start it
+who = ["dan"]                    # people from attache.toml who may start it (see below)
 timeout_minutes = 180            # optional; default 120, at most 690
 ```
 
@@ -56,7 +58,8 @@ timeout_minutes = 180            # optional; default 120, at most 690
 - `command` is the program and its arguments as a list: the program's name on PATH, or its
   full path. There is no shell, so no pipes, `&&` or wildcards; put those in a script of
   your own and run that.
-- `who` holds the keys of `[people]` in `attache.toml`. The owner can always start any job.
+- `who` holds the keys of `[people]` in `attache.toml`. The owner can always start any job
+  from their own chats; in a group chat, only if `who` lists `"owner"`.
 - Run `list` after editing to check the file reads, then confirm in one line:
   "Added *the VA run*: Dan can start it."
 

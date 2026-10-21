@@ -9,7 +9,7 @@ import json
 import re
 import sys
 import urllib.error
-from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -73,12 +73,17 @@ def load_diary() -> ModuleType:
 
 @pytest.fixture
 def diary(home: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """The script, run by the owner by hand (no ATTACHE_ROLE), in London, at NOW."""
+    """The script, run by the owner by hand (no ATTACHE_ROLE), in London, at NOW, under uv, in a
+    chat's files folder as the script tool runs it."""
     module = load_diary()
     monkeypatch.setattr(module, "TZ", LONDON)
     monkeypatch.setattr(module, "clock", lambda: NOW)
     for name in ("ATTACHE_ROLE", "ATTACHE_SENDER", "ATTACHE_CHAT", "ATTACHE_WEB_URL"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("UV", str(home.parent / "bin" / "uv.exe"))  # uv sets it for its children
+    chat = home / "files" / "email-dan-example-com"
+    chat.mkdir(parents=True)
+    monkeypatch.chdir(chat)  # and back afterwards, wherever main went
     return module
 
 
@@ -115,14 +120,16 @@ def event(start: str, end: str, account: str = "work", **fields: Any) -> dict[st
 
 
 class Agenda:
-    """subprocess.run, answering as `uv run mail.py agenda` does; it records each argv."""
+    """subprocess.run, answering as `uv run mail.py agenda` does; it records each argv and the
+    folder it runs in."""
 
     def __init__(self, items: list[dict[str, Any]], stdout: str | None = None, code: int = 0):
         self.stdout = json.dumps({"ok": True, "items": items}) if stdout is None else stdout
-        self.code, self.calls = code, []
+        self.code, self.calls, self.folders = code, [], []
 
     def __call__(self, argv: list[str], **options: Any) -> SimpleNamespace:
         self.calls.append(argv)
+        self.folders.append(options.get("cwd"))
         return SimpleNamespace(returncode=self.code, stdout=self.stdout, stderr="")
 
 
@@ -308,13 +315,25 @@ def test_local_times_follow_summer_time(diary: ModuleType, home: Path, capsys, m
         {
             "start": "2026-10-23T09:00:00+01:00",
             "end": "2026-10-23T09:30:00+01:00",
-            "label": "Fri 23 Oct, 09:00\u201309:30",
+            "label": "Fri 23 Oct, 09:00\u201309:30 BST",
         }
     ]
     monday = run(diary, capsys, "slots", "--from", "2026-10-26", "--count", "1", "--minutes", "45")
-    assert monday["minutes"] == 45 and monday["timezone"] == "BST"
+    assert set(monday) == {"ok", "minutes", "slots"} and monday["minutes"] == 45
     assert starts(monday) == ["2026-10-26T09:00:00+00:00"]  # 09:00 still, after the clocks change
-    assert monday["slots"][0]["label"] == "Mon 26 Oct, 09:00\u201309:45"
+    assert monday["slots"][0]["label"] == "Mon 26 Oct, 09:00\u201309:45 GMT"  # asked in BST
+
+
+def test_a_slots_zone_is_short_on_windows_too(diary: ModuleType) -> None:
+    for name, offset, shown in (
+        ("BST", timedelta(hours=1), "BST"),
+        ("GMT Daylight Time", timedelta(hours=1), "UTC+1"),  # Windows' names
+        ("GMT Standard Time", timedelta(0), "UTC+0"),
+        ("India Standard Time", timedelta(hours=5, minutes=30), "UTC+5:30"),
+        ("-03", timedelta(hours=-3), "UTC-3"),
+        ("Newfoundland Daylight Time", -timedelta(hours=2, minutes=30), "UTC-2:30"),
+    ):
+        assert diary.zone(datetime(2026, 10, 21, 9, tzinfo=timezone(offset, name))) == shown
 
 
 def test_argument_bounds(diary: ModuleType, home: Path, capsys: Any, monkeypatch) -> None:
@@ -358,13 +377,30 @@ def test_outlook_busy_time_and_nothing_else(diary: ModuleType, home: Path, capsy
     fake = agenda(monkeypatch, diary, *thursday)
     out = output(diary, capsys, "slots", "--from", "2026-10-22", "--days", "2", "--count", "10")
     mail = str(home / "skills" / "mail" / "scripts" / "mail.py")
-    assert fake.calls == [["uv", "run", mail, "agenda", "--account", "work", "--days", "3"]]
+    uv = str(home.parent / "bin" / "uv.exe")  # the uv this runs under: $UV
+    assert fake.calls == [[uv, "run", mail, "agenda", "--account", "work", "--days", "3"]]
+    assert fake.folders == [home]  # never the chat's files folder
     result = json.loads(out)
     assert all(set(slot) == {"start", "end", "label"} for slot in result["slots"])
     assert not [start for start in starts(result) if start.startswith("2026-10-22")]
     assert starts(result)[:2] == ["2026-10-23T09:00:00+01:00", "2026-10-23T11:00:00+01:00"]
     for secret in (*SECRETS, NOTE, "AAMkAD1", "tentative"):
         assert secret not in out, secret
+
+
+def test_uv_is_never_looked_for_in_the_chats_folder(
+    diary: ModuleType, home: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure(home)
+    fake = agenda(monkeypatch, diary)
+    monkeypatch.delenv("UV")  # run by hand with python: look uv up on PATH, from the home folder
+    looked = []
+    found = str(home.parent / "tools" / "uv.exe")
+    monkeypatch.setattr(diary.shutil, "which", lambda name: looked.append(Path.cwd()) or found)
+    assert run(diary, capsys, "slots")["ok"]
+    assert looked == [home] and fake.calls[0][0] == found and fake.folders == [home]
+    monkeypatch.setattr(diary.shutil, "which", lambda name: None)
+    assert run(diary, capsys, "slots")["error"].startswith("uv isn't on PATH")
 
 
 def test_outlook_errors_say_nothing_of_the_calendar(

@@ -7,9 +7,9 @@ CI enforces; everything else is a skill.
 
 > **Status:** phase 3 of the [roadmap](docs/proposal.html): the local core, terminal and web
 > chat; Slack and Signal with group chats, approvals and rate limits; email (Outlook, Gmail,
-> Titan) with a morning triage; email
-> requests from people you list, for your free slots or a job you defined; Word, Excel and PowerPoint files; share links; and starting at
-> login. The cloud arrives in phase 4.
+> Titan) with a morning triage; email requests from people you list, for your free slots or a
+> job you defined; Word, Excel and PowerPoint files; share links; and starting at login. The
+> cloud arrives in phase 4.
 
 **Documentation:** <https://openafterhours.github.io/attache/>.
 

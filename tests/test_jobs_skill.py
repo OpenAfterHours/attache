@@ -24,6 +24,7 @@ from attache import channels, skills
 SCRIPT = skills.BUNDLED / "jobs" / "scripts" / "jobs.py"
 SECRET = "SECRET-7f3a"  # what the jobs print
 DAN = {"ATTACHE_ROLE": "member", "ATTACHE_SENDER": "dan", "ATTACHE_CHAT": "email:dan@x.com"}
+DAN |= {"ATTACHE_BACKGROUND": "1"}  # how the core runs a member's start
 # A job that starts a child of its own, writes the child's pid to argv[1], and waits
 SLOW = (
     "import subprocess, sys, time\n"
@@ -68,14 +69,15 @@ def jobs_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "slow": {
                 "command": [py, "-c", SLOW, str(home / "slow.pid")],
                 "who": ["dan"],
-                "timeout_minutes": 0.03,  # 1.8 seconds
+                # 6 seconds: time enough to start Python twice even on a cold runner
+                "timeout_minutes": 0.1,
             },
             "long": {"command": [py, "-c", SLOW, str(home / "long.pid")], "who": ["dan"]},
             "mine": {"command": [py, "-c", "pass"]},  # nobody listed: the owner's alone
             "gone": {"command": ["no-such-program"], "who": ["dan"]},
         },
     )
-    for name in ("ATTACHE_ROLE", "ATTACHE_SENDER", "ATTACHE_CHAT"):
+    for name in ("ATTACHE_ROLE", "ATTACHE_SENDER", "ATTACHE_CHAT", "ATTACHE_BACKGROUND"):
         monkeypatch.delenv(name, raising=False)
     return home
 
@@ -212,7 +214,7 @@ def test_a_run_reports_without_its_output(jobs_home: Path) -> None:
 def test_the_owner_may_start_any_job(jobs_home: Path) -> None:
     code, result, _ = start(jobs_home, "mine")  # no ATTACHE_ROLE: the owner's terminal
     assert code == 0 and re.fullmatch(r"Mine finished in \d+ sec\.", result["text"])
-    owner = {"ATTACHE_ROLE": "owner", "ATTACHE_SENDER": "owner"}
+    owner = {"ATTACHE_ROLE": "owner", "ATTACHE_SENDER": "owner"}  # in the foreground too
     assert start(jobs_home, "mine", **owner)[0] == 0
     code, result, _ = start(jobs_home, "mine", **DAN)  # who is empty: not dan's
     assert code == 1 and result["text"] == "That isn't a job you can start."
@@ -243,8 +245,9 @@ def test_the_time_limit_kills_the_whole_tree(jobs_home: Path) -> None:
 
 def test_one_run_at_a_time(jobs_home: Path, capsys: Any) -> None:
     jobs = load()
-    fd = jobs.take(jobs_home / "logs" / "jobs" / "ok.lock")
-    jobs.note(fd, json.dumps({"pid": 1, "since": "2026-10-21T14:02:00"}))
+    fd = jobs.take(jobs_home / "logs" / "jobs" / "ok.lock")  # held by this process
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, json.dumps({"pid": 1, "since": "2026-10-21T14:02:00"}).encode())
     expected = {"ok": True, "text": "The OK run is already running (since 14:02)."}
     assert start(jobs_home, "ok", **DAN)[:2] == (0, expected)
     listed = call(["list"], capsys)[1]["jobs"][0]
@@ -303,6 +306,33 @@ def test_refusals_tell_the_owner_who_asked_for_what(
         code, result = call(argv, capsys)
         assert code == 1 and not result["ok"], argv
     assert logs(jobs_home, "ok") == []  # nothing ran
+
+
+def test_others_start_only_in_the_background(
+    jobs_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    """Their model reads a foreground run's output, and the core's 600 seconds would cut a
+    long job short with no notice to the owner."""
+    for key in ("ATTACHE_ROLE", "ATTACHE_SENDER"):
+        monkeypatch.setenv(key, DAN[key])
+    refused = (1, {"ok": False, "text": "Start it in the background."})
+    for name in ("ok", "nope", "../ok"):  # before anything else is looked at
+        assert call(["start", name], capsys) == refused
+    monkeypatch.setenv("ATTACHE_BACKGROUND", "yes")  # only the core's "1"
+    assert call(["start", "ok"], capsys) == refused
+    assert logs(jobs_home, "ok") == []
+    # list runs in the foreground: its errors keep the owner's details to the owner
+    (jobs_home / "skills" / "jobs" / "jobs.toml").unlink()
+    assert call(["list"], capsys) == (1, {"ok": False, "text": "No jobs are set up."})
+
+
+def test_setup_is_the_owners(home: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+    skills.install_bundled(home)
+    for key, value in DAN.items():
+        monkeypatch.setenv(key, value)
+    code, result = call(["setup"], capsys)
+    assert code == 1 and result["text"] == "Only the owner can set up jobs."
+    assert "path" not in result and not (home / "skills" / "jobs" / "jobs.toml").exists()
 
 
 def test_a_program_is_never_found_in_the_chat_folder(jobs_home: Path) -> None:

@@ -31,7 +31,7 @@ for whom is yours alone, in a file only you can edit.
     label = "the VA run"             # how messages name it
     command = ["uvx", "va", "run"]   # an argument list, never a shell string
     cwd = "C:/work/va"               # optional; default the home folder
-    who = ["dan"]                    # people from attache.toml who may start it; you always can
+    who = ["dan"]                    # people from attache.toml who may start it (see below)
     timeout_minutes = 180            # optional; default 120, at most 690
     ```
 
@@ -44,7 +44,7 @@ for whom is yours alone, in a file only you can edit.
 | `label` | How messages name it: "The VA run finished in 14 min." | the name |
 | `command` | The program and its arguments, as a list. The program is a name on PATH (`uvx`, `npm`; `.exe` and `.cmd` work on Windows) or a full path. | required |
 | `cwd` | The folder it runs in; a relative path is inside the home folder. | the home folder |
-| `who` | The ids from `[people]` in `attache.toml` who may start it. | nobody but you |
+| `who` | The ids from `[people]` in `attache.toml` who may start it. You always can, from your own chats; in a group chat only if `who` lists `"owner"`. | nobody but you, from your own chats |
 | `timeout_minutes` | When it is stopped. | 120 |
 
 There is no shell, so pipes, `&&`, wildcards and `%VAR%` mean nothing in `command`. When a
@@ -54,12 +54,15 @@ skill on PATH and login services).
 
 ## Who may start it
 
-- You may start any job, from any of your own chats, or from a terminal:
+- You may start any job from your own chats, or from a terminal:
   `attache skill jobs start va` runs it there and then, and waits.
+- In a group chat, your own requests have member rights, as everything there does (group
+  context is untrusted), so there you can start only jobs whose `who` lists `"owner"`.
 - Anyone else, only the jobs whose `who` lists their id. The assistant runs `list` first,
   which shows each person only their own jobs, and starts nothing else.
-- In a group chat, your own requests have member rights, as everything there does (group
-  context is untrusted), so there you can start only jobs whose `who` includes `"owner"`.
+- From a chat, a job runs in the background. A start by anyone but you that isn't in the
+  background is refused before anything runs, because their assistant would read the result.
+  `setup` is yours alone.
 - One run of a job at a time. Asking again while it runs gets "The VA run is already running
   (since 14:02).", and nothing new starts.
 
@@ -89,8 +92,9 @@ older ones are deleted when the job next starts. Open them yourself, or ask the 
 your own chat to read one: it never reads or describes a log for anyone else.
 
 The lock that keeps a job to one run at a time is `logs/jobs/<name>.lock`. It is a lock the
-system holds for the run, so it goes when the run ends, however it ends: a crash or a restart
-never leaves a job stuck as "running". There is nothing to delete by hand.
+system holds for the run, so the system frees it when the run ends, however it ends: a crash
+or a restart never leaves a job stuck as "running". A run that ends normally lets go at once;
+after a crash Windows can take a moment. There is nothing to delete by hand.
 
 ## Time limit
 
@@ -104,8 +108,8 @@ was stopped, as above.
 
 Stopping or restarting Attaché stops every running job, with everything it started. Nobody
 gets a message about those runs, the person who asked included; the log keeps what the job
-wrote up to then, and the lock is free again at once. Start the job again once Attaché is
-back.
+wrote up to then. The system frees the lock as the run is stopped (on Windows, possibly a
+moment later), so the job can be started again once Attaché is back.
 
 ## Security model
 
@@ -122,7 +126,9 @@ back.
   looked up from the job's own folder, never from the chat's files folder where other
   people's attachments go, which Windows would otherwise search first.
 - **No output to anyone but you.** The person asking gets fixed sentences only, so a job
-  that prints a secret, a path or an error can't leak it to them through Attaché.
+  that prints a secret, a path or an error can't leak it to them through Attaché. The
+  details meant for you go only through Attaché's own failure notice: what their assistant
+  reads (`list`, or a refusal) never includes them.
 - **A job runs as you.** It has your rights on this machine, like anything you start. List
   in `who` only people you are happy to let start it at any time, as often as one run at a
   time allows, and prefer commands that do one fixed thing.

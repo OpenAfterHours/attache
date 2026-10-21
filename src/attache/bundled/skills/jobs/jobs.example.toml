@@ -7,5 +7,8 @@
 # label = "the VA run"             # how messages name it
 # command = ["uvx", "va", "run"]   # an argument list, never a shell string
 # cwd = "C:/work/va"               # optional; default the home folder
-# who = ["dan"]                    # people from attache.toml who may start it; you always can
+# who = ["dan"]                    # people from attache.toml who may start it
 # timeout_minutes = 180            # optional; default 120, at most 690 (11.5 hours)
+#
+# You can always start any job from your own chats; in a group chat, only if `who` lists
+# "owner", as everything there has a member's rights.
