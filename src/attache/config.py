@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from attache import skills
+from attache import credentials, skills
 from attache.types import Endpoint, Person
 
 BUNDLED = Path(__file__).parent / "bundled"
@@ -110,7 +110,13 @@ def load(home: Path | None = None) -> Config:
     for name, table in raw.get("endpoints", {}).items():
         api, model = table.pop("api", ""), table.pop("model", "")
         base_url, key_env = table.pop("base_url", None), table.pop("key_env", None)
-        endpoints[name] = Endpoint(name, api, model, base_url, key_env, options=table)
+        key_ref = table.pop("key_ref", None)
+        endpoint = Endpoint(name, api, model, base_url, key_env, options=table, key_ref=key_ref)
+        try:
+            credentials.validate(endpoint)
+        except credentials.CredentialError as error:
+            raise ValueError(f"{path}: {error}") from None
+        endpoints[name] = endpoint
     channels = raw.get("channels", {})
     for name, table in channels.items():
         if name == "local":

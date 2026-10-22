@@ -10,13 +10,12 @@ label() names the tool and a few arguments, never contents.
 
 from __future__ import annotations
 
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from attache.types import Endpoint, Reply, Tool, ToolCall, Turn, TurnContext
+from attache.types import Reply, Tool, ToolCall, Turn, TurnContext
 
 MAX_STEPS = 20
 MAX_TOOL_OUTPUT = 20_000  # characters; longer results are cut with a note saying so
@@ -46,14 +45,6 @@ class Adapter(Protocol):
 
     def add_results(self, state: Any, results: list[tuple[ToolCall, str]]) -> None:
         """Append tool results in the protocol's native form."""
-
-
-def api_key(endpoint: Endpoint) -> str | None:
-    """The value of $key_env, or None when no key_env is set; RuntimeError when it is empty."""
-    env = endpoint.key_env
-    if env and not os.environ.get(env):
-        raise RuntimeError(f"endpoint '{endpoint.name}' needs the {env} environment variable")
-    return os.environ[env] if env else None
 
 
 def tool_spec(tool: Tool, key: str = "parameters") -> dict[str, Any]:

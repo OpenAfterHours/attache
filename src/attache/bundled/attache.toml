@@ -55,6 +55,8 @@ port = 8765
 
 # Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
 # max_tokens, are passed to the backend as options.
+# Store an API key in the OS keyring: `attache skill credentials login ENDPOINT`.
+# This replaces that endpoint's key_env with an opaque key_ref. Use only one source.
 [endpoints.claude]
 api = "claude-cli"  # your Claude Code login
 model = "claude-sonnet-5-5"
