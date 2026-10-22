@@ -25,6 +25,7 @@ src/attache/
   types.py      shared dataclasses and protocols; every module talks through these
   app.py        builds Services and runs everything (and the public share server, if set)
   config.py     attache.toml -> Config; init_home(); restrict() keeps the home yours
+  credentials.py explicit key_env or destination-bound OS keyring lookup for model clients
   store.py      SQLite: messages, docs, tasks, sessions
   skills.py     skill discovery, prompt index, git commit/log/undo of <home> (pinned to
                 <home>/.git)
@@ -48,10 +49,11 @@ src/attache/
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 2,240 lines of code in
-   `src/attache` (target about 2,235; 1,600 in phase 1, 1,900 in phase 2, 2,100 in
+1. **Size is a test.** `tests/test_budget.py` fails above 2,390 lines of code in
+   `src/attache` (current 2,383; 1,600 in phase 1, 1,900 in phase 2, 2,100 in
    phase 3, 2,180 for the terminal's progress, then 2,240 for email requests' script
-   identity and background runs; each raise the owner's call). Blank lines, comments and
+   identity and background runs, then 2,390 for the owner's approved model keyring plan;
+   each raise the owner's call). Blank lines, comments and
    docstrings don't count, so never make code denser to fit: write the readable version.
    Bundled skills are excluded; each bundled skill's scripts have a 300-line cap (1,390
    for `mail`, which has three backends). If a feature doesn't fit, it belongs in a

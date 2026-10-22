@@ -124,6 +124,39 @@ only that it failed (or the line the script chose for them), never its output, a
 notice in your approvals chat with what the script chose to tell you
 ([Long jobs](skills.md#long-jobs-in-the-background)).
 
+## Model API keys
+
+Endpoints can use an environment variable (`key_env`) or a reference to an OS credential
+(`key_ref`), never both. With the keyring, only the reference is written to `attache.toml`;
+the secret is stored under `attache-models` in Windows Credential Manager, macOS Keychain,
+Linux Secret Service or KWallet. Plaintext and null keyring backends are refused.
+
+Use `attache skill credentials login ENDPOINT` in your own terminal. It prompts with hidden
+input, and refuses piped input or a chat tool context. Never paste a key into chat or pass it
+as a command argument. The command verifies storage before replacing the configuration;
+on failure it rolls back an unreferenced new record when possible and reports any cleanup
+needed without printing the key. Configuration changes preserve comments and use an atomic
+file replacement. An edit detected since login began aborts the update.
+
+The stored record binds the key to an API family and normalized base URL. Runtime lookup
+rejects a changed destination and ignores ambient SDK base-URL overrides for this source.
+These clients refuse HTTP redirects, including redirects to another path on the same host,
+so a redirected request cannot forward the saved credential outside that destination.
+The key passes directly to the SDK in memory; Attaché does not copy it to its environment,
+database, home git history, skill arguments or diagnostic output. Keyring lookups run off
+the event loop, and each endpoint's SDK client retains the key until Attaché stops.
+
+After changing or removing a saved key, restart Attaché. Removing it locally does not revoke
+it at the provider. Backups of the home contain references only; copied homes on the same
+OS account can share those references, while another machine needs its own login.
+
+The keyring protects persistence, not the whole running process. Owner tools and other
+programs running with your OS account can access your store or process memory, subject to
+the store's access controls. Environment credentials retain their existing behavior and
+may be inherited by owner shell and skill processes. A headless service without an
+accessible user store can continue using `key_env`. See
+[configuration](configuration.md#store-an-api-key-in-the-os-keyring) for setup and rotation.
+
 ## The page sandbox
 
 Pages are untrusted HTML: the assistant writes them, and they may quote emails or web pages.

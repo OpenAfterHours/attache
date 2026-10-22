@@ -174,8 +174,14 @@ $ attache doctor
 
 It checks that the home folder exists and `attache.toml` parses; that each endpoint your chats
 use is defined and has what it needs (the `claude` command for `claude-cli`, the environment
-variable named by `key_env` for the others); that git and uv are installed; and that the web
-port is free.
+variable named by `key_env`, or the OS credential named by `key_ref`, for the others); that
+git and uv are installed; and that the web port is free. Credential checks are local and do
+not test authentication with the provider.
+
+For desktop API keys, use `attache skill credentials login ENDPOINT` in your own terminal,
+then restart Attaché. Run `attache init` first after upgrading to add the credentials skill.
+Existing environment keys keep working; migration is optional. See
+[keyring setup](configuration.md#store-an-api-key-in-the-os-keyring).
 
 Common fixes:
 

@@ -161,6 +161,7 @@ is yours to choose; it is what `[routing]` and `[chats]` refer to.
 | `model` | The model name, as the provider spells it. |
 | `base_url` | Optional. The server to talk to, for anything other than the provider's own API. |
 | `key_env` | Optional. The name of the environment variable that holds the API key. The key itself never goes in `attache.toml`. |
+| `key_ref` | Optional. An opaque reference created by `attache skill credentials login NAME`. The API key is in your OS credential store. Mutually exclusive with `key_env`. |
 | `timeout` | Optional. Seconds a turn may take before Attaché gives up. Default `900`. |
 | `max_tokens` | Optional, `anthropic` only. The most tokens a single model response may use. Default `4096`. |
 | `bin` | Optional, `claude-cli` only. The Claude Code command, if it isn't `claude` on your `PATH`. |
@@ -174,6 +175,83 @@ message naming the variable, and `attache doctor` reports it before that.
 | `anthropic` | The Claude API, or any server that speaks the Anthropic Messages API | Attaché |
 | `openai-chat` | Ollama, LM Studio, vLLM, llama.cpp, OpenRouter, Groq, Azure | Attaché |
 | `openai-responses` | OpenAI reasoning models with tools | Attaché |
+
+### Store an API key in the OS keyring
+
+Use the keyring for a desktop installation. Keep `key_env` for deployments that already
+inject secrets, or services without an accessible user credential store. Existing `key_env`
+configurations continue to work and are never migrated automatically.
+
+First define an endpoint. For a custom OpenAI-compatible service, set the API **base URL**,
+including its version prefix if needed; do not append `/chat/completions` or `/responses`:
+
+```toml
+[endpoints.custom]
+api = "openai-chat"
+base_url = "https://models.example.com/v1"
+model = "your-model-id"
+```
+
+In your own terminal, run:
+
+```console
+attache init
+attache skill credentials login custom
+attache skill credentials status custom
+attache doctor
+```
+
+`attache init` adds the credentials skill to existing homes without overwriting files.
+`login` displays the destination and prompts for the key with hidden input. It writes a
+credential under service `attache-models`, verifies it can be read, then adds an opaque
+`key_ref` to this endpoint. The key never goes in the TOML file. Comments and other settings
+are preserved. If this endpoint had `key_env`, the command removes that setting only after
+the credential has been saved; it does not change your environment. After checking the new
+setup, remove the old variable from your shell or service startup configuration yourself.
+
+Set `own_chats = "custom"` and/or `group_chats = "custom"` in the existing `[routing]` block
+to use it. Restart Attaché after login, rotation, logout or configuration changes: SDK clients
+keep their resolved key in memory. Neither `status` nor `doctor` sends a provider request;
+they check local availability, so a saved key may still be expired or invalid.
+
+The same commands work for `openai-chat` (Chat Completions), `openai-responses` (Responses)
+and `anthropic` (Messages). Key storage does not change the request protocol; the configured
+server must implement the selected API. The legacy OpenAI `/completions` API is not an
+Attaché backend. `claude-cli` continues to use Claude Code's own authentication.
+
+The credential is bound to its normalized API base URL and API family. Changing the host,
+path, port or family requires running `login` again. Switching between Chat Completions and
+Responses on the same base URL, changing a model, or renaming the endpoint preserves access.
+For `key_ref`, omitted URLs mean `https://api.openai.com/v1/` or
+`https://api.anthropic.com/`; ambient `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` variables do
+not redirect the saved key. Keyring clients also refuse HTTP redirects; configure the final
+API URL explicitly in TOML and run `login` again if it changes. Use HTTPS for remote services.
+
+To rotate a key, run `login` again. A new record is saved before replacing the reference;
+the old record is removed after the configuration update, unless another endpoint in the
+same configuration uses it. References copied to another home on this OS account share the
+same record: rotating or removing it here can require logging in again in that home.
+To remove a local key:
+
+```console
+attache skill credentials logout custom
+```
+
+`logout` keeps `key_ref` so new clients report a missing credential rather than use another
+source. A manually shared reference is removed for every endpoint using it. Restart Attaché
+to discard cached keys. **Revoke the key with its provider** if you want to invalidate it;
+local removal does not do that. To return to environment credentials, replace `key_ref` with
+`key_env` in the endpoint, set that variable in Attaché's startup environment, and restart.
+
+The supported stores are Windows Credential Manager, macOS Keychain, and Linux Secret
+Service or KWallet. Attaché refuses plaintext, null and unsupported backends. An unavailable,
+locked or denied store produces an error; it never silently falls back to an environment
+variable. Unlock the store or choose `key_env` explicitly. Services must run as the same OS
+user with access to that user's store; headless Linux often needs `key_env` instead.
+
+Copying a home to another machine copies references, not credentials. Run `login` there.
+The OS store protects keys at rest; it does not isolate them from other code running as
+your user. See [Security](security.md#model-api-keys).
 
 ### `claude-cli`: Claude Code on your login
 
@@ -245,7 +323,8 @@ base_url = "http://localhost:11434/v1"
 model = "qwen3:32b"
 ```
 
-A local server needs no key, so leave `key_env` out. Pick a model that supports tool
+An unauthenticated local server needs no key, so leave both `key_env` and `key_ref` out.
+Pick a model that supports tool
 calling: Attaché's to-dos, reminders and pages all work through tools.
 
 For a hosted service, set its `base_url` and the variable that holds its key:

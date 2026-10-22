@@ -144,11 +144,11 @@ def test_clients_are_built_lazily(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(MISSING, "sk-test")
     local = ChatAdapter(Endpoint("local", "openai-chat", "m", "http://localhost:11434/v1"))
     assert local.client is None
-    client = openai_client(local)
+    client = asyncio.run(openai_client(local))
     assert client.api_key == "not-needed"
     assert str(client.base_url).startswith("http://localhost")
     keyed = AnthropicAdapter(Endpoint("c", "anthropic", "m", key_env=MISSING))
-    assert keyed._client().api_key == "sk-test"
+    assert asyncio.run(keyed._client()).api_key == "sk-test"
 
 
 # Anthropic
