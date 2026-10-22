@@ -14,7 +14,10 @@ Local routes (create_app(services, channel, router)), on [web] host:port
                                it (Sec-Fetch-Dest: iframe), except that snapshot_url's extra
                                &r=<snapshot token> lets the render skill's browser open it
                                top-level, for 10 minutes
-  GET  /api/artifacts          [{name, src}], src = "/a/<name>?t=<token>", sorted   UI token
+  GET  /api/artifacts          [{name, src, version}], src = "/a/<name>?t=<token>"   UI token
+  GET|PUT /api/settings        safe editable settings and revision-checked save    UI token
+  POST /api/settings/validate  preview {revision, changes|toml}, without saving     UI token
+  POST /api/settings/restore   restore {revision, backup_revision}                 UI token
   GET  /api/messages           {messages: the last 50 of local:me, as store.history gives
                                them; asks: [{ask_id, text, options}] still waiting for the
                                owner there, so a reload keeps their buttons}          UI token
@@ -100,6 +103,7 @@ from starlette.routing import Route
 
 from attache import __version__
 from attache.agent import run_tool, tool_spec
+from attache.settings import MAX_BYTES, Settings, SettingsError
 from attache.store import _shared, db_access
 from attache.types import Inbound, OnMessage, Outbound, ToolCall
 
@@ -316,6 +320,7 @@ def create_app(
     one registers a store listener, so doc changes reach open pages, both apps'."""
     store, home = services.store, services.config.home
     writes: dict[tuple[str, int], int] = {}  # (share token, hour) -> writes through that link
+    settings = Settings(services.config)
     if not public:
         store.on_change.append(lambda c, i, d: channel.publish("doc", collection=c, id=i, doc=d))
 
@@ -353,8 +358,44 @@ def create_app(
         ui_only(request)
         files = (home / "artifacts").glob("*.html")
         names = sorted(p.stem for p in files if SLUG.fullmatch(p.stem))
-        listing = [{"name": n, "src": f"/a/{n}?t={page_token(services, n)}"} for n in names]
+        listing = [
+            {
+                "name": n,
+                "src": f"/a/{n}?t={page_token(services, n)}",
+                "version": _version(services, n),
+            }
+            for n in names
+        ]
         return JSONResponse(listing)
+
+    async def edit_settings(request: Request) -> Response:
+        ui_only(request)
+        headers = {"Cache-Control": "no-store"}
+        try:
+            if request.method == "GET":
+                return JSONResponse(settings.read(), headers=headers)
+            if request.headers.get("content-type", "").partition(";")[0] != "application/json":
+                return JSONResponse({"error": "Send Content-Type: application/json."}, 415, headers)
+            raw = bytearray()
+            async for chunk in request.stream():
+                raw.extend(chunk)
+                if len(raw) > MAX_BYTES * 2:
+                    raise SettingsError("Settings requests are limited to 128 KB.", 413)
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise SettingsError("Send a JSON object.")
+            if request.url.path.endswith("/restore"):
+                data["restore"] = True
+            save = request.method == "PUT" or request.url.path.endswith("/restore")
+            return JSONResponse(settings.update(data, save=save), headers=headers)
+        except SettingsError as exc:
+            return JSONResponse({"error": str(exc)}, exc.status, headers)
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"error": "Send valid JSON."}, 400, headers)
+        except OSError:
+            return JSONResponse(
+                {"error": "Settings file access failed; check local permissions."}, 500, headers
+            )
 
     async def messages(request: Request) -> Response:
         """The chat (reminders come from "Reminder") and the questions still waiting for the
@@ -453,6 +494,9 @@ def create_app(
         Route("/", static("ui.html", headers={"Content-Security-Policy": UI_CSP})),
         Route("/a/{name}", artifact),
         Route("/api/artifacts", artifacts),
+        Route("/api/settings", edit_settings, methods=["GET", "PUT"]),
+        Route("/api/settings/validate", edit_settings, methods=["POST"]),
+        Route("/api/settings/restore", edit_settings, methods=["POST"]),
         Route("/api/messages", messages),
         Route("/api/chat", chat, methods=["POST"]),
         Route("/api/answer", answer, methods=["POST"]),

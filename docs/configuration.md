@@ -8,6 +8,34 @@ Attaché reads its settings from `attache.toml` in the home folder: `~/.attache/
 or the folder that `--home` or `ATTACHE_HOME` points to. `attache init` writes a commented
 starting file.
 
+## Editing in the web workspace
+
+Open **Settings** in the [web workspace](workspace.md) to inspect the saved configuration
+and the configuration Attaché is currently running. The forms and **Editable settings
+(TOML)** view change the same supported fields: assistant name, model endpoints and routing,
+web settings, rate limits, and whether existing channels are enabled.
+
+Review the changes before saving. Attaché validates the proposal, checks that the file has
+not changed since you loaded it, and saves it atomically with a previous-version backup.
+If another editor changed the file, reload Settings and review your changes again. A restore
+uses the same validation and conflict checks as a save.
+
+The TOML view is an editable selection, not the complete source file. Comments, credentials,
+identity rules and other file-managed options are preserved in the original file. Secret
+values are never sent to the browser; endpoint credentials show their configured status.
+Create new endpoints or channels, or edit options outside the selection, in `attache.toml`.
+Some unusual TOML layouts cannot be changed safely in the browser; Settings will tell you
+to edit that field in the file instead.
+
+Saving does not restart Attaché or change an active conversation. Settings indicates when
+a restart is needed. Stop and restart `attache` or `attache run`, then open the new launch
+link; if you installed the startup service, restart it using the service's normal controls.
+
+Settings is available only in the owner's local interface. Generated pages and public
+share links cannot access it.
+
+## Managing the configuration file
+
 After upgrading Attaché, run `attache init` to add new bundled skills; it never overwrites
 your files.
 
