@@ -24,8 +24,13 @@ The proposal is a standalone page, with its own look.
 - **Model backends are config rows.** Four small adapters (`anthropic`, `openai-chat`,
   `openai-responses` and `claude-cli`), each endpoint one block of TOML. No LiteLLM and no
   agent framework.
-- **Size is a test.** CI fails if the core passes 2,240 lines of code. Blank lines, comments
+- **Size is a test.** CI fails if the core passes 2,700 lines of code. Blank lines, comments
   and docstrings don't count, so the budget never rewards dense code.
+
+The web workspace adds a built-in owner settings service: it validates edits, preserves
+file-managed configuration, checks revisions and retains a recoverable backup. This raises
+the core cap from 2,240 to 2,700 lines. Resizing and workspace views remain static UI code;
+the optional Hailer integration is a bundled skill and adds no core runtime dependency.
 
 ## Roadmap
 

@@ -87,7 +87,7 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
-  body, button, textarea { font: 15px/1.55 var(--font-sans); -webkit-font-smoothing: antialiased; }
+  body, button, textarea, input, select { font: 15px/1.55 var(--font-sans); -webkit-font-smoothing: antialiased; }
   /* The bar stays night-sky in both schemes, as on the other OpenAfterHours sites. */
   header {
     display: flex; align-items: center; gap: 10px; padding: 11px 18px;
@@ -98,12 +98,12 @@
   #bar { border-bottom: 1px solid var(--border); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--oah-slate-400); }
   .dot.live { background: var(--oah-terminal-green); box-shadow: 0 0 8px rgba(61, 214, 140, 0.6); }
-  .views { margin-left: auto; display: none; gap: 4px; }
+  [hidden] { display: none !important; }
+  .views { margin-left: auto; display: flex; gap: 4px; }
   .views button { color: var(--oah-slate-100); }
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(300px, 420px) 1fr; }
-  #chat { display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
-  #chat { border-right: 1px solid var(--border); }
-  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, var(--chat-width, 40%)) 10px minmax(0, 1fr); }
+  #chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
+  #log { flex: 1; overflow-y: auto; padding: 24px max(16px, calc((100% - 800px) / 2)); display: flex; flex-direction: column; gap: 10px; }
   .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; background: var(--bubble); }
   .msg { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); }
   .msg.you { align-self: flex-end; background: var(--mine); border-color: var(--mine-border); }
@@ -119,8 +119,8 @@
   .choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
   .choices button:disabled { opacity: 0.5; cursor: default; }
   .empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
-  form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
-  textarea, button { color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
+  #send { display: flex; gap: 8px; width: 100%; max-width: 832px; margin: 0 auto; padding: 16px; }
+  textarea, button, input, select { color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
   textarea { flex: 1; min-height: 42px; max-height: 160px; resize: vertical; padding: 9px 11px; background: var(--bg); }
   textarea:focus { border-color: var(--accent); }
   button { padding: 7px 14px; cursor: pointer; font-weight: 600; background: transparent; }
@@ -128,30 +128,78 @@
   button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: default; }
   button[aria-pressed="true"] { color: var(--link); border-color: var(--accent); background: var(--mine); }
   /* The header is night-sky in both schemes, so its buttons keep the dark colours. */
   .views button { border-color: rgba(216, 222, 233, 0.12); }
   .views button[aria-pressed="true"] { color: var(--oah-orange); border-color: var(--oah-orange); }
   :focus-visible { outline: 2px solid var(--oah-orange); outline-offset: 2px; }
-  #pages { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #pages { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
   #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; }
-  #bar .muted { color: var(--muted); }
-  iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+  #bar button { padding: 5px 10px; }
+  .muted, .hint { color: var(--muted); }
+  .hint { font-size: 13px; }
+  #divider { border: 0; border-inline: 1px solid var(--border); border-radius: 0; padding: 0; cursor: col-resize; touch-action: none; background: var(--bg); }
+  #divider::after { content: ""; display: block; width: 2px; height: 36px; background: var(--muted); margin: auto; border-radius: 2px; }
+  #divider:hover::after, #divider:focus-visible::after { background: var(--accent); }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing iframe { pointer-events: none; }
+  body[data-layout="chat"] main, body[data-layout="workspace"] main { grid-template-columns: 1fr; }
+  body[data-layout="chat"] #pages, body[data-layout="chat"] #divider,
+  body[data-layout="workspace"] #chat, body[data-layout="workspace"] #divider { display: none; }
+  .workspace-panel { min-height: 0; min-width: 0; flex: 1; overflow-y: auto; }
+  .panel-content { max-width: 940px; padding: 24px; margin: 0 auto; }
+  .panel-content h2 { font: 600 24px/1.3 var(--font-display); margin: 0 0 6px; }
+  .panel-content h3 { font: 600 17px/1.4 var(--font-display); margin: 24px 0 12px; }
+  .panel-content p { margin: 0 0 18px; }
+  .panel-heading, .actions, .page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .panel-heading { justify-content: space-between; margin-bottom: 20px; }
+  .panel-heading p { margin-bottom: 0; }
+  #page-view { display: flex; flex-direction: column; overflow: hidden; }
+  .page-tools { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .page-tools select { flex: 1; width: 0; min-width: 120px; max-width: 400px; }
+  .page-tools button { font-size: 13px; padding: 5px 10px; }
+  #frames { display: flex; flex: 1; min-height: 0; }
+  iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--bg); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+  .card { text-align: left; padding: 18px; background: var(--bg); overflow-wrap: anywhere; }
+  .card strong, .card span { display: block; }
+  .card span { margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .record { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .record time { display: block; font-size: 12px; color: var(--muted); }
+  #settings-form { display: block; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 14px; }
+  .field { display: grid; gap: 5px; align-content: start; }
+  .field span { font-size: 13px; color: var(--muted); }
+  input, select { padding: 8px 10px; background: var(--bg); width: 100%; min-width: 0; }
+  input[type="checkbox"] { width: auto; justify-self: start; accent-color: var(--accent); }
+  fieldset { padding: 16px; margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+  legend { padding: 0 6px; font-weight: 600; }
+  #settings-toml { display: block; width: 100%; min-height: 320px; max-height: none; font: 13px/1.6 var(--font-mono); }
+  #settings-state, #settings-message { margin: 14px 0; overflow-wrap: anywhere; }
+  .error-text { color: var(--danger); }
+  #settings-review { background: var(--bg); border: 1px solid var(--mine-border); padding: 16px; border-radius: var(--radius); margin: 16px 0; }
+  #settings-review ul { padding-left: 20px; overflow-wrap: anywhere; }
+  .settings-mode { margin: 20px 0; }
   @media (max-width: 760px) {
     main { grid-template-columns: 1fr; }
-    .views { display: flex; }
-    #chat { border-right: 0; }
-    body[data-view="chat"] #pages, body[data-view="pages"] #chat { display: none; }
+    header { padding: 10px 12px; gap: 7px; }
+    .views button { padding: 6px 9px; font-size: 13px; }
+    #split-layout, #divider { display: none; }
+    body[data-mobile="chat"] #pages, body[data-mobile="workspace"] #chat { display: none; }
+    body[data-mobile="chat"] #chat, body[data-mobile="workspace"] #pages { display: flex; }
+    .panel-content { padding: 20px 16px; }
   }
 </style>
 </head>
-<body data-view="chat">
+<body data-layout="chat" data-mobile="chat">
 <header>
   <span class="dot" id="status" title="Connecting"></span>
   <h1>Attaché</h1>
-  <nav class="views" aria-label="View">
-    <button type="button" data-view="chat" aria-pressed="true">Chat</button>
-    <button type="button" data-view="pages" aria-pressed="false">Pages</button>
+  <nav class="views" aria-label="Layout">
+    <button type="button" data-layout="chat" aria-pressed="true">Chat</button>
+    <button type="button" data-layout="split" id="split-layout" aria-pressed="false">Split</button>
+    <button type="button" data-layout="workspace" aria-pressed="false">Workspace</button>
   </nav>
 </header>
 <main>
@@ -164,19 +212,75 @@
       <button class="primary">Send</button>
     </form>
   </section>
-  <section id="pages" aria-label="Pages">
-    <div id="bar"></div>
-    <iframe id="frame" title="Page" sandbox="allow-scripts allow-forms" hidden></iframe>
+  <button id="divider" type="button" role="separator" aria-label="Resize chat and workspace" aria-orientation="vertical" aria-controls="chat pages" aria-valuemin="25" aria-valuemax="75" aria-valuenow="40" title="Drag to resize. Arrow keys adjust; Home and End set the limits."></button>
+  <section id="pages" aria-label="Workspace">
+    <nav id="bar" aria-label="Workspace view">
+      <button type="button" data-workspace="tasks" aria-pressed="true">Tasks</button>
+      <button type="button" data-workspace="library" aria-pressed="false">Pages</button>
+      <button type="button" data-workspace="analysis" aria-pressed="false">Analysis</button>
+      <button type="button" data-workspace="activity" aria-pressed="false">Activity</button>
+      <button type="button" data-workspace="settings" aria-pressed="false">Settings</button>
+    </nav>
+    <div id="page-view" class="workspace-panel">
+      <div class="page-tools">
+        <label for="page-select" class="hint">Page</label>
+        <select id="page-select" aria-label="Open page"></select>
+        <button type="button" id="all-pages">All pages</button>
+        <button type="button" id="task-page" title="Use the current page when opening Tasks">Use for Tasks</button>
+        <button type="button" id="reload-page" title="Reload this page; unsaved page edits may be lost">Reload</button>
+      </div>
+      <div id="frames"></div>
+      <div id="pages-empty" class="empty">No pages yet. Ask Attaché to create a to-do list or another page.</div>
+    </div>
+    <div id="library-view" class="workspace-panel" hidden>
+      <div class="panel-content">
+        <div class="panel-heading"><div><h2>Your pages</h2><p class="muted">Open a page alongside your conversation.</p></div><button type="button" id="refresh-pages">Refresh</button></div>
+        <div id="page-library" class="cards"></div>
+      </div>
+    </div>
+    <div id="activity-view" class="workspace-panel" hidden>
+      <div class="panel-content">
+        <h2>Activity</h2><p class="muted">Live turn activity since this page opened.</p>
+        <h3>Waiting for you</h3><div id="activity-asks"></div>
+        <h3>Scheduled reminders <button type="button" id="refresh-reminders">Refresh</button></h3><div id="activity-reminders"></div>
+        <h3>Recent activity</h3><div id="activity-events"></div>
+      </div>
+    </div>
+    <div id="analysis-view" class="workspace-panel" hidden>
+      <div class="panel-content">
+        <div class="panel-heading"><div><h2>Analysis</h2><p class="muted">Saved notebook results. Live editable notebooks open separately.</p></div><button type="button" id="start-analysis">Start in chat</button></div>
+        <div id="analysis-library" class="cards"></div>
+      </div>
+    </div>
+    <div id="settings-view" class="workspace-panel" hidden>
+      <div class="panel-content">
+        <div class="panel-heading"><div><h2>Settings</h2><p class="muted">Owner settings for this Attaché installation.</p></div><button type="button" id="reload-settings">Reload saved</button></div>
+        <p id="settings-state" role="status">Open Settings to load your configuration.</p>
+        <div id="settings-editor" hidden>
+          <nav class="actions settings-mode" aria-label="Settings editor">
+            <button type="button" data-editor="fields" aria-pressed="true">Common settings</button>
+            <button type="button" data-editor="toml" aria-pressed="false">Editable settings (TOML)</button>
+          </nav>
+          <p class="hint">Credentials, channel options, people and chat permissions remain in attache.toml. Existing comments and other options are preserved.</p>
+          <form id="settings-form"><div id="settings-fields"></div></form>
+          <textarea id="settings-toml" aria-label="Editable settings in TOML" spellcheck="false" hidden></textarea>
+          <p id="settings-message" role="status" aria-live="polite"></p>
+          <div class="actions"><button type="button" id="validate-settings">Review changes</button><button type="button" id="restore-settings" hidden>Review previous configuration</button></div>
+          <div id="settings-review" hidden><strong id="settings-review-title">Review before saving</strong><ul id="settings-changes"></ul><p id="settings-restore-note" class="hint" hidden>Restoring also restores file-managed options from the backup. Your unsaved draft will be discarded only when you confirm the restore.</p><p class="hint">Saving creates a backup. Restart Attaché yourself to apply the saved configuration.</p><button type="button" id="save-settings" class="primary">Save settings</button></div>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 <script>
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const log = $("log"), input = $("text"), frame = $("frame"), bar = $("bar"), hello = $("hello");
+  const log = $("log"), input = $("text"), bar = $("bar"), hello = $("hello");
   const URLS = /(https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
   const KEY = "attache-token";
-  let TOKEN = null, current = null, wanted = null, pages = [];
-  let thinking = null, loading = false, early = [];
+  let TOKEN = null, current = null, wanted = null, pages = [], isLocked = false;
+  let thinking = null, loading = false, early = [], connection = null, leaving = false;
+  let reconnectTimer = null, reconnectDelay = 1000;
   const asks = new Map(); // ask_id -> the bubble of a question still waiting for your answer
 
   // Links look like http://127.0.0.1:<port>/#t=<token>&page=<name>; either part may be missing.
@@ -208,16 +312,25 @@
   }
 
   function locked() {
+    if (leaving) return;
     storage((s) => TOKEN && s.getItem(KEY) === TOKEN && s.removeItem(KEY)); // only one that failed
+    isLocked = true;
+    TOKEN = null;
+    connection?.close();
+    clearTimeout(reconnectTimer);
     const note = el("p", "empty", "Open Attaché from the link printed in your terminal.");
     document.querySelector("main").replaceChildren(note);
+    document.querySelectorAll(".views button").forEach((button) => { button.disabled = true; });
   }
 
   async function api(method, path, body) {
+    if (isLocked) throw new Error("Open Attaché from a current terminal link.");
     const headers = { "X-Attache-Token": TOKEN, "Content-Type": "application/json" };
     const res = await fetch(path, { method, headers, body: body && JSON.stringify(body) });
     if (res.status === 401) locked(); // a token from an earlier run of Attaché
+    if (isLocked) throw new Error("Open Attaché from a current terminal link.");
     const text = await res.text();
+    if (isLocked) throw new Error("Open Attaché from a current terminal link.");
     if (!res.ok) throw new Error(text.startsWith("{") ? JSON.parse(text).error : text || res.statusText);
     return JSON.parse(text);
   }
@@ -260,6 +373,7 @@
     // Answering, by a button or by typing an option: the buttons go, and the choice shows.
     async function choose(option) {
       asks.delete(ask_id);
+      renderActivity();
       choices.querySelectorAll("button").forEach((b) => { b.disabled = true; });
       const res = await api("POST", "/api/answer", { ask_id, choice: option }).catch(() => null);
       choices.replaceChildren(el("span", "files", res?.ok ? `You chose: ${option}` : "No longer open."));
@@ -271,6 +385,7 @@
     }
     msg.append(choices);
     asks.set(ask_id, { msg, text, options, choose });
+    renderActivity();
   }
 
   // Typed text answers a question only when exactly one is open and the text names one of its
@@ -313,6 +428,7 @@
 
   // A local:me turn's progress, from the activity events: started, step, thinking, finished.
   function activity(event) {
+    recordActivity(event);
     if (event.kind === "finished") return finished(event);
     setThinking(true); // also for a turn begun in the terminal, or before this page loaded
     if (event.kind === "step") thinking.step.textContent = `${event.label}…`;
@@ -352,6 +468,7 @@
       for (const m of past) if (!open.has(m.text)) add(mine(m) ? "you" : "bot", m.text);
       if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
       chat.asks.forEach(showAsk); // open questions stay last
+      renderActivity();
       const fresh = past.filter((m) => m.ts >= since).map((m) => m.text);
       early = early.filter((msg) => msg.ask_id || !fresh.includes(msg.text));
     }
@@ -360,6 +477,7 @@
   }
 
   function receive(msg) {
+    if (isLocked) return;
     if (loading) return void early.push(msg);
     if (msg.activity) return activity(msg.activity);
     if (msg.ask_id) return showAsk(msg);
@@ -393,57 +511,436 @@
   });
 
   const press = (all, on) => all.forEach((b) => b.setAttribute("aria-pressed", String(on(b))));
-  const views = document.querySelectorAll(".views button");
-  function setView(name) {
-    document.body.dataset.view = name;
-    press(views, (b) => b.dataset.view === name);
-  }
-  views.forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-  const highlight = () => press(bar.querySelectorAll("button"), (b) => b.dataset.name === current);
-
-  // Showing a page always (re)loads it, so a page the agent rewrote is fresh when picked. Its
-  // address, with the page's own token, comes from the list; until the list has it, it waits.
-  function show(name, focus = false) {
-    const page = pages.find((p) => p.name === name);
-    if (!page) return void (wanted = name);
-    frame.src = page.src;
-    frame.hidden = false;
-    current = name;
-    highlight();
-    if (focus) setView("pages");
-  }
-
   const label = (name) => name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
+  const PREFS_KEY = "attache-workspace-v1";
+  const preferences = storage((s) => JSON.parse(s.getItem(PREFS_KEY))) || {};
+  const layouts = ["chat", "split", "workspace"];
+  const workspaces = ["tasks", "library", "page", "analysis", "analysis-page", "activity", "settings"];
+  let layout = layouts.includes(preferences.layout) ? preferences.layout : "chat";
+  let workspace = workspaces.includes(preferences.workspace) ? preferences.workspace : "tasks";
+  let mobileView = preferences.mobile === "workspace" ? "workspace" : "chat";
+  let chatWidth = Number.isFinite(preferences.width) ? preferences.width : 40;
+  let taskPage = typeof preferences.taskPage === "string" ? preferences.taskPage : null;
+  current = typeof preferences.page === "string" ? preferences.page : null;
+  const narrow = matchMedia("(max-width: 760px)");
+  const frames = new Map();
+  const activityLog = [];
+  let settings = null, settingsMode = "fields", settingsPayload = null, settingsBusy = false;
+
+  function persistWorkspace() {
+    storage((s) => s.setItem(PREFS_KEY, JSON.stringify({
+      layout, workspace, mobile: mobileView, width: chatWidth, page: current, taskPage,
+    })));
+  }
+
+  function paintLayout() {
+    if (isLocked) return;
+    document.body.dataset.layout = layout;
+    document.body.dataset.mobile = mobileView;
+    press(document.querySelectorAll(".views button"), (b) => b.dataset.layout === (narrow.matches ? mobileView : layout));
+    resizeChat(chatWidth, false, false);
+  }
+
+  function setLayout(name) {
+    if (narrow.matches) mobileView = name === "workspace" ? "workspace" : "chat";
+    else { layout = name; mobileView = name === "workspace" ? "workspace" : "chat"; }
+    paintLayout();
+    persistWorkspace();
+  }
+  document.querySelectorAll(".views button").forEach((b) => b.addEventListener("click", () => setLayout(b.dataset.layout)));
+  narrow.addEventListener("change", paintLayout);
+
+  function resizeBounds() {
+    const width = document.querySelector("main").getBoundingClientRect().width - 10;
+    const min = Math.min(45, Math.max(25, 300 / width * 100));
+    return [min, 100 - min];
+  }
+
+  function resizeChat(value, save = true, remember = true) {
+    if (isLocked) return;
+    const [min, max] = resizeBounds();
+    const visibleWidth = Math.max(min, Math.min(max, value));
+    if (remember) chatWidth = visibleWidth;
+    document.querySelector("main").style.setProperty("--chat-width", `${visibleWidth}%`);
+    const divider = $("divider");
+    divider.setAttribute("aria-valuemin", String(Math.round(min)));
+    divider.setAttribute("aria-valuemax", String(Math.round(max)));
+    divider.setAttribute("aria-valuenow", String(Math.round(visibleWidth)));
+    divider.setAttribute("aria-valuetext", `${Math.round(visibleWidth)} percent chat`);
+    if (save) persistWorkspace();
+  }
+  $("divider").addEventListener("keydown", (event) => {
+    const step = event.shiftKey ? 10 : 2;
+    const [min, max] = resizeBounds();
+    const values = { ArrowLeft: chatWidth - step, ArrowRight: chatWidth + step, Home: min, End: max };
+    if (!(event.key in values)) return;
+    event.preventDefault();
+    resizeChat(values[event.key]);
+  });
+  $("divider").addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    $("divider").focus();
+    $("divider").setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing");
+  });
+  $("divider").addEventListener("pointermove", (event) => {
+    if (!$("divider").hasPointerCapture(event.pointerId)) return;
+    const box = document.querySelector("main").getBoundingClientRect();
+    resizeChat((event.clientX - box.left) / (box.width - 10) * 100, false);
+  });
+  function finishResize() { document.body.classList.remove("resizing"); persistWorkspace(); }
+  $("divider").addEventListener("pointerup", (event) => {
+    if ($("divider").hasPointerCapture(event.pointerId)) $("divider").releasePointerCapture(event.pointerId);
+    finishResize();
+  });
+  $("divider").addEventListener("lostpointercapture", finishResize);
+  addEventListener("resize", () => resizeChat(chatWidth, false, false));
+
+  function focusWorkspace() {
+    if (narrow.matches) mobileView = "workspace";
+    else if (layout === "chat") layout = "split";
+    paintLayout();
+    persistWorkspace();
+  }
+
+  function setWorkspace(name) {
+    workspace = name;
+    const pageView = ["tasks", "page", "analysis-page"].includes(name);
+    for (const panel of ["page", "library", "analysis", "activity", "settings"]) {
+      $(panel + "-view").hidden = panel === "page" ? !pageView : panel !== name;
+    }
+    const tab = name === "page" ? "library" : name === "analysis-page" ? "analysis" : name;
+    press(bar.querySelectorAll("button"), (b) => b.dataset.workspace === tab);
+    if (name === "tasks" && taskPage && pages.some((p) => p.name === taskPage)) openFrame(taskPage);
+    if (name === "settings" && !settings && TOKEN) loadSettings();
+    if (name === "activity") { renderActivity(); if (TOKEN) loadReminders(); }
+    persistWorkspace();
+  }
+  bar.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setWorkspace(b.dataset.workspace)));
+
+  // Frames stay mounted when changing tabs/layouts. Only explicit Reload discards page state.
+  function openFrame(name) {
+    const page = pages.find((p) => p.name === name);
+    if (!page) return false;
+    if (!frames.has(name)) {
+      const frame = el("iframe");
+      frame.title = label(name);
+      frame.setAttribute("sandbox", "allow-scripts allow-forms");
+      frame.src = page.src;
+      frame.dataset.version = page.version || "";
+      $("frames").append(frame);
+      frames.set(name, frame);
+    }
+    frames.forEach((frame, key) => { frame.hidden = key !== name; });
+    current = name;
+    $("page-select").value = name;
+    $("task-page").disabled = name === taskPage;
+    $("task-page").textContent = name === taskPage ? "Tasks page" : "Use for Tasks";
+    $("reload-page").textContent = page.version && page.version !== frames.get(name).dataset.version ? "Updated — reload" : "Reload";
+    return true;
+  }
+
+  function show(name, focus = false) {
+    if (!openFrame(name)) return void (wanted = name);
+    setWorkspace(name === taskPage ? "tasks" : name.startsWith("analysis-") ? "analysis-page" : "page");
+    if (focus) focusWorkspace();
+  }
+  $("page-select").addEventListener("change", (event) => show(event.target.value));
+  $("all-pages").addEventListener("click", () => setWorkspace(workspace === "analysis-page" ? "analysis" : "library"));
+  $("task-page").addEventListener("click", () => { taskPage = current; setWorkspace("tasks"); });
+  $("reload-page").addEventListener("click", () => {
+    const page = pages.find((p) => p.name === current);
+    if (page && confirm("Reload this page? Unsaved changes inside it may be lost.")) {
+      frames.get(current).src = page.src;
+      frames.get(current).dataset.version = page.version || "";
+      $("reload-page").textContent = "Reload";
+    }
+  });
+  $("refresh-pages").addEventListener("click", loadPages);
+  $("start-analysis").addEventListener("click", () => {
+    setLayout("chat");
+    if (!input.value.trim()) input.value = "Help me analyse a dataset in a saved notebook";
+    input.focus();
+  });
+
+  function renderLibrary(id, list, empty) {
+    $(id).replaceChildren(...(list.length ? list.map(({ name }) => {
+      const button = el("button", "card");
+      button.type = "button";
+      button.append(el("strong", "", label(name)), el("span", "", name === taskPage ? "Your Tasks page" : "Open page"));
+      button.addEventListener("click", () => show(name));
+      return button;
+    }) : [el("p", "muted", empty)]));
+  }
 
   async function loadPages() {
     const list = await api("GET", "/api/artifacts").catch(() => null);
     if (!list) return;
     pages = list;
-    if (!list.length) {
-      bar.replaceChildren(el("span", "muted", "No pages yet. Ask Attaché for a to-do board."));
-      return;
-    }
-    bar.replaceChildren(...list.map(({ name }) => {
-      const button = el("button", "", label(name));
-      Object.assign(button, { type: "button", onclick: () => show(name) });
-      button.dataset.name = name;
-      return button;
-    }));
     const has = (name) => list.some((p) => p.name === name);
+    frames.forEach((frame, name) => { if (!has(name)) { frame.remove(); frames.delete(name); } });
+    if (!has(taskPage)) taskPage = ["todo", "todos", "todo-list", "tasks", "home"].find(has) || null;
+    $("page-select").replaceChildren(...list.map(({ name }) => new Option(label(name), name)));
+    $("pages-empty").hidden = Boolean(list.length);
+    document.querySelector(".page-tools").hidden = !list.length;
+    renderLibrary("page-library", list, "No pages yet. Ask Attaché to create a page in chat.");
+    renderLibrary("analysis-library", list.filter((p) => p.name.startsWith("analysis-")), "No saved analyses yet. Start in chat to set up the optional Analysis skill and open a dataset.");
     if (wanted && has(wanted)) show(wanted, true);
-    else if (current && has(current)) highlight();
-    else show(has("home") ? "home" : list[0].name);
-    wanted = null;
+    else if (list.length) {
+      openFrame(workspace === "tasks" && taskPage ? taskPage : has(current) ? current : taskPage || list[0].name);
+      setWorkspace(workspace);
+    } else { current = null; persistWorkspace(); }
+    if (wanted && has(wanted)) wanted = null;
   }
 
+  function renderActivity() {
+    $("activity-asks").replaceChildren(...(asks.size ? [...asks.values()].map((ask) => {
+      const item = el("div", "record");
+      const button = el("button", "", "Answer in chat");
+      button.type = "button";
+      button.addEventListener("click", () => { setLayout("chat"); ask.msg.scrollIntoView({ block: "center" }); });
+      item.append(el("p", "", ask.text), button);
+      return item;
+    }) : [el("p", "muted", "No open questions or approvals.")]));
+    $("activity-events").replaceChildren(...(activityLog.length ? activityLog.map(({ text, at }) => {
+      const item = el("div", "record", text);
+      const time = el("time", "", at.toLocaleTimeString());
+      time.dateTime = at.toISOString();
+      item.append(time);
+      return item;
+    }) : [el("p", "muted", "Turn progress will appear here while Attaché works.")]));
+  }
+
+  function recordActivity(event) {
+    if (event.kind === "thinking") return;
+    const text = event.kind === "finished" ? `${event.stopped ? "Stopped" : "Finished"} · ${(event.seconds ?? 0).toFixed(1)}s` : event.kind === "step" ? event.label : "Turn started";
+    activityLog.unshift({ text, at: new Date() });
+    activityLog.length = Math.min(activityLog.length, 50);
+    renderActivity();
+  }
+
+  async function loadReminders() {
+    try {
+      const tasks = await api("GET", "/api/db/_tasks");
+      $("activity-reminders").replaceChildren(...(tasks.length ? tasks.map((task) => {
+        const item = el("div", "record", task.text);
+        const due = new Date(task.due * 1000);
+        item.append(el("div", "hint", `${due.toLocaleString()} · ${task.chat_key}${task.cron ? " · repeats" : ""}`));
+        return item;
+      }) : [el("p", "muted", "No scheduled reminders.")]));
+    } catch (error) { if (!isLocked) $("activity-reminders").textContent = `Could not load reminders: ${error.message}`; }
+  }
+  $("refresh-reminders").addEventListener("click", loadReminders);
+
+  const fieldValue = (data, path) => path.reduce((value, key) => value?.[key], data);
+  function settingField(parent, title, path, value, kind = "text", choices = null) {
+    const wrapper = el("label", "field");
+    wrapper.append(el("span", "", title));
+    const field = el(choices ? "select" : "input");
+    if (choices) field.replaceChildren(...choices.map((value) => new Option(value, value)));
+    else field.type = kind;
+    if (kind === "checkbox") field.checked = Boolean(value);
+    else field.value = value ?? "";
+    if (kind === "number") { field.min = "0"; field.step = "1"; }
+    field.dataset.path = JSON.stringify(path);
+    wrapper.append(field);
+    parent.append(wrapper);
+  }
+
+  function buildSettingsFields(saved) {
+    const root = $("settings-fields");
+    root.replaceChildren();
+    function group(title) {
+      const section = el("fieldset");
+      const fields = el("div", "fields");
+      section.append(el("legend", "", title), fields);
+      root.append(section);
+      return fields;
+    }
+    const general = group("Assistant and routing");
+    settingField(general, "Assistant name", ["assistant", "name"], saved.assistant.name);
+    for (const key of ["own_chats", "group_chats"]) {
+      settingField(general, key === "own_chats" ? "Your chats use" : "Other chats use", ["routing", key], saved.routing[key], "text", Object.keys(saved.endpoints));
+    }
+    for (const [name, endpoint] of Object.entries(saved.endpoints)) {
+      const fields = group(`Model connection: ${name}`);
+      settingField(fields, "API", ["endpoints", name, "api"], endpoint.api, "text", ["anthropic", "openai-chat", "openai-responses", "claude-cli"]);
+      settingField(fields, "Model", ["endpoints", name, "model"], endpoint.model);
+      if (!endpoint.base_url_hidden) settingField(fields, "Base URL (optional)", ["endpoints", name, "base_url"], endpoint.base_url);
+      else fields.append(el("p", "hint", "This connection's base URL is managed in attache.toml."));
+      settingField(fields, "Key environment variable", ["endpoints", name, "key_env"], endpoint.key_env);
+      fields.append(el("p", "hint", `Credential: ${endpoint.credential_status || "not reported"}. Key values are never displayed.`));
+    }
+    const channels = Object.entries(saved.channels || {});
+    if (channels.length) {
+      const fields = group("Channels");
+      for (const [name, channel] of channels) settingField(fields, `Enable ${name}`, ["channels", name, "enabled"], channel.enabled, "checkbox");
+    }
+    const web = group("Web server · applied after restart");
+    for (const [key, value] of Object.entries(saved.web || {})) {
+      settingField(web, label(key.replaceAll("_", "-")), ["web", key], value, key.endsWith("port") ? "number" : "text");
+    }
+    const limits = group("Usage limits");
+    for (const [key, value] of Object.entries(saved.limits || {})) {
+      settingField(limits, label(key.replaceAll("_", "-")), ["limits", key], value, "number");
+    }
+  }
+
+  function settingsDraft() {
+    if (settingsMode === "toml") return { revision: settings.revision, toml: $("settings-toml").value };
+    const changes = {};
+    for (const field of $("settings-fields").querySelectorAll("[data-path]")) {
+      const path = JSON.parse(field.dataset.path);
+      const value = field.type === "checkbox" ? field.checked : field.type === "number" ? (field.value === "" ? null : Number(field.value)) : field.value;
+      const before = fieldValue(settings.saved, path) ?? "";
+      if (value !== before) changes[path.join(".")] = value;
+    }
+    return { revision: settings.revision, changes };
+  }
+
+  function settingsDirty() {
+    if (!settings) return false;
+    const draft = settingsDraft();
+    return draft.toml !== undefined ? draft.toml !== settings.toml : Boolean(Object.keys(draft.changes).length);
+  }
+
+  function settingsMessage(text, error = false) {
+    if (isLocked) return;
+    $("settings-message").textContent = text;
+    $("settings-message").classList.toggle("error-text", error);
+  }
+
+  function invalidateSettings() {
+    settingsPayload = null;
+    $("settings-review").hidden = true;
+    settingsMessage("Unsaved changes. Review them before saving.");
+  }
+  $("settings-form").addEventListener("submit", (event) => event.preventDefault());
+  $("settings-form").addEventListener("input", invalidateSettings);
+  $("settings-toml").addEventListener("input", invalidateSettings);
+
+  function settingsBusyState(busy) {
+    settingsBusy = busy;
+    if (isLocked) return;
+    $("settings-view").querySelectorAll("button, input, select, textarea").forEach((control) => { control.disabled = busy; });
+  }
+
+  function showSettingsState(snapshot) {
+    $("settings-state").textContent = snapshot.restart_required
+      ? "Saved configuration differs from the running configuration. Restart Attaché to apply it."
+      : "Saved configuration matches the running configuration.";
+    if (snapshot.backup_available) $("settings-state").append(" A previous configuration backup is available.");
+  }
+
+  function acceptSettings(snapshot) {
+    settings = snapshot;
+    buildSettingsFields(snapshot.saved);
+    $("settings-toml").value = snapshot.toml;
+    $("settings-editor").hidden = false;
+    $("settings-review").hidden = true;
+    $("restore-settings").hidden = !snapshot.backup_available;
+    settingsPayload = null;
+    showSettingsState(snapshot);
+  }
+
+  async function loadSettings() {
+    if (settingsBusy) return;
+    settingsBusyState(true);
+    try {
+      const snapshot = await api("GET", "/api/settings");
+      if (isLocked) return;
+      acceptSettings(snapshot);
+      settingsMessage("");
+    } catch (error) {
+      if (!isLocked) $("settings-state").textContent = `Could not load settings: ${error.message}`;
+    } finally { settingsBusyState(false); }
+  }
+  $("reload-settings").addEventListener("click", () => {
+    if (!settingsDirty() || confirm("Discard your unsaved settings changes and reload the saved configuration?")) loadSettings();
+  });
+
+  document.querySelectorAll("[data-editor]").forEach((button) => button.addEventListener("click", async () => {
+    if (settingsBusy || settingsMode === button.dataset.editor || !settings) return;
+    settingsBusyState(true);
+    try {
+      // Use the server's parser to transfer the draft between editors without losing edits.
+      const candidate = await api("POST", "/api/settings/validate", settingsDraft());
+      if (isLocked) return;
+      buildSettingsFields(candidate.saved);
+      $("settings-toml").value = candidate.toml;
+      settingsMode = button.dataset.editor;
+      $("settings-form").hidden = settingsMode !== "fields";
+      $("settings-toml").hidden = settingsMode !== "toml";
+      press(document.querySelectorAll("[data-editor]"), (b) => b.dataset.editor === settingsMode);
+      settingsPayload = null;
+      $("settings-review").hidden = true;
+      settingsMessage("Draft transferred. Review changes before saving.");
+    } catch (error) { settingsMessage(`Fix the current editor before switching: ${error.message}`, true); }
+    finally { settingsBusyState(false); }
+  }));
+
+  async function reviewSettings(restore = false) {
+    if (settingsBusy || !settings) return;
+    settingsBusyState(true);
+    settingsPayload = null;
+    $("settings-review").hidden = true;
+    try {
+      const payload = restore ? { revision: settings.revision, restore: true, backup_revision: settings.backup_revision } : settingsDraft();
+      const candidate = await api("POST", "/api/settings/validate", payload);
+      if (isLocked) return;
+      const changes = candidate.changes || [];
+      $("settings-changes").replaceChildren(...changes.map((change) => el("li", "", `${change.path}: ${JSON.stringify(change.before) ?? "unset"} → ${JSON.stringify(change.after) ?? "unset"}`)));
+      $("settings-review-title").textContent = restore ? "Review previous configuration" : "Review before saving";
+      $("settings-restore-note").hidden = !restore;
+      $("save-settings").textContent = restore ? "Restore previous configuration" : "Save settings";
+      settingsMessage(changes.length ? "Configuration is valid. Check the changes below." : "Configuration is valid. No changes to save.");
+      if (changes.length || restore) { settingsPayload = payload; $("settings-review").hidden = false; }
+      if (restore && !changes.length) settingsMessage("No editable fields differ. File-managed options may differ; review the backup file before restoring.");
+    } catch (error) { settingsMessage(`Not validated: ${error.message}`, true); }
+    finally { settingsBusyState(false); }
+  }
+  $("validate-settings").addEventListener("click", () => reviewSettings());
+  $("restore-settings").addEventListener("click", () => reviewSettings(true));
+
+  $("save-settings").addEventListener("click", async () => {
+    if (settingsBusy || !settingsPayload) return;
+    settingsBusyState(true);
+    try {
+      const snapshot = await api("PUT", "/api/settings", settingsPayload);
+      if (isLocked) return;
+      acceptSettings(snapshot);
+      settingsMessage("Settings saved. The previous configuration was backed up.");
+    } catch (error) { settingsMessage(`Not saved: ${error.message}`, true); }
+    finally { settingsBusyState(false); }
+  });
+
   function connect() {
+    connection?.close();
+    clearTimeout(reconnectTimer);
     const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+    connection = events;
     const status = $("status");
-    events.onopen = () => { status.className = "dot live"; status.title = "Connected"; loadHistory(); };
+    events.onopen = () => {
+      reconnectDelay = 1000;
+      status.className = "dot live";
+      status.title = "Connected";
+      loadHistory();
+    };
     events.onerror = () => {
+      if (leaving || isLocked || connection !== events) return;
       status.className = "dot";
       status.title = "Reconnecting…";
-      if (events.readyState === EventSource.CLOSED) locked(); // refused: a token from an old run
+      // CLOSED also happens during navigation. Only an actual 401 may discard the token.
+      if (events.readyState === EventSource.CLOSED) {
+        api("GET", "/api/messages").catch(() => null).finally(() => {
+          if (leaving || isLocked || connection !== events) return;
+          reconnectTimer = setTimeout(() => {
+            if (!leaving && !isLocked && connection === events) connect();
+          }, reconnectDelay);
+          reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+        });
+      }
     };
     events.addEventListener("message", (event) => {
       const msg = JSON.parse(event.data);
@@ -457,7 +954,18 @@
     const { page } = fromHash(); // a #page= link followed in this tab
     if (page && TOKEN) show(page, true);
   });
-  begin();
+  addEventListener("pagehide", () => { leaving = true; connection?.close(); clearTimeout(reconnectTimer); });
+  addEventListener("pageshow", (event) => {
+    leaving = false;
+    if (event.persisted && TOKEN && !isLocked) { connect(); loadPages(); }
+  });
+  paintLayout();
+  setWorkspace(workspace);
+  begin().then(() => {
+    if (isLocked) return;
+    if (workspace === "settings") loadSettings();
+    if (workspace === "activity") loadReminders();
+  });
 </script>
 </body>
 </html>

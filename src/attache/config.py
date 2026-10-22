@@ -87,6 +87,12 @@ def load(home: Path | None = None) -> Config:
     path = home / "attache.toml"
     # utf-8-sig: PowerShell writes a byte order mark.
     text = path.read_text(encoding="utf-8-sig") if path.exists() else _template("you", "claude")
+    return parse(text, home)
+
+
+def parse(text: str, home: Path) -> Config:
+    """Validate configuration text without touching disk, using the same rules as load()."""
+    path = home / "attache.toml"
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
@@ -110,6 +116,8 @@ def load(home: Path | None = None) -> Config:
     for name, table in raw.get("endpoints", {}).items():
         api, model = table.pop("api", ""), table.pop("model", "")
         base_url, key_env = table.pop("base_url", None), table.pop("key_env", None)
+        if base_url == "":  # clearing an optional override restores the SDK's default URL
+            base_url = None
         endpoints[name] = Endpoint(name, api, model, base_url, key_env, options=table)
     channels = raw.get("channels", {})
     for name, table in channels.items():
