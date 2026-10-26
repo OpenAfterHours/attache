@@ -17,8 +17,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from attache import config, web
+from attache.router import NEW_CHAT
 from attache.store import Store
-from attache.types import Inbound
+from attache.types import Inbound, Outbound
 
 TOKEN = "isolated-browser-test-token"
 SETTINGS = """# Fixture comment preserved by the settings editor.
@@ -73,6 +74,10 @@ def main() -> None:
 
         async def handle(message: Inbound) -> None:
             store.add_message("local:me", "user", message.text)
+            if message.text == "/new":  # what Router.new_chat sends, with nothing to stop
+                store.new_chat("local:me")
+                await channel.activity("me", "new", {})
+                await channel.send(Outbound("local:me", NEW_CHAT))
 
         channel.on_message = handle
         services = SimpleNamespace(

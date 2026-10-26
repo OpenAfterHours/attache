@@ -248,6 +248,24 @@ def test_a_turn_from_start_to_finish() -> None:
     ]
 
 
+def test_a_new_chat_clears_all_but_the_open_questions() -> None:
+    state = tui.State()
+    state.entries.append(("you", "hi"))
+    state.ask({"ask_id": "a1", "text": "Send the draft to Dan?", "options": ["Send", "Not now"]})
+    state.ask({"ask_id": "a2", "text": "Archive it?", "options": ["Yes", "No"]})
+    state.answered("a2", "Yes")
+    state.activity({"kind": "started", "route": "claude"}, 0)
+    state.activity({"kind": "finished", "seconds": 1.0, "stopped": True}, 1)  # /new stops it
+    state.activity({"kind": "new"}, 2)
+    assert state.lines() == [
+        ("ask", "Send the draft to Dan?"),  # still waiting, so it stays
+        ("ask", "1 Send   2 Not now   (a number answers)"),
+    ]
+    assert state.turn is None and state.status(3) == "" and state.route == "claude"
+    state.message({"chat_key": "local:me", "text": "New chat.", "files": []})
+    assert state.lines()[-1] == ("bot", "attaché  New chat.")
+
+
 def test_every_turn_keeps_its_steps_and_folds_its_thinking() -> None:
     state = tui.State()
     for question in ("first", "second"):

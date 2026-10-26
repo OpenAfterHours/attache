@@ -224,3 +224,28 @@ test("a temporarily refused event stream reconnects without losing authenticatio
     assert.deepEqual(failures, []);
   } finally { await context.close(); }
 });
+
+// Last: it empties the fixture's chat.
+test("New chat and a typed /new start the chat afresh on every open page", async () => {
+  const { context, page, failures } = await open();
+  const other = await context.newPage();
+  try {
+    await other.goto(address);
+    await other.waitForSelector("#status.live");
+    const notice = "New chat. Earlier messages are kept, but I no longer see them.";
+    for (const p of [page, other]) await p.getByText("Can we make this workspace fit how I work?").waitFor();
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    for (const p of [page, other]) {
+      await p.locator("#log .msg.bot", { hasText: notice }).waitFor();
+      assert.equal(await p.locator("#log .msg").count(), 1); // the earlier messages are gone
+    }
+    await page.reload();
+    await page.waitForSelector("#status.live");
+    await page.getByText("Ask Attaché anything. Replies appear here.").waitFor();
+    await page.locator("#text").fill("/new");
+    await page.locator("#text").press("Enter");
+    await page.locator("#log .msg.bot", { hasText: notice }).waitFor();
+    assert.equal(await page.locator("#log .msg.you").count(), 0); // a command, not a message
+    assert.deepEqual(failures, []);
+  } finally { await context.close(); }
+});

@@ -208,6 +208,7 @@
       <p class="empty" id="hello">Ask Attaché anything. Replies appear here.</p>
     </div>
     <form id="send">
+      <button type="button" id="new-chat" title="Start a new chat (/new). Earlier messages are kept, but Attaché no longer sees them.">New chat</button>
       <textarea id="text" rows="1" placeholder="Message Attaché" aria-label="Message (Enter sends, Shift+Enter for a new line)"></textarea>
       <button class="primary">Send</button>
     </form>
@@ -428,6 +429,7 @@
 
   // A local:me turn's progress, from the activity events: started, step, thinking, finished.
   function activity(event) {
+    if (event.kind === "new") return void loadHistory(); // a new chat: load it, empty but for open questions
     recordActivity(event);
     if (event.kind === "finished") return finished(event);
     setThinking(true); // also for a turn begun in the terminal, or before this page loaded
@@ -490,11 +492,19 @@
     loadPages(); // the reply may come with a new page
   }
 
+  // A new chat, from the button or typed /new: the server stops what runs, starts the chat
+  // afresh and sends a "new" activity event, which reloads every open page.
+  async function newChat() {
+    await api("POST", "/api/chat", { text: "/new" }).catch((err) => add("error", `No new chat: ${err.message}`));
+  }
+  $("new-chat").addEventListener("click", newChat);
+
   $("send").addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
+    if (text === "/new") return newChat();
     add("you", text);
     const answer = typedAnswer(text);
     if (answer) return answer(); // an answer, not a request: no turn, so no "Thinking…"

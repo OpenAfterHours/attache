@@ -325,6 +325,23 @@ def test_stop_turns_cancels_the_turns_of_that_chat_only() -> None:
     assert log == ["local stopped", "slack stopped"] and hub.tasks == set()
 
 
+def test_stop_turns_spares_the_task_that_calls_it() -> None:
+    hub = ChannelManager()
+
+    async def new_chat() -> bool:  # as the router's /new, itself one of the chat's messages
+        return hub.stop_turns("local:me")
+
+    async def main() -> None:
+        turn = hub.spawn(asyncio.Event().wait(), "local:me")
+        await asyncio.sleep(0)
+        new = hub.spawn(new_chat(), "local:me")
+        assert new is not None and await new is True  # it ran to the end
+        await asyncio.gather(turn, return_exceptions=True)
+        assert turn is not None and turn.cancelled()
+
+    asyncio.run(main())
+
+
 def test_summary_and_footer() -> None:
     assert channels.summary("I should check  the\ninbox first. Then draft.") == (
         "I should check the inbox first."

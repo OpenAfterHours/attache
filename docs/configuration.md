@@ -220,7 +220,8 @@ the local web server. `model` is passed to `claude --model`.
 
 - It keeps one Claude Code session per chat and resumes it, so a long chat doesn't resend
   its history. A fresh session gets the recent conversation (the last 30 messages, up to
-  20,000 characters) as a transcript.
+  20,000 characters) as a transcript. [`/new`](quickstart.md#start-a-new-chat) starts a
+  fresh session with no transcript.
 - It runs in a folder next to your home, `~/.attache-claude`, so a `CLAUDE.md` or
   `.claude/settings.json` inside `~/.attache` never loads as Claude Code project settings.
   Your own `~/.claude` settings still apply.

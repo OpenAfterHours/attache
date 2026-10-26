@@ -55,7 +55,7 @@ src/attache/
    each raise the owner's call). Blank lines, comments and
    docstrings don't count, so never make code denser to fit: write the readable version.
    Bundled skills are excluded; each bundled skill's scripts have a 300-line cap (1,390
-   for `mail`, which has three backends). If a feature doesn't fit, it belongs in a
+   for `mail`, which has three backends; 310 for `tui`). If a feature doesn't fit, it belongs in a
    skill.
 2. **No new runtime dependencies** without discussion. Skill scripts declare their own with
    PEP 723 headers and run through `uv run`.

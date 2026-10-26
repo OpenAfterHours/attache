@@ -721,6 +721,59 @@ def test_a_stopped_turn_says_so_and_sends_no_reply(world: World) -> None:
     assert world.local.activities[1][1]["tokens"] is None and world.local.sent == []
 
 
+def test_new_starts_the_owner_chat_afresh(world: World) -> None:
+    world.me("hi")
+    assert world.store.session_get("local:me", "own") == {"n": 1}
+    assert world.me("/new") is None
+    assert len(world.backend.turns) == 1 and world.commits == ["local:me: hi"]  # no turn
+    echo = Outbound("local:me", "/new", author="Alex", origin="terminal")
+    assert world.local.sent[-2:] == [echo, Outbound("local:me", router.NEW_CHAT)]
+    assert world.local.activities[-1] == ("new", {}, 3)  # after the echo, before the notice
+    assert world.store.history("local:me") == []
+    assert world.store.session_get("local:me", "own") == {}
+    world.me("again")
+    turn = world.backend.turns[1]
+    assert turn.history == [] and turn.session == {}  # no history, and a new backend session
+
+
+def test_new_stops_what_runs_in_the_chat_first(world: World) -> None:
+    world.backend.delay = 5
+    hub = world.services.channels
+
+    def handle(text: str) -> asyncio.Task[Any] | None:  # as a channel delivers it
+        msg = Inbound("local", "me", "owner", "Alex", text, origin="web")
+        return hub.spawn(world.router.handle(msg), "local:me")
+
+    async def main() -> None:
+        handle("long")
+        await asyncio.sleep(0.05)
+        handle("queued")  # waits for the chat behind "long"
+        await asyncio.sleep(0.05)
+        new = handle("/new")
+        assert new is not None
+        await asyncio.wait_for(new, 1)  # not stopped by itself
+        await asyncio.gather(*hub.tasks, return_exceptions=True)
+
+    asyncio.run(main())
+    assert len(world.backend.turns) == 1 and world.backend.turns[0].text.endswith("long")
+    kinds = [(kind, data.get("stopped")) for kind, data, _ in world.local.activities]
+    assert kinds == [("started", None), ("finished", True), ("new", None)]
+    assert world.local.sent[-1] == Outbound("local:me", router.NEW_CHAT)
+    assert world.store.history("local:me") == []
+
+
+def test_new_from_anyone_else_or_in_a_group_is_a_message(world: World) -> None:
+    world.say("hello")  # Sam, in the family group
+    world.say("/new", sender="UALEX", name="Alex")  # the owner in a group: not a mention
+    assert [m["text"] for m in world.store.history("slack:CFAM")] == ["hello", "/new"]
+    world.say("/new", chat="DSAM")  # Sam's direct chat: a turn like any other
+    assert world.backend.turns[-1].text.endswith('\n"/new"')
+    assert [m["text"] for m in world.store.history("slack:DSAM")] == ["/new", "reply 1"]
+    assert world.slack.activities == [] and router.NEW_CHAT not in [
+        m.text for m in world.slack.sent
+    ]
+
+
 def test_the_commit_runs_after_the_turn_in_a_task_of_its_own(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:

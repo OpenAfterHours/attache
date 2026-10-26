@@ -98,7 +98,7 @@ Metadata keys Attaché reads:
 
 Bundled skills live in `src/attache/bundled/skills/` and are copied into a user's home by
 `attache init`. Each bundled skill's scripts are capped at 300 lines of code by
-`tests/test_budget.py`. The [Skills guide](../skills.md) covers writing one in full.
+`tests/test_budget.py` (1,390 for `mail`, 310 for `tui`). The [Skills guide](../skills.md) covers writing one in full.
 
 ## The size budget
 

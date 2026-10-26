@@ -35,8 +35,9 @@ Local routes (create_app(services, channel, router)), on [web] host:port
                                message the owner typed in the terminal), "ask" {ask_id,
                                text, options} and "activity" {kind, ...data}, a local:me turn's
                                progress (started, step, thinking, finished; see
-                               ChannelManager.activity). "doc" {collection, id, doc} within
-                               the scope. A ping every 15 s.
+                               ChannelManager.activity), or kind "new" when the owner started
+                               the chat afresh (/new: reload it). "doc" {collection, id, doc}
+                               within the scope. A ping every 15 s.
   POST /mcp/{token}            MCP over Streamable HTTP (plain JSON responses) for the tools of
                                the turn services.gateway[token]; Claude Code connects here
 
