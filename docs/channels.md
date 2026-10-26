@@ -309,6 +309,7 @@ activity event, so a chat app never sees steps or thinking.
 | `step` | `label`: a short name for the call, at most 80 characters, never its contents (`script mail inbox`, `Bash ls -la`); `seconds`: how long it took, or `null` if not known | after each tool call |
 | `thinking` | `text`: the full text the model sent | when the model thinks out loud |
 | `finished` | `seconds`; `tokens`: input plus output, or `null`; `route`; `stopped`: true if it was stopped | after the reply was sent, or after a stop |
+| `new` | none | the owner started the chat afresh with `/new`, after its turns were stopped; the web page reloads the chat |
 
 **A rule for channel authors:** a channel that gains `activity` must never show a step's label
 or the thinking in a chat other people can read. Thinking can quote your mail, and step labels
@@ -318,7 +319,8 @@ name your files and commands.
 chat's messages and returns whether anything was running. That includes messages queued
 behind the running turn, waiting for it to finish: Stop means stop what I asked. The turn
 then ends with `finished` and `stopped: true`, and sends no reply. Ctrl+C in `attache chat` stops a turn of yours this
-way; with none running, it quits as before. The web page's Stop button does the same.
+way; with none running, it quits as before. The web page's Stop button does the same, and so
+does `/new` before it starts the chat afresh. It never cancels the task that calls it.
 
 ## Writing a channel
 

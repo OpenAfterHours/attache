@@ -109,7 +109,7 @@ attache        # the terminal chat, plus the web page
 $ attache
 Open http://127.0.0.1:8765/#t=Q2x1ZS1vbmx5LWFuLWV4YW1wbGUtdG9rZW4
 Chat here, or open http://127.0.0.1:8765/#t=Q2x1ZS1vbmx5LWFuLWV4YW1wbGUtdG9rZW4
-Type /quit to leave.
+Type /new for a new chat, /quit to leave.
 ```
 
 `attache chat` does the same. To run the web page and reminders without a terminal chat,
@@ -149,6 +149,17 @@ Reminders fire while Attaché is running, with `attache` or `attache run`. Any t
 while it was stopped fire once when it starts again.
 
 Type `/quit` or `/exit`, or press ++ctrl+c++, to leave.
+
+## Start a new chat
+
+Type `/new`, or choose **New chat** on the web page, to start the conversation afresh. If
+Attaché is working on something in this chat, it stops first. From then on it doesn't see
+the earlier messages, and the web page clears. The messages are still kept in `attache.db`,
+though. Nothing else changes: your memory files, to-dos, reminders and pages
+stay as they are.
+
+`/new` works the same in your own direct messages on a chat app. In a group chat, or from
+anyone else, it is an ordinary message.
 
 ## Check your setup
 

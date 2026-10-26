@@ -15,6 +15,11 @@ starts, then choose how much room to give the conversation and the work beside i
 - **Workspace** gives the selected view the whole page. Choose Chat or Split to return to
   the conversation.
 
+**New chat**, beside the message box, starts the conversation afresh, as typing `/new` does.
+A running turn stops first. The chat clears on every open page, and Attaché no longer sees
+the earlier messages, though they are still kept. See
+[Start a new chat](quickstart.md#start-a-new-chat).
+
 The browser remembers your layout, divider position and workspace selection. Small screens
 show one pane at a time. Changing the layout keeps the message draft and open pages intact.
 

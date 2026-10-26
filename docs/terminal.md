@@ -50,6 +50,10 @@ Stop and Ctrl+C stop what you asked for:
 The full thinking text is in the full-screen app (ctrl+o), and on the web page when you hover
 over the thinking summary.
 
+Type `/new` to [start a new chat](quickstart.md#start-a-new-chat). A turn that is running
+stops first, and the web page clears too. In the full-screen app, `/new` works the same, but
+the earlier messages stay on its screen until it restarts.
+
 ## The full-screen app
 
 ```bash
