@@ -3,6 +3,13 @@
 An Adapter speaks one wire protocol and keeps its own native message list (`state`). The loop
 asks it for one model step at a time, runs any tool calls, and feeds the results back.
 
+A long job may take many steps, so the loop stops on signs of a loop, not on a small count.
+The same call giving the same result is a step that learned nothing: the model is told so the
+second time (REPEATED), and the MAX_REPEATS-th time the turn is wound up. So is a turn that
+reaches its step limit (step_limit) or most of its time (WIND_DOWN). Winding up tells the model
+to stop and gives it one more step, whose calls are not run, to say what it did and what is
+left; the reply ends by saying so, and "continue" picks the work up from there.
+
 progress() sends ChannelManager.activity events ("started", "step", "thinking", "finished")
 for turns with owner rights only, so a group or a member never sees steps or thinking. A step's
 label() names the tool and a few arguments, never contents.
@@ -10,15 +17,26 @@ label() names the tool and a few arguments, never contents.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from attache.types import Endpoint, Reply, Tool, ToolCall, Turn, TurnContext
 
-MAX_STEPS = 20
+MAX_STEPS = 20  # a turn without owner rights: other people's turns are on your bill
+OWNER_STEPS = 100  # a turn with owner rights, unless its endpoint sets max_steps
+MAX_REPEATS = 3  # the same call giving the same result this often in one turn is a loop
+TIMEOUT = 900.0  # seconds a turn may take, unless its endpoint sets timeout (the router's)
+WIND_DOWN = 0.8  # the share of that time after which the loop winds the turn up
+REPEATED = "\n[Attaché: this call gave this same result before. Try another way, or stop.]"
+WRAP_UP = (
+    "\n[Attaché: stop now, because {why}. Call no more tools: reply with what you did, what you "
+    "found and what is left, so the work can go on in a later turn.]"
+)
 MAX_TOOL_OUTPUT = 20_000  # characters; longer results are cut with a note saying so
 # The only arguments a step's label shows (40 characters each): never text, html, data, body,
 # summary or question. Ours, then Claude Code's own tools' (claude_cli).
@@ -98,19 +116,54 @@ async def run_tool(call: ToolCall, turn: Turn) -> str:
     return out
 
 
-async def tool_loop(adapter: Adapter, turn: Turn, max_steps: int = MAX_STEPS) -> Reply:
-    """Step until the model stops calling tools or max_steps is hit (then say so in the reply).
-    Usage from every step is summed into Reply.usage."""
+def timeout(endpoint: Endpoint) -> float:
+    """Seconds a turn on this endpoint may take: its timeout option, else TIMEOUT."""
+    return float(endpoint.options.get("timeout", TIMEOUT))
+
+
+def step_limit(turn: Turn) -> int:
+    """How many steps the turn may take: its endpoint's max_steps (default OWNER_STEPS) with
+    owner rights, and never more than MAX_STEPS without them."""
+    steps = int(turn.endpoint.options.get("max_steps", OWNER_STEPS))
+    owner = turn.ctx.role == "owner" and not turn.ctx.is_group
+    return steps if owner else min(steps, MAX_STEPS)
+
+
+async def tool_loop(adapter: Adapter, turn: Turn, max_steps: int | None = None) -> Reply:
+    """Step until the model stops calling tools, or wind the turn up (see the module docstring)
+    after max_steps (default step_limit), a loop, or WIND_DOWN of the endpoint's timeout.
+    Usage from every step, the wrap-up's included, is summed into Reply.usage."""
+    limit = max_steps or step_limit(turn)
+    wind_down = time.monotonic() + WIND_DOWN * timeout(turn.endpoint)
     state = adapter.start(turn)
     usage: dict[str, Any] = {}
-    text = ""
-    for _ in range(max_steps):
+    seen: Counter[int] = Counter()  # hashes of (call, result): outputs can be long
+    steps, text, why = 0, "", ""
+    while True:
         step = await adapter.step(state, turn)
+        steps += 1
         for key, value in step.usage.items():
             usage[key] = usage.get(key, 0) + (value or 0)
         text = step.text or text
-        if not step.calls:
-            return Reply(step.text, usage=usage)
-        results = [(call, await run_tool(call, turn)) for call in step.calls]
+        if why or not step.calls:  # done, or that was the wrap-up: its calls are not run
+            break
+        results = []
+        for call in step.calls:
+            out = await run_tool(call, turn)
+            mark = hash((call.name, json.dumps(call.args, sort_keys=True, default=str), out))
+            seen[mark] += 1
+            results.append((call, out + REPEATED if seen[mark] > 1 else out))
+        if max(seen.values()) >= MAX_REPEATS:
+            why = "the same call keeps giving the same result"
+        elif steps >= limit:
+            why = f"this turn has used its {limit} steps"
+        elif time.monotonic() > wind_down:
+            why = "this turn is near its time limit"
+        if why:
+            call, out = results[-1]
+            results[-1] = (call, out + WRAP_UP.format(why=why))
         adapter.add_results(state, results)
-    return Reply(f"{text}\n\n(I stopped after {max_steps} steps.)".lstrip(), usage=usage)
+    if not why:
+        return Reply(step.text, usage=usage)
+    note = f'(Stopped because {why}. Say "continue" and I\'ll pick up from here.)'
+    return Reply(f"{text}\n\n{note}".lstrip(), usage=usage)

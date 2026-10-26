@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import time
 from types import SimpleNamespace
 from typing import Any
 
-from attache.agent import MAX_TOOL_OUTPUT, Step, label, run_tool, tool_loop, tool_spec
+from attache import agent
+from attache.agent import MAX_TOOL_OUTPUT, Step, label, run_tool, step_limit, tool_loop, tool_spec
 from attache.types import Endpoint, Person, Tool, ToolCall, Turn, TurnContext
 
 
@@ -142,9 +145,61 @@ def test_tool_loop_runs_tools_then_answers() -> None:
     assert reply.usage == {"input_tokens": 25, "output_tokens": 6, "cached": 0}
 
 
-def test_tool_loop_stops_after_max_steps() -> None:
-    turn = make_turn([make_tool("again", lambda a, c: "more")])
-    adapter = ScriptedAdapter([Step("still working", [ToolCall("c", "again", {})], {"n": 1})])
+def test_tool_loop_winds_up_after_max_steps_without_running_more_tools() -> None:
+    count = itertools.count(1)
+    turn = make_turn([make_tool("next", lambda a, c: f"page {next(count)}")])
+    working = Step("still working", [ToolCall("c", "next", {})], {"n": 1})
+    summary = Step("Read pages 1-3; 4 on are left.", [ToolCall("d", "next", {})], {"n": 1})
+    adapter = ScriptedAdapter([working, working, working, summary])
     reply = asyncio.run(tool_loop(adapter, turn, max_steps=3))
-    assert reply.text == "still working\n\n(I stopped after 3 steps.)"
-    assert len(adapter.results) == 3 and reply.usage == {"n": 3}
+    assert reply.text == (
+        "Read pages 1-3; 4 on are left.\n\n(Stopped because this turn has used its 3 steps. "
+        'Say "continue" and I\'ll pick up from here.)'
+    )
+    outputs = [out for results in adapter.results for _, out in results]
+    assert outputs[:2] == ["page 1", "page 2"] and outputs[2].startswith("page 3\n[Attaché: stop")
+    assert next(count) == 4  # the wrap-up's call was not run
+    assert reply.usage == {"n": 4}  # three steps and the wrap-up
+
+
+def test_tool_loop_flags_a_repeated_result_and_stops_a_loop() -> None:
+    turn = make_turn([make_tool("status", lambda a, c: "running")])
+    polling = Step("", [ToolCall("c", "status", {"job": "va", "n": 1})])
+    adapter = ScriptedAdapter([polling, polling, polling, Step("", [])])
+    reply = asyncio.run(tool_loop(adapter, turn, max_steps=50))
+    outputs = [out for results in adapter.results for _, out in results]
+    assert outputs[0] == "running" and outputs[1] == "running" + agent.REPEATED
+    assert "same call keeps giving the same result" in outputs[2]
+    assert reply.text.startswith("(Stopped because the same call keeps giving the same result.")
+
+
+def test_tool_loop_lets_a_repeated_call_with_a_new_result_go_on() -> None:
+    count = itertools.count(1)
+    turn = make_turn([make_tool("test", lambda a, c: f"{next(count)} failed")])
+    run = Step("", [ToolCall("c", "test", {})])
+    adapter = ScriptedAdapter([run, run, run, run, Step("All pass now.", [])])
+    reply = asyncio.run(tool_loop(adapter, turn))
+    assert reply.text == "All pass now." and len(adapter.results) == 4
+    assert not any(agent.REPEATED in out for results in adapter.results for _, out in results)
+
+
+def test_tool_loop_winds_up_near_the_endpoints_timeout() -> None:
+    turn = make_turn([make_tool("slow", lambda a, c: time.sleep(0.1) or "done")])
+    turn.endpoint.options["timeout"] = 0.05
+    slow = Step("", [ToolCall("c", "slow", {})])
+    adapter = ScriptedAdapter([slow, Step("Half done.", [])])
+    reply = asyncio.run(tool_loop(adapter, turn))
+    assert reply.text.startswith("Half done.\n\n(Stopped because this turn is near its time limit")
+    assert len(adapter.results) == 1
+
+
+def test_step_limit_is_generous_for_the_owner_only() -> None:
+    owner, member = make_turn([]), make_turn([], "member", "slack:DSAM")
+    in_group = make_turn([], "owner", "slack:CFAM")  # an owner turn in a group: member rights
+    assert step_limit(owner) == agent.OWNER_STEPS
+    assert step_limit(member) == step_limit(in_group) == agent.MAX_STEPS
+    for turn in (owner, member, in_group):
+        turn.endpoint.options["max_steps"] = 500
+    assert (step_limit(owner), step_limit(member), step_limit(in_group)) == (500, 20, 20)
+    member.endpoint.options["max_steps"] = 5
+    assert step_limit(member) == 5

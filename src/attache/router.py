@@ -240,7 +240,7 @@ class Router:
                 ep = self.services.config.endpoint_for(key, shared)
                 route = ep.name
                 await agent.progress(ctx, "started", route=route)
-                timeout = float(ep.options.get("timeout", 900))
+                timeout = agent.timeout(ep)
                 if ep.name not in self.backends:
                     self.backends[ep.name] = self.make_backend(ep)
                 history, text = self._conversation(msg, sender, chat, msg_id)

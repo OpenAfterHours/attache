@@ -54,7 +54,8 @@ port = 8765
 # guest_daily = 50      # turns per day across all guests and pages' attache.ask, kept apart
 
 # Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
-# max_tokens, are passed to the backend as options.
+# max_tokens, are passed to the backend as options. timeout (seconds, default 900) and
+# max_steps (default 100; other people's turns 20 at most) bound a turn: docs/configuration.md.
 [endpoints.claude]
 api = "claude-cli"  # your Claude Code login
 model = "claude-sonnet-5-5"
