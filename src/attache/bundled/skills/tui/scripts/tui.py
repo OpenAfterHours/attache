@@ -162,8 +162,13 @@ class State:
         return None
 
     def activity(self, event: dict[str, Any], now: float) -> None:
-        """An "activity" event: {kind: started | step | thinking | finished, ...data}."""
+        """An "activity" event: {kind: started | step | thinking | finished, ...data}, or
+        kind "new" when the chat started afresh (/new): only the open questions stay."""
         kind = event.get("kind")
+        if kind == "new":
+            self.entries = [("ask", ask) for ask in self.asks.values()]
+            self.turn, self.done = None, ""
+            return
         if kind == "started" or (kind in ("step", "thinking") and self.turn is None):
             self.turn = Turn(since=now)  # also when the app connected while a turn was running
             self.entries.append(("turn", self.turn))
