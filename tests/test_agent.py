@@ -79,9 +79,10 @@ class ScriptedAdapter:
     """Replays canned steps and records the tool results it is given."""
 
     def __init__(self, steps: list[Step]) -> None:
-        self.steps, self.results = steps, []
+        self.steps, self.results, self.starts = steps, [], []
 
     def start(self, turn: Turn) -> list[Any]:
+        self.starts.append(turn)
         return []
 
     async def step(self, state: list[Any], turn: Turn) -> Step:
@@ -191,6 +192,35 @@ def test_tool_loop_winds_up_near_the_endpoints_timeout() -> None:
     reply = asyncio.run(tool_loop(adapter, turn))
     assert reply.text.startswith("Half done.\n\n(Stopped because this turn is near its time limit")
     assert len(adapter.results) == 1
+
+
+def test_a_full_context_starts_afresh_from_the_models_notes() -> None:
+    count = itertools.count(1)
+    turn = make_turn([make_tool("read", lambda a, c: f"part {next(count)}")])
+    turn.history = [{"role": "user", "content": "earlier"}]
+    turn.endpoint.options["context_tokens"] = 1000
+    read = ToolCall("c", "read", {})
+    adapter = ScriptedAdapter(
+        [
+            Step("", [read], {"input_tokens": 900, "output_tokens": 50}),
+            Step("", [read], {"input_tokens": 400, "cache_read_input_tokens": 600}),  # 1000: full
+            Step("Notes: parts 1-2 read.", [read], {"input_tokens": 1100}),  # its call isn't run
+            Step("", [read], {"input_tokens": 200}),
+            Step("Done.", [], {"input_tokens": 300}),
+        ]
+    )
+    reply = asyncio.run(tool_loop(adapter, turn))
+    assert reply.text == "Done." and reply.usage["input_tokens"] == 2900
+    outputs = [out for results in adapter.results for _, out in results]
+    assert outputs == ["part 1", "part 2" + agent.NOTES, "part 3"]
+    first, again = adapter.starts
+    assert first is turn and again.text == agent.CARRY_ON
+    assert again.history == [
+        {"role": "user", "content": "earlier"},
+        {"role": "user", "content": "hi"},  # the request, as it came
+        {"role": "assistant", "content": "Notes: parts 1-2 read."},
+    ]
+    assert again.system == turn.system and again.tools == turn.tools
 
 
 def test_step_limit_is_generous_for_the_owner_only() -> None:

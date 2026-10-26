@@ -191,6 +191,8 @@ is yours to choose; it is what `[routing]` and `[chats]` refer to.
 | `key_env` | Optional. The name of the environment variable that holds the API key. The key itself never goes in `attache.toml`. |
 | `timeout` | Optional. Seconds a turn may take before Attaché gives up. Default `900`. |
 | `max_steps` | Optional, not `claude-cli`. The most model calls one of your own turns may make (see below). Default `100`. Other people's turns never get more than `20`. |
+| `context_tokens` | Optional, not `claude-cli`. How big a turn's context may grow, in tokens, before it starts afresh from the model's notes (see below). Default `150000`. Set it well below the model's context window. |
+| `cache` | Optional, `anthropic` only. Prompt caching, `true` or `false`. Default `true` for Anthropic's own API, `false` with a `base_url`. |
 | `max_tokens` | Optional, `anthropic` only. The most tokens a single model response may use. Default `4096`. |
 | `bin` | Optional, `claude-cli` only. The Claude Code command, if it isn't `claude` on your `PATH`. |
 
@@ -207,6 +209,20 @@ the next turn picks the work up from there. `timeout` stays the hard limit, and 
 Esc, or Ctrl+C in the terminal) ends a turn at once. For a job longer than one turn should
 take, raise both `max_steps` and `timeout`, or give it to a [background job](jobs.md).
 On `claude-cli`, Claude Code runs its own loop, and only `timeout` and **Stop** bound it.
+
+**Context.** Within a turn nothing is dropped: every tool call and its result stays in the
+model's context until the turn ends, so a long turn's context keeps growing. Once one step's
+context reaches `context_tokens`, the model is told to write notes on what it has done, found
+and still has to do, and the turn carries on in a fresh context holding only your request and
+those notes. It can happen more than once in a turn, and it works the same on every `api`.
+Between turns, the model sees the chat's last 30 messages: what you and it said, not the tool
+calls, which is why a reply that stops early says where it got to. Whatever should outlast
+that belongs in memory (`memory/USER.md`, or the chat's notes in `memory/chats/`).
+
+Each step sends the whole context again. On the `anthropic` route Attaché marks it for prompt
+caching (`cache`), so the part already sent costs a tenth. OpenAI caches long prompts on its
+own, and local servers such as Ollama, vLLM and llama.cpp reuse a prompt's unchanged start.
+On `claude-cli`, Claude Code manages its own context and compacts it when it fills up.
 
 | `api` | Use it for | Who runs the tool loop |
 |---|---|---|
@@ -283,10 +299,14 @@ ollama pull qwen3:32b
 api = "openai-chat"
 base_url = "http://localhost:11434/v1"
 model = "qwen3:32b"
+context_tokens = 24000  # well below the context length the server gives the model
 ```
 
 A local server needs no key, so leave `key_env` out. Pick a model that supports tool
-calling: Attaché's to-dos, reminders and pages all work through tools.
+calling: Attaché's to-dos, reminders and pages all work through tools. A local model's context
+is often far smaller than a hosted one's, and a server may cut a longer prompt short without
+saying so, so set `context_tokens` below it (in Ollama, the context length is a setting of the
+server or the model).
 
 For a hosted service, set its `base_url` and the variable that holds its key:
 
