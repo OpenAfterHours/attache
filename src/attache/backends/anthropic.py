@@ -35,12 +35,17 @@ class AnthropicAdapter:
 
     async def step(self, state: list[dict[str, Any]], turn: Turn) -> Step:
         tools = [tool_spec(t, key="input_schema") for t in turn.tools]
+        # Each step resends the whole turn, so cache it: a cached prefix costs a tenth. On by
+        # default for Anthropic's own API only, as another server may not know the field. In
+        # extra_body, as SDKs before 1.x (anthropic>=0.40) have no cache_control argument.
+        cache = self.endpoint.options.get("cache", self.endpoint.base_url is None)
         resp = await self._client().messages.create(
             model=self.endpoint.model,
             max_tokens=self.endpoint.options.get("max_tokens", 4096),
             system=turn.system,
             messages=state,
             **({"tools": tools} if tools else {}),
+            extra_body={"cache_control": {"type": "ephemeral"}} if cache else None,
         )
         # Send the blocks back as they came, so thinking blocks keep their signatures.
         blocks = [b.model_dump(exclude_none=True) for b in resp.content]
