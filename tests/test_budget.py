@@ -12,7 +12,7 @@ import tokenize
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "attache"
-CORE_LIMIT = 2700  # owner workspace settings; optional analysis stays in a bundled skill
+CORE_LIMIT = 2710  # owner workspace settings, then /new and long turns; analysis is a skill
 SKILL_SCRIPT_LIMIT = 300
 SKILL_LIMITS = {
     "mail": 1390,  # shared and IMAP ~600, Outlook COM and Graph ~700, headers, show_as

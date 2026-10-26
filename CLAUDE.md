@@ -48,11 +48,11 @@ src/attache/
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 2,700 lines of code in
+1. **Size is a test.** `tests/test_budget.py` fails above 2,710 lines of code in
    `src/attache` (1,600 in phase 1, 1,900 in phase 2, 2,100 in
    phase 3, 2,180 for the terminal's progress, then 2,240 for email requests' script
-   identity and background runs, then 2,700 for owner workspace settings;
-   each raise the owner's call). Blank lines, comments and
+   identity and background runs, then 2,700 for owner workspace settings, then
+   2,710 for /new and long turns; each raise the owner's call). Blank lines, comments and
    docstrings don't count, so never make code denser to fit: write the readable version.
    Bundled skills are excluded; each bundled skill's scripts have a 300-line cap (1,390
    for `mail`, which has three backends; 310 for `tui`). If a feature doesn't fit, it belongs in a

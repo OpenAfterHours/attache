@@ -2,7 +2,7 @@
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is under 2,700 lines of Python code, the cap
+folder of skills it can edit itself. The core is under 2,710 lines of Python code, the cap
 CI enforces; everything else is a skill.
 
 > **Status:** phase 3 of the [roadmap](docs/proposal.html): the local core, terminal and web
