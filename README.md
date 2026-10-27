@@ -89,7 +89,9 @@ key_env = "ANTHROPIC_API_KEY"
   ([docs/jobs.md](docs/jobs.md)). Setup is in [docs/channels.md](docs/channels.md).
 - **The web.** The `web` skill searches (DuckDuckGo, or Brave with a key) and reads pages as
   text, for you and your group chats, and reaches only the public internet, never your own
-  machine or network: see [docs/web.md](docs/web.md).
+  machine or network: see [docs/web.md](docs/web.md). The `browser` skill drives Edge or
+  Chrome with your sign-in to read the work sites you list, such as SharePoint and Power BI,
+  for you alone: see [docs/browser.md](docs/browser.md).
 - **Share links.** With `[web] public_url` set and Tailscale Funnel pointed at a second local
   port, a group's page gets a link that works on anyone's phone, for that group's shared data
   only: see [docs/pages.md](docs/pages.md).

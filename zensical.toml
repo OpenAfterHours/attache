@@ -40,6 +40,7 @@ nav = [
     { "Diary" = "diary.md" },
     { "Jobs" = "jobs.md" },
     { "Web" = "web.md" },
+    { "Browser" = "browser.md" },
     { "Terminal" = "terminal.md" },
     { "Skills" = "skills.md" },
     { "Pages" = "pages.md" },

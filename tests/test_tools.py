@@ -150,6 +150,7 @@ def test_resolve_allows_plain_relative_paths(services: app.Services) -> None:
         "skills/x/claude.md",
         ".mail/gmail.json",
         ".approvals/abc12345",
+        ".browser/edge/Default/Cookies",
     ],
 )
 def test_resolve_denies_private_files(services: app.Services, private: str) -> None:

@@ -222,7 +222,7 @@ def init_home(home: Path, owner_name: str, endpoint: str = "claude") -> list[Pat
     home_page = skills.BUNDLED / "artifact-kit" / "templates" / "home.html"
     files = {
         "attache.toml": _template(owner_name, endpoint),
-        ".gitignore": "attache.db*\n.secret\nfiles/\nlogs/\n.mail/\n.approvals/\n",
+        ".gitignore": "attache.db*\n.secret\nfiles/\nlogs/\n.mail/\n.approvals/\n.browser/\n",
         "artifacts/home.html": home_page.read_text(encoding="utf-8"),
     }
     for name in ("USER.md", "ATTACHE.md"):
