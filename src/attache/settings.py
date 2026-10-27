@@ -104,6 +104,8 @@ def _projection(cfg: config.Config, *, status: bool = False) -> dict[str, Any]:
             )
             if endpoint.api.startswith("openai-") and not endpoint.key_env and not local:
                 item["credential_status"] = "not-configured"
+            if endpoint.key_ref:  # not read here, as reading may ask to unlock the store
+                item["credential_status"] = "keyring"
         result["endpoints"][name] = item
     result["channels"] = {
         name: {"enabled": options.get("enabled", False)} for name, options in cfg.channels.items()

@@ -7,20 +7,26 @@ which OpenAI's reasoning models need for tool calls.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 from typing import Any
 
-from attache.agent import Step, api_key, tool_spec
+from attache import credentials
+from attache.agent import Step, tool_spec
 from attache.types import Endpoint, ToolCall, Turn
 
 
-def _client(adapter: ChatAdapter | ResponsesAdapter) -> Any:
-    if adapter.client is None:
-        key = api_key(adapter.endpoint) or "not-needed"  # local servers take any key
-        from openai import AsyncOpenAI
+async def _client(adapter: ChatAdapter | ResponsesAdapter) -> Any:
+    async with adapter._client_lock:
+        if adapter.client is None:
+            options = await asyncio.to_thread(credentials.client_options, adapter.endpoint)
+            options["api_key"] = options["api_key"] or "not-needed"  # unauthenticated servers
+            from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
-        adapter.client = AsyncOpenAI(api_key=key, base_url=adapter.endpoint.base_url)
+            if adapter.endpoint.key_ref:
+                options["http_client"] = DefaultAsyncHttpxClient(follow_redirects=False)
+            adapter.client = AsyncOpenAI(**options)
     return adapter.client
 
 
@@ -38,6 +44,7 @@ class ChatAdapter:
     def __init__(self, endpoint: Endpoint, client: Any = None) -> None:
         self.endpoint = endpoint
         self.client = client
+        self._client_lock = asyncio.Lock()
 
     def start(self, turn: Turn) -> list[dict[str, Any]]:
         system = {"role": "system", "content": turn.system}
@@ -47,7 +54,8 @@ class ChatAdapter:
         kwargs: dict[str, Any] = {"model": self.endpoint.model, "messages": state}
         if turn.tools:
             kwargs["tools"] = [{"type": "function", "function": tool_spec(t)} for t in turn.tools]
-        resp = await _client(self).chat.completions.create(**kwargs)
+        client = await _client(self)
+        resp = await client.chat.completions.create(**kwargs)
         msg = resp.choices[0].message
         tool_calls = msg.tool_calls or []
         message: dict[str, Any] = {"role": "assistant", "content": msg.content}
@@ -70,12 +78,14 @@ class ResponsesAdapter:
     def __init__(self, endpoint: Endpoint, client: Any = None) -> None:
         self.endpoint = endpoint
         self.client = client
+        self._client_lock = asyncio.Lock()
 
     def start(self, turn: Turn) -> list[dict[str, Any]]:
         return [*map(dict, turn.history), {"role": "user", "content": turn.text}]
 
     async def step(self, state: list[dict[str, Any]], turn: Turn) -> Step:
-        resp = await _client(self).responses.create(
+        client = await _client(self)
+        resp = await client.responses.create(
             model=self.endpoint.model,
             instructions=turn.system,
             input=state,

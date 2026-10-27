@@ -225,6 +225,40 @@ test("a temporarily refused event stream reconnects without losing authenticatio
   } finally { await context.close(); }
 });
 
+test("replies show their Markdown as elements, never as HTML, and questions stay as typed", async () => {
+  const { context, page, failures } = await open();
+  const send = (data) => page.request.post(new URL("/__test/reply", address).href, { data });
+  try {
+    await send({ text: [
+      "## Plan", "", "Use **bold**, *care*, `code` and [the docs](https://example.com/docs).", "",
+      "1. First", "2. Second", "   - [x] nested", "", "```", "<b>as typed</b>", "```", "",
+      "| Day | Task |", "|-----|-----:|", "| Mon | Write |", "",
+      "<img src=x onerror=alert(1)> [run](javascript:alert(1)) ![pixel](https://example.com/p.png)",
+    ].join("\n") });
+    const reply = page.locator("#log .msg.bot .md").last();
+    await reply.locator("h4", { hasText: "Plan" }).waitFor();
+    assert.equal(await reply.locator("strong").textContent(), "bold");
+    assert.equal(await reply.locator("em").textContent(), "care");
+    assert.equal(await reply.locator("p code").textContent(), "code");
+    assert.equal(await reply.getByRole("link", { name: "the docs" }).getAttribute("href"), "https://example.com/docs");
+    assert.equal(await reply.locator("ol > li").count(), 2);
+    assert.equal(await reply.locator("ol ul input[type=checkbox]").isChecked(), true);
+    assert.equal(await reply.locator("pre code").textContent(), "<b>as typed</b>");
+    assert.equal(await reply.locator("pre b").count(), 0);
+    assert.equal(await reply.locator("td").last().evaluate((td) => td.style.textAlign), "right");
+    assert.equal(await reply.locator("img").count(), 0); // an image is only a link: nothing loads
+    assert.equal(await reply.getByRole("link", { name: "pixel" }).getAttribute("href"), "https://example.com/p.png");
+    assert.ok((await reply.textContent()).includes("<img src=x onerror=alert(1)> [run](javascript:alert(1))"));
+    assert.equal(await reply.locator('a[href^="javascript"]').count(), 0);
+    await send({ ask: true, text: "Send this?\n\n**To:** sam@example.com" });
+    const ask = page.locator("#log .msg.ask").last();
+    await ask.getByRole("button", { name: "Send", exact: true }).waitFor();
+    assert.ok((await ask.textContent()).startsWith("Send this?\n\n**To:** sam@example.com"));
+    assert.equal(await ask.locator(".md, strong").count(), 0);
+    assert.deepEqual(failures, []);
+  } finally { await context.close(); }
+});
+
 // Last: it empties the fixture's chat.
 test("New chat and a typed /new start the chat afresh on every open page", async () => {
   const { context, page, failures } = await open();

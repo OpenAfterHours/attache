@@ -27,6 +27,7 @@ dependencies = [
     "uvicorn>=0.30",
     "pyyaml>=6",
     "cronsim>=2.6",
+    "keyring>=25,<26",
 ]
 
 [project.urls]
@@ -44,6 +45,7 @@ dev = [
     "ruff>=0.10",
     "icalendar>=6.1",  # the diary skill's tests (its script declares its own)
     "recurring-ical-events>=3.3",  # likewise
+    "tomlkit>=0.13",  # the credentials skill preserves comments when updating key_ref
 ]
 # The documentation site (zensical.toml): `uv run --group docs zensical serve` or `build`.
 docs = ["zensical>=0.0.45"]

@@ -115,6 +115,29 @@
   .footer { align-self: flex-start; margin-top: -6px; font: 12px/1.5 var(--font-mono); color: var(--muted); }
   .msg a { color: var(--link); }
   .msg a:hover { color: var(--accent); }
+  /* A reply's Markdown (see markdown below), spaced to suit a chat bubble. */
+  .md :is(p, ul, ol, pre, blockquote, h3, h4, h5, h6), .md .table { margin: 0 0 10px; }
+  .md :is(h3, h4, h5, h6) { margin-top: 16px; font: 600 1em/1.35 var(--font-display); }
+  .md h3 { font-size: 1.25em; }
+  .md h4 { font-size: 1.12em; }
+  .md :is(ul, ol) { padding-left: 22px; }
+  .md li + li { margin-top: 3px; }
+  .md li > * { margin-bottom: 3px; }
+  .md li::marker { color: var(--muted); }
+  .md li.task { list-style: none; }
+  .md li.task input { margin: 0 6px 0 -20px; vertical-align: -2px; }
+  .md :first-child { margin-top: 0; }
+  .md :last-child { margin-bottom: 0; }
+  .md strong { font-weight: 600; }
+  .md code { padding: 1px 5px; font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+  .md pre { padding: 10px 12px; overflow-x: auto; white-space: pre; overflow-wrap: normal; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .md pre code { padding: 0; background: none; border: 0; }
+  .md blockquote { padding-left: 12px; border-left: 3px solid var(--mine-border); color: var(--muted); }
+  .md hr { margin: 14px 0; border: 0; border-top: 1px solid var(--border); }
+  .md .table { overflow-x: auto; }
+  .md table { border-collapse: collapse; font-size: 14px; }
+  .md :is(th, td) { padding: 5px 10px; text-align: left; vertical-align: top; overflow-wrap: break-word; border: 1px solid var(--border); }
+  .md th { font-weight: 600; background: var(--bg); }
   .files { margin-top: 4px; font: 12px/1.5 var(--font-mono); color: var(--muted); }
   .choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
   .choices button:disabled { opacity: 0.5; cursor: default; }
@@ -277,7 +300,7 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const log = $("log"), input = $("text"), bar = $("bar"), hello = $("hello");
-  const URLS = /(https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
+  const URLS = /(?<url>https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
   const KEY = "attache-token";
   let TOKEN = null, current = null, wanted = null, pages = [], isLocked = false;
   let thinking = null, loading = false, early = [], connection = null, leaving = false;
@@ -339,24 +362,180 @@
   const el = (tag, className = "", textContent = "") =>
     Object.assign(document.createElement(tag), { className, textContent });
 
-  // Message text is untrusted: text nodes and links only, never HTML. Links to a page of this
-  // Attaché (/#page=<name>) open it in the Pages panel.
+  // Message text is untrusted: elements made here with text nodes, never HTML. Links to a page
+  // of this Attaché (/#page=<name>) open it in the Pages panel.
+  function anchor(href) {
+    const a = el("a");
+    Object.assign(a, { href, target: "_blank", rel: "noopener noreferrer" });
+    const url = URL.canParse(href) ? new URL(href) : null;
+    const name = url?.origin === location.origin && new URLSearchParams(url.hash.slice(1)).get("page");
+    if (name) a.addEventListener("click", (e) => { e.preventDefault(); show(name, true); });
+    return a;
+  }
+
   function writeText(node, text) {
     text.split(URLS).forEach((part, i) => {
       if (i % 2 === 0) return void (part && node.append(part));
-      const a = el("a", "", part);
-      Object.assign(a, { href: part, target: "_blank", rel: "noopener noreferrer" });
-      const url = URL.canParse(part) ? new URL(part) : null;
-      const name = url?.origin === location.origin && new URLSearchParams(url.hash.slice(1)).get("page");
-      if (name) a.addEventListener("click", (e) => { e.preventDefault(); show(name, true); });
+      const a = anchor(part);
+      a.textContent = part;
       node.append(a);
     });
+  }
+
+  // Replies are Markdown. Their HTML shows as typed, an image is a link to it (nothing loads),
+  // and only http(s) and mailto links are made: any other shows as written.
+  const FENCE = /^( {0,3})(`{3,}(?!.*`)|~{3,})/;
+  const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+  const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+  const QUOTE = /^ {0,3}> ?/;
+  const ITEM = /^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+|$)/;
+  const DIVIDER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  const ALIGN = { "::": "center", ":-": "left", "-:": "right" }; // by a divider cell's ends
+  const INLINE = new RegExp([
+    /\\(?<escaped>[\\`*_{}[\]()#+\-.!|~<>])/,
+    /(?<ticks>`+)(?<code>[^`]|[^`][\s\S]*?[^`])\k<ticks>(?!`)/,
+    /!?\[(?<label>[^\]\n]*)\]\(\s*<?(?<href>(?:[^\s()<>]|\([^\s()<>]*\))+)>?(?:\s+"[^"\n]*")?\s*\)/,
+    /<(?<auto>(?:https?:\/\/|mailto:)[^\s<>]+)>/,
+    URLS, // before emphasis, so an address keeps its _ and *
+    /(?<br><br\s*\/?>)/,
+    /\*\*(?!\s)(?<strong>[\s\S]*?\S)\*\*(?!\*)|(?<!\w)__(?!\s)(?<under>[\s\S]*?\S)__(?!\w)/,
+    /~~(?!\s)(?<del>[\s\S]*?\S)~~/,
+    /\*(?![\s*])(?<em>[\s\S]*?[^\s*])\*(?!\*)|(?<!\w)_(?![\s_])(?<emu>[\s\S]*?[^\s_])_(?!\w)/,
+  ].map((r) => r.source).join("|"), "g");
+
+  function markdown(text) {
+    const root = el("div", "md");
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    blocks(root, lines.map((line) => line.replace(/^\t+/, (tabs) => "    ".repeat(tabs.length))));
+    return root;
+  }
+
+  const starts = (lines, i) => [FENCE, HEADING, RULE, QUOTE, ITEM].some((r) => r.test(lines[i])) || isTable(lines, i);
+
+  function blocks(parent, lines) {
+    for (let i = 0, m; i < lines.length;) {
+      const line = lines[i];
+      if (!line.trim()) i++;
+      else if ((m = line.match(FENCE))) i = codeBlock(parent, lines, i, m);
+      else if ((m = line.match(HEADING))) {
+        inline(parent.appendChild(el(`h${Math.min(m[1].length + 2, 6)}`)), m[2]); // h1 is Attaché's
+        i++;
+      } else if (RULE.test(line)) { parent.append(el("hr")); i++; }
+      else if (QUOTE.test(line)) {
+        const quoted = [];
+        for (; i < lines.length && QUOTE.test(lines[i]); i++) quoted.push(lines[i].replace(QUOTE, ""));
+        blocks(parent.appendChild(el("blockquote")), quoted);
+      } else if (ITEM.test(line)) i = listBlock(parent, lines, i);
+      else if (isTable(lines, i)) i = tableBlock(parent, lines, i);
+      else {
+        const text = [line.trim()];
+        for (i++; i < lines.length && lines[i].trim() && !starts(lines, i); i++) text.push(lines[i].trim());
+        inline(parent.appendChild(el("p")), text.join("\n")); // the bubble keeps line breaks
+      }
+    }
+  }
+
+  function codeBlock(parent, lines, i, [, indent, fence]) {
+    const close = new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`);
+    const body = [];
+    for (i++; i < lines.length && !close.test(lines[i]); i++) {
+      body.push(lines[i].replace(new RegExp(`^ {0,${indent.length}}`), ""));
+    }
+    parent.appendChild(el("pre")).append(el("code", "", body.join("\n")));
+    return i + 1;
+  }
+
+  // An item holds the lines indented under it, so lists nest. Models indent by 2, 3 or 4, so
+  // any deeper indent counts, and a sibling may be one space out. Another marker (- or *, 1.
+  // or 1)) starts another list.
+  function listBlock(parent, lines, i) {
+    const first = lines[i].match(ITEM), indent = first[1].length, ordered = /\d/.test(first[2]);
+    const node = parent.appendChild(el(ordered ? "ol" : "ul"));
+    if (ordered) node.start = parseInt(first[2], 10);
+    const marker = (m) => m[2].replace(/\d+/, "");
+    const sibling = (line) => {
+      const m = line?.match(ITEM);
+      return m && m[1].length <= indent + 1 && marker(m) === marker(first) ? m : null;
+    };
+    for (let m = first; m; m = sibling(lines[i])) {
+      let end = i + 1; // after the item's last line
+      for (let j = i + 1; j < lines.length; j++) {
+        const spaces = lines[j].search(/\S/);
+        if (spaces < 0) continue; // a blank line is the item's only if more of it follows
+        if (spaces <= indent || sibling(lines[j])) break;
+        end = j + 1;
+      }
+      const offset = m[0].length, content = [lines[i].slice(offset)];
+      for (let j = i + 1; j < end; j++) content.push(lines[j].slice(Math.min(Math.max(lines[j].search(/\S/), 0), offset)));
+      const task = content[0].match(/^\[([ xX])\][ \t]+/);
+      if (task) content[0] = content[0].slice(task[0].length);
+      const item = node.appendChild(el("li", task ? "task" : ""));
+      blocks(item, content);
+      if (task) {
+        const box = Object.assign(el("input"), { type: "checkbox", checked: task[1] !== " ", disabled: true });
+        (item.querySelector(":scope > p:first-child") || item).prepend(box);
+      }
+      i = end;
+      while (i < lines.length && !lines[i].trim()) i++;
+    }
+    return i;
+  }
+
+  const cells = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((cell) => cell.trim());
+  const isTable = (lines, i) => lines[i].includes("|") && DIVIDER.test(lines[i + 1] ?? "") &&
+    lines[i + 1].includes("|") && cells(lines[i]).length === cells(lines[i + 1]).length;
+
+  function tableBlock(parent, lines, i) {
+    const align = cells(lines[i + 1]).map((cell) => ALIGN[cell[0] + cell.at(-1)] || "");
+    const table = parent.appendChild(el("div", "table")).appendChild(el("table"));
+    const row = (line, tag) => {
+      const tr = el("tr"), values = cells(line);
+      align.forEach((side, k) => {
+        const cell = tr.appendChild(el(tag));
+        cell.style.textAlign = side;
+        inline(cell, values[k] ?? "");
+      });
+      return tr;
+    };
+    table.createTHead().append(row(lines[i], "th"));
+    const body = table.createTBody();
+    for (i += 2; i < lines.length && lines[i].includes("|"); i++) body.append(row(lines[i], "td"));
+    return i;
+  }
+
+  // links is false inside a link's own text, where a link can't nest.
+  function inline(node, text, links = true) {
+    let at = 0;
+    for (const m of text.matchAll(INLINE)) {
+      node.append(text.slice(at, m.index));
+      at = m.index + m[0].length;
+      const g = m.groups, href = g.href || g.auto || g.url;
+      if (g.escaped) node.append(g.escaped);
+      else if (g.code) node.append(el("code", "", g.code));
+      else if (href) linkTo(node, g.label || href, href, links ? m[0] : null);
+      else if (g.br) node.append(el("br"));
+      else {
+        const [tag, inner] = g.strong || g.under ? ["strong", g.strong || g.under] : g.del ? ["del", g.del] : ["em", g.em || g.emu];
+        inline(node.appendChild(el(tag)), inner, links);
+      }
+    }
+    node.append(text.slice(at));
+  }
+
+  // The link's text and where it goes, or what was written when no link can be made.
+  function linkTo(node, text, href, written) {
+    const url = URL.canParse(href, location.href) ? new URL(href, location.href) : null;
+    if (!written || !["http:", "https:", "mailto:"].includes(url?.protocol)) return void node.append(written ?? text);
+    const a = node.appendChild(anchor(url.href));
+    a.title = url.href; // the text may say otherwise
+    inline(a, text, false);
   }
 
   function add(who, text, files, note) {
     hello.remove();
     const msg = el("div", `msg ${who}`);
-    writeText(msg, text);
+    if (who === "bot") msg.append(markdown(text));
+    else writeText(msg, text);
     if (files && files.length) {
       msg.append(el("div", "files", "Files: " + files.map((f) => f.split(/[\\/]/).pop()).join(", ")));
     }
@@ -367,9 +546,10 @@
   }
 
   // A question for you (an approval, say): one button per option. The first answer counts.
+  // Its text shows as typed, not as Markdown, so you approve exactly what you see.
   function showAsk({ ask_id, text, options }) {
     if (asks.has(ask_id)) return; // already shown (it came with the chat and as an event)
-    const msg = add("bot", text);
+    const msg = add("bot ask", text);
     const choices = el("div", "choices");
     // Answering, by a button or by typing an option: the buttons go, and the choice shows.
     async function choose(option) {

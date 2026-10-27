@@ -99,6 +99,7 @@ def test_skill_runs_the_skills_own_script(home: Path, monkeypatch: pytest.Monkey
     assert ran == [["uv", "run", str(script), "install", "--dry-run"]]
     # How to start this same Attaché, for a skill that runs one (the tui skill), and the rest
     assert json.loads(envs[0]["ATTACHE_CLI"]) == [sys.executable, "-m", "attache"]
+    assert Path(envs[0]["ATTACHE_PACKAGE_ROOT"]) == Path(cli.__file__).resolve().parent.parent
     assert envs[0]["ATTACHE_TEST_KEEP"] == "kept"
     # SystemExit with a message: Python prints that one line on stderr and exits with code 1.
     for bad in (["skill"], ["skill", "nope"], ["skill", ".."], ["skill", "../service"]):

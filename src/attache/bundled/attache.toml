@@ -57,6 +57,8 @@ port = 8765
 # max_tokens, are passed to the backend as options. timeout (seconds, default 900) and
 # max_steps (default 100; other people's turns 20 at most) bound a turn, and context_tokens
 # (default 150000) is how big its context grows before it starts afresh: docs/configuration.md.
+# Store an API key in the OS keyring: `attache skill credentials login ENDPOINT`.
+# This replaces that endpoint's key_env with an opaque key_ref. Use only one source.
 [endpoints.claude]
 api = "claude-cli"  # your Claude Code login
 model = "claude-sonnet-5-5"

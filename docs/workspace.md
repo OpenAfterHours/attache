@@ -15,6 +15,12 @@ starts, then choose how much room to give the conversation and the work beside i
 - **Workspace** gives the selected view the whole page. Choose Chat or Split to return to
   the conversation.
 
+Replies show their Markdown formatted: headings, lists and checklists, tables, quotes, code
+and links. Any HTML in a reply shows as typed, and an image shows as a link to it, so nothing
+in the chat loads from the internet. Questions that wait for your answer, such as a mail
+approval, show exactly as written, without formatting, so you approve what you see. Your own
+messages also show as typed.
+
 **New chat**, beside the message box, starts the conversation afresh, as typing `/new` does.
 A running turn stops first. The chat clears on every open page, and Attaché no longer sees
 the earlier messages, though they are still kept. See

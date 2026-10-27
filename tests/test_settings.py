@@ -170,7 +170,7 @@ def test_clearing_base_url_restores_provider_default(
     assert "# private-comment-secret" in editor.path.read_text(encoding="utf-8")
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setenv("PRIVATE_API_KEY", "offline-test-key")
-    client = _client(ChatAdapter(endpoint))
+    client = asyncio.run(_client(ChatAdapter(endpoint)))
     try:
         assert str(client.base_url.join("chat/completions")) == (
             "https://api.openai.com/v1/chat/completions"
@@ -341,6 +341,23 @@ def test_local_endpoint_does_not_claim_key_is_missing(
     )
     editor.path.write_text(text, encoding="utf-8")
     assert editor.read()["saved"]["endpoints"]["private"]["credential_status"] == "not-required"
+
+
+def test_keyring_endpoint_reports_keyring_and_refuses_key_env(editor: settings.Settings):
+    text = (
+        editor.path.read_text(encoding="utf-8")
+        .replace(
+            'base_url = "https://user:url-secret@example.com/v1?key=query-secret"',
+            'base_url = "https://example.com/v1"',
+        )
+        .replace('key_env = "PRIVATE_API_KEY"', 'key_ref = "opaque-ref"')
+    )
+    editor.path.write_text(text, encoding="utf-8")
+    view = editor.read()
+    assert view["saved"]["endpoints"]["private"]["credential_status"] == "keyring"
+    assert "opaque-ref" not in json.dumps(view)
+    with pytest.raises(settings.SettingsError):
+        editor.update(proposal(editor, **{"endpoints.private.key_env": "OTHER_KEY"}))
 
 
 @pytest.fixture
