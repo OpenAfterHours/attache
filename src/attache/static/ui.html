@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Attaché</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23ff9100'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Crect width='28' height='28' rx='8' fill='%23c9442a'/%3E%3Ccircle cx='9.6' cy='12.5' r='4.6' fill='%23fbeedd'/%3E%3Ccircle cx='18.4' cy='12.5' r='4.6' fill='%23fbeedd'/%3E%3Ccircle cx='9.9' cy='12.6' r='2.6' fill='%23f0a030'/%3E%3Ccircle cx='18.7' cy='12.6' r='2.6' fill='%23f0a030'/%3E%3Ccircle cx='10.1' cy='12.6' r='1.4' fill='%230d0e11'/%3E%3Ccircle cx='18.9' cy='12.6' r='1.4' fill='%230d0e11'/%3E%3Cpath d='M12.6 17.2h2.8L14 19.8z' fill='%23ffc857'/%3E%3C/svg%3E">
 <style>
   /* OpenAfterHours brand tokens: a copy of static/oah-tokens.css (tests keep it in sync). */
 :root {
@@ -66,222 +66,435 @@
   font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: swap;
   src: url("/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2");
 }
-  /* The page's own tokens: dark night sky by default, a clean light scheme on request. */
+  /* The page's own tokens: dark night sky by default, a clean light scheme on request. The
+     sidebar stays night-sky in both schemes, as on the other OpenAfterHours sites. */
   :root {
     color-scheme: dark light;
-    --bg: var(--oah-slate-900); --surface: var(--oah-slate-850); --bubble: var(--oah-slate-800);
-    --text: var(--oah-slate-100); --muted: var(--oah-slate-300);
-    --border: rgba(216, 222, 233, 0.12); --mine: rgba(255, 145, 0, 0.12);
-    --mine-border: rgba(255, 145, 0, 0.30); --link: var(--oah-orange-soft);
-    --accent: var(--oah-orange); --accent-hover: var(--oah-orange-bright);
-    --accent-text: var(--oah-slate-900); --danger: #ff8f73; --radius: 8px;
+    --bg: var(--oah-slate-900); --panel: var(--oah-slate-850); --card: #161a22; --card-2: #1d222c;
+    --line: rgba(216, 222, 233, 0.08); --line-2: rgba(216, 222, 233, 0.15);
+    --text: var(--oah-slate-100); --strong: #ffffff; --muted: var(--oah-slate-300); --faint: #8b93a1;
+    --accent: var(--oah-orange); --accent-hover: var(--oah-orange-bright); --accent-text: var(--oah-slate-900);
+    --link: var(--oah-orange-soft); --tint: rgba(255, 145, 0, 0.10); --tint-line: rgba(255, 145, 0, 0.34);
+    --ok: var(--oah-terminal-green); --ok-tint: rgba(61, 214, 140, 0.12);
+    --danger: #ff8f73; --danger-tint: rgba(255, 143, 115, 0.12); --star: rgba(255, 200, 87, 0.55);
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 16px 40px rgba(0, 0, 0, 0.35);
+    --sb-text: var(--oah-slate-300); --sb-faint: #8b93a1; --sb-line: rgba(216, 222, 233, 0.08);
+    --sb-hover: rgba(255, 255, 255, 0.05);
+    /* The owl beside each reply: the favicon's mark. */
+    --owl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Crect width='28' height='28' rx='8' fill='%23c9442a'/%3E%3Ccircle cx='9.6' cy='12.5' r='4.6' fill='%23fbeedd'/%3E%3Ccircle cx='18.4' cy='12.5' r='4.6' fill='%23fbeedd'/%3E%3Ccircle cx='9.9' cy='12.6' r='2.6' fill='%23f0a030'/%3E%3Ccircle cx='18.7' cy='12.6' r='2.6' fill='%23f0a030'/%3E%3Ccircle cx='10.1' cy='12.6' r='1.4' fill='%230d0e11'/%3E%3Ccircle cx='18.9' cy='12.6' r='1.4' fill='%230d0e11'/%3E%3Cpath d='M12.6 17.2h2.8L14 19.8z' fill='%23ffc857'/%3E%3C/svg%3E");
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg: var(--oah-slate-050); --surface: #ffffff; --bubble: var(--oah-slate-100);
-      --text: var(--oah-slate-900); --muted: var(--oah-slate-500);
-      --border: rgba(13, 14, 17, 0.12); --mine: rgba(255, 145, 0, 0.14);
-      --link: #a35400; --accent-hover: var(--oah-orange-hover); --danger: var(--oah-owl-body);
+      --bg: #eef1f5; --panel: #ffffff; --card: #f7f8fa; --card-2: #eceff3;
+      --line: rgba(13, 14, 17, 0.08); --line-2: rgba(13, 14, 17, 0.15);
+      --text: var(--oah-slate-700); --strong: var(--oah-slate-900); --muted: var(--oah-slate-500); --faint: #5b6577;
+      --accent-hover: var(--oah-orange-hover); --link: #a35400;
+      --tint: rgba(255, 145, 0, 0.12); --tint-line: rgba(230, 130, 0, 0.5);
+      --ok: #1d8350; --ok-tint: rgba(29, 131, 80, 0.10); --danger: var(--oah-owl-body);
+      --danger-tint: rgba(201, 68, 42, 0.10); --star: transparent;
+      --shadow: 0 1px 2px rgba(13, 14, 17, 0.06), 0 10px 28px rgba(13, 14, 17, 0.08);
     }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
-  body, button, textarea, input, select { font: 15px/1.55 var(--font-sans); -webkit-font-smoothing: antialiased; }
-  /* The bar stays night-sky in both schemes, as on the other OpenAfterHours sites. */
-  header {
-    display: flex; align-items: center; gap: 10px; padding: 11px 18px;
-    background: var(--oah-slate-900); color: var(--oah-slate-100);
-    border-bottom: 1px solid rgba(216, 222, 233, 0.12);
-  }
-  h1 { margin: 0; font: 700 18px/1 var(--font-display); letter-spacing: -0.02em; color: var(--oah-orange); }
-  #bar { border-bottom: 1px solid var(--border); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--oah-slate-400); }
-  .dot.live { background: var(--oah-terminal-green); box-shadow: 0 0 8px rgba(61, 214, 140, 0.6); }
+  body { margin: 0; display: flex; overflow: hidden; background: var(--bg); color: var(--text); }
+  body, button, textarea, input, select { font: 14px/1.55 var(--font-sans); -webkit-font-smoothing: antialiased; }
+  button { color: inherit; cursor: pointer; }
+  button:disabled { cursor: default; }
   [hidden] { display: none !important; }
-  .views { margin-left: auto; display: flex; gap: 4px; }
-  .views button { color: var(--oah-slate-100); }
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, var(--chat-width, 40%)) 10px minmax(0, 1fr); }
-  #chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
-  #log { flex: 1; overflow-y: auto; padding: 24px max(16px, calc((100% - 800px) / 2)); display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; background: var(--bubble); }
-  .msg { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); }
-  .msg.you { align-self: flex-end; background: var(--mine); border-color: var(--mine-border); }
-  .msg.error { color: var(--danger); }
-  .msg.typing { color: var(--muted); font-style: italic; background: none; border-color: transparent; }
-  /* A running turn: its latest step, Stop, and a dimmed line of the model's thinking. */
-  .msg.typing .stop { margin-left: 10px; padding: 1px 10px; font: 600 12px/1.6 var(--font-sans); }
-  .thought { margin-top: 2px; font-size: 13px; opacity: 0.75; }
-  .footer { align-self: flex-start; margin-top: -6px; font: 12px/1.5 var(--font-mono); color: var(--muted); }
+  :focus-visible { outline: 2px solid var(--oah-orange); outline-offset: 2px; }
+  h1, h2, h3 { color: var(--strong); }
+  .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+  .icon { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .grow { flex: 1; min-width: 0; }
+  .meta { font: 11.5px/1.4 var(--font-mono); color: var(--faint); }
+  .muted { color: var(--muted); }
+  .hint { font-size: 12.5px; color: var(--faint); }
+  .error-text { color: var(--danger); }
+  kbd { display: inline-block; padding: 3px 5px; font: 11px/1 var(--font-mono); color: var(--faint); background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; }
+  .empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
+
+  /* Buttons: quiet by default, one orange action where it matters. */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 34px; padding: 0 12px; font-size: 13px; font-weight: 500; white-space: nowrap; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px; }
+  .btn { transition: background 160ms var(--ease-std), color 160ms var(--ease-std), border-color 160ms var(--ease-std); }
+  .btn:hover { color: var(--strong); background: var(--card-2); }
+  .btn.outline { color: var(--text); border-color: var(--line-2); }
+  .btn.primary { font-weight: 600; color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn:disabled { opacity: 0.5; }
+  .btn.icon-only { width: 34px; padding: 0; }
+  .link { height: 28px; margin-left: auto; padding: 0 6px; font-size: 12.5px; font-weight: 500; color: var(--link); background: transparent; border: 0; border-radius: 6px; }
+  .link:hover { background: var(--tint); }
+
+  /* The sidebar: views, then pages, then Settings. */
+  #sidebar { flex: 0 0 248px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 14px 12px 12px; color: var(--sb-text); background: var(--oah-slate-900); border-right: 1px solid var(--sb-line); }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 2px 4px 14px; }
+  .mark { flex-shrink: 0; }
+  .wordmark { font: 600 17px/1 var(--font-display); letter-spacing: -0.02em; color: #ffffff; }
+  .dot { flex-shrink: 0; width: 8px; height: 8px; margin-left: auto; border-radius: 50%; background: var(--oah-slate-400); }
+  .dot.live { background: var(--oah-terminal-green); box-shadow: 0 0 0 3px rgba(61, 214, 140, 0.18); }
+  #new-chat { display: flex; align-items: center; gap: 10px; width: 100%; height: 38px; margin-bottom: 10px; padding: 0 10px; font-weight: 500; color: #ffffff; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(216, 222, 233, 0.14); border-radius: 9px; }
+  #new-chat:hover { border-color: rgba(255, 145, 0, 0.5); }
+  #new-chat kbd { margin-left: auto; padding: 0; color: var(--sb-faint); background: none; border: 0; }
+  .side-nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav, .pg { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; text-align: left; color: var(--sb-text); background: transparent; border: 0; border-radius: 8px; }
+  .nav, .pg { font-weight: 500; transition: background 160ms var(--ease-std), color 160ms var(--ease-std); }
+  .nav:hover, .pg:hover { color: #ffffff; background: var(--sb-hover); }
+  .nav[aria-current="page"] { color: #ffffff; background: rgba(255, 145, 0, 0.12); }
+  .nav[aria-current="page"] .icon, .pg[aria-current="true"] .icon { color: var(--oah-orange); }
+  .nav .n { margin-left: auto; padding: 3px 6px; font: 600 10.5px/1 var(--font-mono); color: var(--oah-slate-900); background: var(--oah-orange); border-radius: 999px; }
+  .nav[data-state="busy"]::after, .nav[data-state="unread"]::after { content: ""; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--oah-orange); }
+  .nav[data-state="busy"]::after { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  #sidebar .rail-only { display: none; }
+  .sb-label { display: flex; align-items: center; justify-content: space-between; padding: 18px 10px 6px; font: 600 10.5px/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--sb-faint); }
+  .sb-label button { padding: 3px 6px; font: inherit; letter-spacing: 0.04em; color: var(--sb-faint); background: none; border: 0; border-radius: 4px; }
+  .sb-label button:hover, .sb-label button[aria-current="page"] { color: #ffffff; background: var(--sb-hover); }
+  #page-list { display: flex; flex-direction: column; gap: 1px; }
+  .pg { height: 34px; font-size: 13.5px; font-weight: 400; }
+  .pg .icon { width: 15px; height: 15px; color: var(--sb-faint); }
+  .pg .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pg .tag { margin-left: auto; font: 10.5px/1 var(--font-mono); color: var(--sb-faint); }
+  .pg .fresh { flex-shrink: 0; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--oah-orange); }
+  .pg .tag + .fresh { margin-left: 0; }
+  .pg[aria-current="true"] { color: #ffffff; background: rgba(255, 255, 255, 0.07); }
+  .sb-empty { margin: 0; padding: 4px 10px; font-size: 12.5px; color: var(--sb-faint); }
+  .sb-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--sb-line); }
+
+  /* The main view, and the open page beside it. */
+  #work { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); background: var(--panel); }
+  body[data-panel="side"] #work { grid-template-columns: minmax(0, var(--main-width, 55%)) 9px minmax(0, 1fr); }
+  body[data-panel="none"] #divider, body[data-panel="none"] #pages, body[data-panel="wide"] #divider, body[data-panel="wide"] #main { display: none; }
+  #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
+  .view { flex: 1; min-height: 0; overflow-y: auto; }
+  #divider { position: relative; padding: 0; cursor: col-resize; touch-action: none; border: 0; border-radius: 0; background: linear-gradient(var(--line-2), var(--line-2)) center / 1px 100% no-repeat; }
+  #divider::after { content: ""; position: absolute; top: 50%; left: 1px; width: 7px; height: 40px; margin-top: -20px; border-radius: 4px; background: var(--card-2); border: 1px solid var(--line-2); }
+  #divider:hover::after, #divider:focus-visible::after, body.resizing #divider::after { background: var(--accent); border-color: var(--accent); }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing iframe { pointer-events: none; }
+  #pages { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+  .panel-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; min-height: 56px; padding: 0 8px 0 18px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #page-title { margin: 0; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  #page-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .panel-tools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin-left: auto; }
+  #reload-page.updated { font-weight: 600; color: var(--link); background: var(--tint); border-color: var(--tint-line); border-radius: 999px; }
+  #expand-page[aria-pressed="true"] .i-expand, #expand-page[aria-pressed="false"] .i-shrink { display: none; }
+  #task-page:disabled { opacity: 1; color: var(--link); }
+  #frames { display: flex; flex: 1; min-height: 0; }
+  iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--bg); }
+
+  /* Today: a greeting, the message box, then what needs you and what's next. */
+  #today-view { padding: 0 28px 48px; }
+  .today { max-width: 1080px; margin: 0 auto; }
+  .hero { position: relative; display: flex; flex-direction: column; align-items: center; padding: 56px 0 32px; text-align: center; }
+  .eyebrow { margin: 0; font: 600 11px/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+  #greeting { margin: 10px 0 0; font: 600 44px/1.1 var(--font-display); letter-spacing: -0.03em; }
+  #today-summary { max-width: 560px; margin: 12px 0 0; font-size: 16px; color: var(--muted); }
+  .hero .composer { width: 100%; max-width: 700px; margin-top: 28px; text-align: left; }
+  .hero .composer textarea { padding: 16px 18px 4px; font-size: 16px; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; font-size: 13px; font-weight: 500; color: var(--text); background: var(--panel); border: 1px solid var(--line-2); border-radius: 999px; }
+  .chip:hover { color: var(--strong); border-color: var(--tint-line); }
+  .chip .icon { width: 14px; height: 14px; color: var(--faint); }
+  .star { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: var(--star); }
+  .star.small { width: 2px; height: 2px; }
+  .cards { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
+  .s7 { grid-column: span 7; }
+  .s5 { grid-column: span 5; }
+  .s4 { grid-column: span 4; }
+  .card { display: flex; flex-direction: column; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .card.hot { border-color: var(--tint-line); }
+  .card-h { display: flex; align-items: center; gap: 8px; padding: 16px 18px 8px; }
+  .card-h h2 { margin: 0; font: 600 15px/1.3 var(--font-display); }
+  .card-b { display: flex; flex-direction: column; padding: 4px 18px 16px; }
+  .count { padding: 3px 6px; font: 600 10.5px/1 var(--font-mono); color: var(--accent-text); background: var(--accent); border-radius: 999px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+  .row:first-child, .tl:first-child { border-top: 0; }
+  .ico { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 34px; height: 34px; color: var(--muted); background: var(--card-2); border-radius: 9px; }
+  .ico.tint { color: var(--link); background: var(--tint); }
+  .title, .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .title { font-weight: 500; color: var(--strong); }
+  .sub { font-size: 12.5px; color: var(--faint); }
+  label.row { cursor: pointer; }
+  input[type="checkbox"] { flex-shrink: 0; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  .badge { padding: 4px 8px; font: 500 11px/1 var(--font-mono); white-space: nowrap; color: var(--muted); background: var(--card-2); border-radius: 999px; }
+  .badge.today { color: var(--link); background: var(--tint); }
+  .badge.late { color: var(--danger); background: var(--danger-tint); }
+  .tl { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+  .tl .t { font: 500 12px/1.65 var(--font-mono); color: var(--faint); }
+  button.row { width: 100%; text-align: left; background: transparent; border-left: 0; border-right: 0; border-bottom: 0; }
+  button.row:hover .title { color: var(--link); }
+  .empty-row { margin: 0; padding: 10px 0; color: var(--muted); }
+  .more { margin: 8px 0 0; font-size: 12.5px; color: var(--faint); }
+  @container (max-width: 900px) { .s7, .s5 { grid-column: span 12; } .s4 { grid-column: span 6; } }
+  @container (max-width: 620px) {
+    .s4 { grid-column: span 12; }
+    #today-view { padding: 0 16px 32px; }
+    .hero { padding-top: 36px; }
+    #greeting { font-size: 34px; }
+  }
+
+  /* The chat: your messages in bubbles, replies beside the owl, questions as cards. */
+  #chat { display: flex; flex-direction: column; overflow: hidden; }
+  .view-head { display: flex; flex-shrink: 0; align-items: center; gap: 10px; min-height: 56px; padding: 0 16px 0 24px; border-bottom: 1px solid var(--line); }
+  .view-head h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  #log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 28px max(20px, calc((100% - 720px) / 2)) 16px; }
+  #log > * { flex-shrink: 0; } /* the log scrolls; a card that clips its overflow must not shrink instead */
+  .msg { font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.you { align-self: flex-end; max-width: 82%; padding: 10px 14px; color: var(--strong); background: var(--card-2); border-radius: 16px 16px 4px 16px; }
+  .msg.bot, .msg.typing { position: relative; min-height: 28px; padding-left: 40px; }
+  .msg.bot::before, .msg.typing::before { content: ""; position: absolute; top: 0; left: 0; width: 28px; height: 28px; background: var(--owl) center / 28px no-repeat; }
+  .msg.bot .md { padding-top: 2px; }
+  .msg.error { align-self: flex-start; padding: 8px 12px; color: var(--danger); background: var(--danger-tint); border-radius: 10px; }
   .msg a { color: var(--link); }
   .msg a:hover { color: var(--accent); }
-  /* A reply's Markdown (see markdown below), spaced to suit a chat bubble. */
+  .msg a.page-link { padding: 1px 8px; text-decoration: none; background: var(--tint); border: 1px solid var(--tint-line); border-radius: 999px; }
+  .footer { margin: -10px 0 0 40px; font: 11px/1.5 var(--font-mono); color: var(--faint); }
+  .files { margin-top: 4px; font: 11.5px/1.5 var(--font-mono); color: var(--faint); }
+  .msg.ask { margin-left: 40px; overflow: hidden; white-space: normal; background: var(--card); border: 1px solid var(--tint-line); border-radius: 14px; box-shadow: var(--shadow); }
+  .ask-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--link); background: var(--tint); border-bottom: 1px solid var(--tint-line); }
+  .ask-title { color: var(--strong); }
+  .ask-state { margin-left: auto; font: 11px var(--font-mono); }
+  .ask-text { padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ask-text.preview { font: 12.5px/1.7 var(--font-mono); }
+  .choices { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 12px 10px 16px; border-top: 1px solid var(--line); }
+  .choices .note { margin-right: auto; font-size: 12px; color: var(--faint); }
+  .msg.ask.answered { border-color: var(--line-2); box-shadow: none; }
+  .msg.ask.answered .ask-head { color: var(--muted); background: transparent; border-bottom-color: var(--line); }
+  .msg.typing { white-space: normal; }
+  .turn { max-width: 520px; overflow: hidden; background: var(--card); border: 1px solid var(--line-2); border-radius: 14px; }
+  .turn-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); }
+  .turn-head strong { font-size: 13px; color: var(--strong); }
+  .stop { height: 30px; margin-left: auto; padding: 0 10px; color: var(--strong); }
+  .stop .icon { width: 11px; height: 11px; }
+  .steps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 12px 14px; font-size: 13.5px; list-style: none; }
+  .step { display: flex; align-items: flex-start; gap: 10px; color: var(--muted); }
+  .step .icon { width: 14px; height: 14px; margin-top: 3px; color: var(--ok); stroke-width: 2.4; }
+  .step.now { font-weight: 500; color: var(--strong); }
+  .spin { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; border: 2px solid var(--tint-line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin, .nav[data-state="busy"]::after { animation: none; } }
+  .thought { margin: -4px 14px 12px 38px; font-size: 12.5px; font-style: italic; color: var(--faint); }
+  .thought:empty { display: none; }
+  .composer-wrap { flex-shrink: 0; padding: 8px max(20px, calc((100% - 720px) / 2)) 18px; }
+  .composer { background: var(--card); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow); transition: border-color 160ms var(--ease-std); }
+  .composer:focus-within { border-color: var(--tint-line); }
+  .composer textarea { display: block; width: 100%; max-height: 200px; padding: 14px 16px 4px; font-size: 15px; line-height: 1.5; color: var(--strong); resize: none; background: transparent; border: 0; outline: 0; }
+  .composer textarea::placeholder { color: var(--faint); }
+  .composer-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 8px 16px; }
+  .hints { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--faint); }
+  .hints kbd + kbd, .hints span + kbd { margin-left: 6px; }
+  .send { width: 36px; height: 36px; margin-left: auto; padding: 0; border-radius: 10px; }
+  .send .icon { width: 17px; height: 17px; stroke-width: 2.2; }
+  /* A reply's Markdown (see markdown below), spaced to suit the chat. */
   .md :is(p, ul, ol, pre, blockquote, h3, h4, h5, h6), .md .table { margin: 0 0 10px; }
-  .md :is(h3, h4, h5, h6) { margin-top: 16px; font: 600 1em/1.35 var(--font-display); }
+  .md :is(h3, h4, h5, h6) { margin-top: 16px; font: 600 1em/1.35 var(--font-display); color: var(--strong); }
   .md h3 { font-size: 1.25em; }
   .md h4 { font-size: 1.12em; }
   .md :is(ul, ol) { padding-left: 22px; }
   .md li + li { margin-top: 3px; }
   .md li > * { margin-bottom: 3px; }
-  .md li::marker { color: var(--muted); }
+  .md li::marker { color: var(--faint); }
   .md li.task { list-style: none; }
-  .md li.task input { margin: 0 6px 0 -20px; vertical-align: -2px; }
+  .md li.task input { width: auto; height: auto; margin: 0 6px 0 -20px; vertical-align: -2px; }
   .md :first-child { margin-top: 0; }
   .md :last-child { margin-bottom: 0; }
-  .md strong { font-weight: 600; }
-  .md code { padding: 1px 5px; font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
-  .md pre { padding: 10px 12px; overflow-x: auto; white-space: pre; overflow-wrap: normal; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .md strong { font-weight: 600; color: var(--strong); }
+  .md code { padding: 1px 5px; font: 13px/1.5 var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+  .md pre { padding: 10px 12px; overflow-x: auto; white-space: pre; overflow-wrap: normal; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
   .md pre code { padding: 0; background: none; border: 0; }
-  .md blockquote { padding-left: 12px; border-left: 3px solid var(--mine-border); color: var(--muted); }
-  .md hr { margin: 14px 0; border: 0; border-top: 1px solid var(--border); }
-  .md .table { overflow-x: auto; }
-  .md table { border-collapse: collapse; font-size: 14px; }
-  .md :is(th, td) { padding: 5px 10px; text-align: left; vertical-align: top; overflow-wrap: break-word; border: 1px solid var(--border); }
-  .md th { font-weight: 600; background: var(--bg); }
-  .files { margin-top: 4px; font: 12px/1.5 var(--font-mono); color: var(--muted); }
-  .choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
-  .choices button:disabled { opacity: 0.5; cursor: default; }
-  .empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
-  #send { display: flex; gap: 8px; width: 100%; max-width: 832px; margin: 0 auto; padding: 16px; }
-  textarea, button, input, select { color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
-  textarea { flex: 1; min-height: 42px; max-height: 160px; resize: vertical; padding: 9px 11px; background: var(--bg); }
-  textarea:focus { border-color: var(--accent); }
-  button { padding: 7px 14px; cursor: pointer; font-weight: 600; background: transparent; }
-  button { transition: background 180ms var(--ease-std), border-color 180ms var(--ease-std); }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-  button:disabled { opacity: .5; cursor: default; }
-  button[aria-pressed="true"] { color: var(--link); border-color: var(--accent); background: var(--mine); }
-  /* The header is night-sky in both schemes, so its buttons keep the dark colours. */
-  .views button { border-color: rgba(216, 222, 233, 0.12); }
-  .views button[aria-pressed="true"] { color: var(--oah-orange); border-color: var(--oah-orange); }
-  :focus-visible { outline: 2px solid var(--oah-orange); outline-offset: 2px; }
-  #pages { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
-  #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; }
-  #bar button { padding: 5px 10px; }
-  .muted, .hint { color: var(--muted); }
-  .hint { font-size: 13px; }
-  #divider { border: 0; border-inline: 1px solid var(--border); border-radius: 0; padding: 0; cursor: col-resize; touch-action: none; background: var(--bg); }
-  #divider::after { content: ""; display: block; width: 2px; height: 36px; background: var(--muted); margin: auto; border-radius: 2px; }
-  #divider:hover::after, #divider:focus-visible::after { background: var(--accent); }
-  body.resizing { cursor: col-resize; user-select: none; }
-  body.resizing iframe { pointer-events: none; }
-  body[data-layout="chat"] main, body[data-layout="workspace"] main { grid-template-columns: 1fr; }
-  body[data-layout="chat"] #pages, body[data-layout="chat"] #divider,
-  body[data-layout="workspace"] #chat, body[data-layout="workspace"] #divider { display: none; }
-  .workspace-panel { min-height: 0; min-width: 0; flex: 1; overflow-y: auto; }
-  .panel-content { max-width: 940px; padding: 24px; margin: 0 auto; }
-  .panel-content h2 { font: 600 24px/1.3 var(--font-display); margin: 0 0 6px; }
-  .panel-content h3 { font: 600 17px/1.4 var(--font-display); margin: 24px 0 12px; }
+  .md blockquote { padding-left: 12px; color: var(--muted); border-left: 3px solid var(--tint-line); }
+  .md hr { margin: 14px 0; border: 0; border-top: 1px solid var(--line); }
+  .md .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .md table { width: 100%; font-size: 14px; border-collapse: collapse; }
+  .md :is(th, td) { padding: 8px 12px; text-align: left; vertical-align: top; overflow-wrap: break-word; border-top: 1px solid var(--line); }
+  .md th { font: 600 10.5px/1.4 var(--font-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); background: var(--card); border-top: 0; }
+
+  /* Pages and Settings. */
+  .panel-content { max-width: 940px; margin: 0 auto; padding: 32px 28px 48px; }
+  .panel-content h1 { margin: 0 0 6px; font: 600 28px/1.2 var(--font-display); letter-spacing: -0.02em; }
+  .panel-content h2 { margin: 0 0 4px; font: 600 17px/1.3 var(--font-display); }
   .panel-content p { margin: 0 0 18px; }
-  .panel-heading, .actions, .page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .panel-heading { justify-content: space-between; margin-bottom: 20px; }
+  .panel-heading, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .panel-heading { align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
   .panel-heading p { margin-bottom: 0; }
-  #page-view { display: flex; flex-direction: column; overflow: hidden; }
-  .page-tools { padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  .page-tools select { flex: 1; width: 0; min-width: 120px; max-width: 400px; }
-  .page-tools button { font-size: 13px; padding: 5px 10px; }
-  #frames { display: flex; flex: 1; min-height: 0; }
-  iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--bg); }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
-  .card { text-align: left; padding: 18px; background: var(--bg); overflow-wrap: anywhere; }
-  .card strong, .card span { display: block; }
-  .card span { margin-top: 4px; font-size: 13px; color: var(--muted); }
-  .record { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
-  .record time { display: block; font-size: 12px; color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 12px; margin-bottom: 36px; }
+  .tile { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 12px; transition: border-color 160ms var(--ease-std); }
+  .tile:hover { border-color: var(--tint-line); }
+  .tile .grow > * { display: block; }
+  .toggle { display: inline-flex; gap: 2px; margin: 20px 0 12px; padding: 3px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  .toggle button { height: 30px; padding: 0 12px; font-weight: 500; color: var(--muted); background: transparent; border: 0; border-radius: 7px; }
+  .toggle button[aria-pressed="true"] { color: var(--strong); background: var(--panel); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
   #settings-form { display: block; }
-  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 14px; }
-  .field { display: grid; gap: 5px; align-content: start; }
-  .field span { font-size: 13px; color: var(--muted); }
-  input, select { padding: 8px 10px; background: var(--bg); width: 100%; min-width: 0; }
-  input[type="checkbox"] { width: auto; justify-self: start; accent-color: var(--accent); }
-  fieldset { padding: 16px; margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
-  legend { padding: 0 6px; font-weight: 600; }
-  #settings-toml { display: block; width: 100%; min-height: 320px; max-height: none; font: 13px/1.6 var(--font-mono); }
+  fieldset { min-width: 0; margin: 0 0 16px; padding: 18px 20px 20px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  legend { float: left; width: 100%; margin: 0 0 14px; padding: 0; font: 600 15px/1.3 var(--font-display); color: var(--strong); }
+  .fields { clear: both; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 14px; }
+  .field { display: grid; align-content: start; gap: 6px; }
+  .field span { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+  .fields .hint { margin: 0; }
+  .panel-content input:not([type="checkbox"]), .panel-content select, #settings-toml { width: 100%; min-width: 0; padding: 8px 12px; color: var(--strong); background: var(--bg); border: 1px solid var(--line-2); border-radius: 9px; }
+  .panel-content input:focus, .panel-content select:focus, #settings-toml:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--tint); }
+  .field input[type="checkbox"] { justify-self: start; }
+  #settings-toml { display: block; min-height: 320px; font: 13px/1.6 var(--font-mono); resize: vertical; }
   #settings-state, #settings-message { margin: 14px 0; overflow-wrap: anywhere; }
-  .error-text { color: var(--danger); }
-  #settings-review { background: var(--bg); border: 1px solid var(--mine-border); padding: 16px; border-radius: var(--radius); margin: 16px 0; }
-  #settings-review ul { padding-left: 20px; overflow-wrap: anywhere; }
-  .settings-mode { margin: 20px 0; }
-  @media (max-width: 760px) {
-    main { grid-template-columns: 1fr; }
-    header { padding: 10px 12px; gap: 7px; }
-    .views button { padding: 6px 9px; font-size: 13px; }
-    #split-layout, #divider { display: none; }
-    body[data-mobile="chat"] #pages, body[data-mobile="workspace"] #chat { display: none; }
-    body[data-mobile="chat"] #chat, body[data-mobile="workspace"] #pages { display: flex; }
-    .panel-content { padding: 20px 16px; }
+  #settings-state { padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  #settings-review { margin: 16px 0; padding: 16px 18px; background: var(--card); border: 1px solid var(--tint-line); border-radius: 14px; }
+  #settings-review ul { padding-left: 20px; font: 12.5px/1.7 var(--font-mono); overflow-wrap: anywhere; }
+
+  /* Smaller windows: the page takes the main view's place, then the sidebar becomes a rail of
+     icons, and on a phone a bar along the top. */
+  @media (max-width: 1100px) {
+    body[data-panel="side"] #work { grid-template-columns: minmax(0, 1fr); }
+    body[data-panel="side"] #main, body[data-panel="side"] #divider { display: none; }
+    #expand-page { display: none; }
+  }
+  @media (max-width: 900px) {
+    #sidebar { flex-basis: 64px; padding: 14px 10px 12px; }
+    #sidebar .lbl, #sidebar .sb-label, #page-list { display: none; }
+    #sidebar .rail-only { display: flex; }
+    .brand { position: relative; justify-content: center; padding: 2px 0 14px; }
+    .brand .dot { position: absolute; top: -2px; right: 2px; }
+    #new-chat, .nav { justify-content: center; padding: 0; }
+    .nav .n, .nav[data-state="busy"]::after, .nav[data-state="unread"]::after { position: absolute; top: 3px; right: 3px; margin: 0; }
+    .hints { display: none; }
+  }
+  @media (max-width: 600px) {
+    body { flex-direction: column; }
+    #sidebar { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 2px; padding: 6px 8px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--sb-line); }
+    .brand { padding: 0 8px 0 2px; }
+    .side-nav { flex-direction: row; }
+    #new-chat { order: 1; width: 44px; height: 44px; margin: 0 0 0 auto; }
+    .sb-foot { order: 2; margin: 0; padding: 0; border: 0; }
+    .nav { width: 44px; height: 44px; }
+    #work { flex: 1; }
+    .panel-content { padding: 24px 16px 32px; }
+    .composer-wrap { padding: 8px 12px 12px; }
+    .msg.ask { margin-left: 0; }
   }
 </style>
 </head>
-<body data-layout="chat" data-mobile="chat">
-<header>
-  <span class="dot" id="status" title="Connecting"></span>
-  <h1>Attaché</h1>
-  <nav class="views" aria-label="Layout">
-    <button type="button" data-layout="chat" aria-pressed="true">Chat</button>
-    <button type="button" data-layout="split" id="split-layout" aria-pressed="false">Split</button>
-    <button type="button" data-layout="workspace" aria-pressed="false">Workspace</button>
+<body data-view="today" data-panel="none">
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-today" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18m-12 6 2 2 4-4"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-pages" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></symbol>
+  <symbol id="i-new" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a1 1 0 0 1 3 3l-9 9a2 2 0 0 1-.85.5l-2.87.84a.5.5 0 0 1-.62-.62l.84-2.87a2 2 0 0 1 .5-.85z"/></symbol>
+  <symbol id="i-page" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M16 13H8M16 17H8"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 24 24"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 19V5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-reload" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+  <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+</svg>
+<aside id="sidebar" aria-label="Attaché">
+  <div class="brand">
+    <svg class="mark" width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="8" fill="#c9442a"/><circle cx="9.6" cy="12.5" r="4.6" fill="#fbeedd"/><circle cx="18.4" cy="12.5" r="4.6" fill="#fbeedd"/><circle cx="9.9" cy="12.6" r="2.6" fill="#f0a030"/><circle cx="18.7" cy="12.6" r="2.6" fill="#f0a030"/><circle cx="10.1" cy="12.6" r="1.4" fill="#0d0e11"/><circle cx="18.9" cy="12.6" r="1.4" fill="#0d0e11"/><path d="M12.6 17.2h2.8L14 19.8z" fill="#ffc857"/></svg>
+    <span class="wordmark lbl">Attaché</span>
+    <span class="dot" id="status" title="Connecting" role="img" aria-label="Connecting"></span>
+  </div>
+  <button type="button" id="new-chat" aria-label="New chat" title="Start a new chat (/new). Earlier messages are kept, but Attaché no longer sees them."><svg class="icon"><use href="#i-new"/></svg><span class="lbl">New chat</span><kbd class="lbl">/new</kbd></button>
+  <nav class="side-nav" aria-label="Views">
+    <button type="button" class="nav" data-view="today" aria-label="Today" title="Today"><svg class="icon"><use href="#i-today"/></svg><span class="lbl">Today</span><span class="n" id="waiting-count" aria-hidden="true" hidden></span></button>
+    <button type="button" class="nav" data-view="chat" aria-label="Chat" title="Chat"><svg class="icon"><use href="#i-chat"/></svg><span class="lbl">Chat</span></button>
+    <button type="button" class="nav rail-only" data-view="library" aria-label="Pages" title="Pages"><svg class="icon"><use href="#i-pages"/></svg><span class="lbl">Pages</span></button>
   </nav>
-</header>
-<main>
-  <section id="chat" aria-label="Chat">
-    <div id="log" aria-live="polite">
-      <p class="empty" id="hello">Ask Attaché anything. Replies appear here.</p>
-    </div>
-    <form id="send">
-      <button type="button" id="new-chat" title="Start a new chat (/new). Earlier messages are kept, but Attaché no longer sees them.">New chat</button>
-      <textarea id="text" rows="1" placeholder="Message Attaché" aria-label="Message (Enter sends, Shift+Enter for a new line)"></textarea>
-      <button class="primary">Send</button>
-    </form>
-  </section>
-  <button id="divider" type="button" role="separator" aria-label="Resize chat and workspace" aria-orientation="vertical" aria-controls="chat pages" aria-valuemin="25" aria-valuemax="75" aria-valuenow="40" title="Drag to resize. Arrow keys adjust; Home and End set the limits."></button>
-  <section id="pages" aria-label="Workspace">
-    <nav id="bar" aria-label="Workspace view">
-      <button type="button" data-workspace="tasks" aria-pressed="true">Tasks</button>
-      <button type="button" data-workspace="library" aria-pressed="false">Pages</button>
-      <button type="button" data-workspace="analysis" aria-pressed="false">Analysis</button>
-      <button type="button" data-workspace="activity" aria-pressed="false">Activity</button>
-      <button type="button" data-workspace="settings" aria-pressed="false">Settings</button>
-    </nav>
-    <div id="page-view" class="workspace-panel">
-      <div class="page-tools">
-        <label for="page-select" class="hint">Page</label>
-        <select id="page-select" aria-label="Open page"></select>
-        <button type="button" id="all-pages">All pages</button>
-        <button type="button" id="task-page" title="Use the current page when opening Tasks">Use for Tasks</button>
-        <button type="button" id="reload-page" title="Reload this page; unsaved page edits may be lost">Reload</button>
+  <div class="sb-label"><span>Pages</span><button type="button" data-view="library" aria-label="All pages">All <span id="page-count"></span></button></div>
+  <nav id="page-list" aria-label="Pages"></nav>
+  <div class="sb-foot">
+    <button type="button" class="nav" data-view="settings" aria-label="Settings" title="Settings"><svg class="icon"><use href="#i-settings"/></svg><span class="lbl">Settings</span></button>
+  </div>
+</aside>
+<div id="work">
+  <main id="main">
+    <section id="today-view" class="view" aria-labelledby="greeting">
+      <div class="today">
+        <div class="hero">
+          <span class="star" aria-hidden="true" style="top: 34px; left: 12%"></span>
+          <span class="star small" aria-hidden="true" style="top: 92px; left: 21%"></span>
+          <span class="star" aria-hidden="true" style="top: 48px; right: 16%"></span>
+          <span class="star small" aria-hidden="true" style="top: 128px; right: 9%"></span>
+          <span class="star small" aria-hidden="true" style="top: 150px; left: 6%"></span>
+          <p class="eyebrow" id="today-date"></p>
+          <h1 id="greeting">Hello.</h1>
+          <p id="today-summary"></p>
+          <form id="today-send" class="composer">
+            <label for="today-text" class="sr">Ask Attaché (Enter sends, Shift+Enter for a new line)</label>
+            <textarea id="today-text" rows="2" placeholder="Ask Attaché, or tell it what to do…"></textarea>
+            <div class="composer-bar">
+              <span class="hints">Continues your chat</span>
+              <button class="btn primary send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
+            </div>
+          </form>
+          <div class="chips" role="group" aria-label="Suggestions">
+            <button type="button" class="chip" data-prompt="Plan tomorrow for me"><svg class="icon"><use href="#i-today"/></svg>Plan tomorrow</button>
+            <button type="button" class="chip" data-prompt="What's on my to-do list?"><svg class="icon"><use href="#i-tasks"/></svg>What's on my list?</button>
+            <button type="button" class="chip" data-prompt="Remind me to "><svg class="icon"><use href="#i-clock"/></svg>Remind me to…</button>
+            <button type="button" class="chip" data-prompt="Make a page for "><svg class="icon"><use href="#i-page"/></svg>Make a page for…</button>
+          </div>
+        </div>
+        <div class="cards">
+          <section class="card s7" id="waiting-card" aria-labelledby="waiting-title">
+            <div class="card-h"><h2 id="waiting-title">Waiting for you</h2><span class="count" id="waiting-badge" hidden></span></div>
+            <div class="card-b" id="waiting-list"></div>
+          </section>
+          <section class="card s5" aria-labelledby="todo-title">
+            <div class="card-h"><h2 id="todo-title">To-dos</h2><span class="meta" id="todo-count"></span><button type="button" class="link" id="open-tasks" hidden></button></div>
+            <div class="card-b" id="todo-list"><p class="empty-row">Loading…</p></div>
+          </section>
+          <section class="card s4" aria-labelledby="reminder-title">
+            <div class="card-h"><h2 id="reminder-title">Coming up</h2><button type="button" class="link" id="refresh-reminders">Refresh</button></div>
+            <div class="card-b" id="reminder-list"><p class="empty-row">Loading…</p></div>
+          </section>
+          <section class="card s4" aria-labelledby="activity-title">
+            <div class="card-h"><h2 id="activity-title">Activity</h2><span class="meta">since this page opened</span></div>
+            <div class="card-b" id="activity-list"></div>
+          </section>
+          <section class="card s4" aria-labelledby="recent-title">
+            <div class="card-h"><h2 id="recent-title">Recent pages</h2><button type="button" class="link" id="recent-all">All pages</button></div>
+            <div class="card-b" id="recent-pages"></div>
+          </section>
+        </div>
       </div>
-      <div id="frames"></div>
-      <div id="pages-empty" class="empty">No pages yet. Ask Attaché to create a to-do list or another page.</div>
-    </div>
-    <div id="library-view" class="workspace-panel" hidden>
-      <div class="panel-content">
-        <div class="panel-heading"><div><h2>Your pages</h2><p class="muted">Open a page alongside your conversation.</p></div><button type="button" id="refresh-pages">Refresh</button></div>
-        <div id="page-library" class="cards"></div>
+    </section>
+    <section id="chat" class="view" aria-label="Chat" hidden>
+      <header class="view-head"><h1>Chat</h1><span class="meta">your own chat · the terminal and this page</span></header>
+      <div id="log" aria-live="polite">
+        <p class="empty" id="hello">Ask Attaché anything. Replies appear here.</p>
       </div>
-    </div>
-    <div id="activity-view" class="workspace-panel" hidden>
-      <div class="panel-content">
-        <h2>Activity</h2><p class="muted">Live turn activity since this page opened.</p>
-        <h3>Waiting for you</h3><div id="activity-asks"></div>
-        <h3>Scheduled reminders <button type="button" id="refresh-reminders">Refresh</button></h3><div id="activity-reminders"></div>
-        <h3>Recent activity</h3><div id="activity-events"></div>
+      <div class="composer-wrap">
+        <form id="send" class="composer">
+          <label for="text" class="sr">Message (Enter sends, Shift+Enter for a new line)</label>
+          <textarea id="text" rows="1" placeholder="Message Attaché"></textarea>
+          <div class="composer-bar">
+            <span class="hints"><kbd>Enter</kbd> send <kbd>Shift+Enter</kbd> new line <kbd>Esc</kbd> stop</span>
+            <button class="btn primary send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
+          </div>
+        </form>
       </div>
-    </div>
-    <div id="analysis-view" class="workspace-panel" hidden>
+    </section>
+    <section id="library-view" class="view" aria-labelledby="library-title" hidden>
       <div class="panel-content">
-        <div class="panel-heading"><div><h2>Analysis</h2><p class="muted">Saved notebook results. Live editable notebooks open separately.</p></div><button type="button" id="start-analysis">Start in chat</button></div>
-        <div id="analysis-library" class="cards"></div>
+        <div class="panel-heading"><div><h1 id="library-title">Pages</h1><p class="muted">Pages Attaché made for you. Each opens beside Today or the chat.</p></div><button type="button" id="refresh-pages" class="btn outline">Refresh</button></div>
+        <div id="page-library" class="tiles"></div>
+        <div class="panel-heading"><div><h2>Analyses</h2><p class="muted">Saved notebook results. Live editable notebooks open separately.</p></div><button type="button" id="start-analysis" class="btn outline">Start in chat</button></div>
+        <div id="analysis-library" class="tiles"></div>
       </div>
-    </div>
-    <div id="settings-view" class="workspace-panel" hidden>
+    </section>
+    <section id="settings-view" class="view" aria-labelledby="settings-title" hidden>
       <div class="panel-content">
-        <div class="panel-heading"><div><h2>Settings</h2><p class="muted">Owner settings for this Attaché installation.</p></div><button type="button" id="reload-settings">Reload saved</button></div>
+        <div class="panel-heading"><div><h1 id="settings-title">Settings</h1><p class="muted">Owner settings for this Attaché installation.</p></div><button type="button" id="reload-settings" class="btn outline">Reload saved</button></div>
         <p id="settings-state" role="status">Open Settings to load your configuration.</p>
         <div id="settings-editor" hidden>
-          <nav class="actions settings-mode" aria-label="Settings editor">
+          <nav class="toggle" aria-label="Settings editor">
             <button type="button" data-editor="fields" aria-pressed="true">Common settings</button>
             <button type="button" data-editor="toml" aria-pressed="false">Editable settings (TOML)</button>
           </nav>
@@ -289,23 +502,37 @@
           <form id="settings-form"><div id="settings-fields"></div></form>
           <textarea id="settings-toml" aria-label="Editable settings in TOML" spellcheck="false" hidden></textarea>
           <p id="settings-message" role="status" aria-live="polite"></p>
-          <div class="actions"><button type="button" id="validate-settings">Review changes</button><button type="button" id="restore-settings" hidden>Review previous configuration</button></div>
-          <div id="settings-review" hidden><strong id="settings-review-title">Review before saving</strong><ul id="settings-changes"></ul><p id="settings-restore-note" class="hint" hidden>Restoring also restores file-managed options from the backup. Your unsaved draft will be discarded only when you confirm the restore.</p><p class="hint">Saving creates a backup. Restart Attaché yourself to apply the saved configuration.</p><button type="button" id="save-settings" class="primary">Save settings</button></div>
+          <div class="actions"><button type="button" id="validate-settings" class="btn outline">Review changes</button><button type="button" id="restore-settings" class="btn" hidden>Review previous configuration</button></div>
+          <div id="settings-review" hidden><strong id="settings-review-title">Review before saving</strong><ul id="settings-changes"></ul><p id="settings-restore-note" class="hint" hidden>Restoring also restores file-managed options from the backup. Your unsaved draft will be discarded only when you confirm the restore.</p><p class="hint">Saving creates a backup. Restart Attaché yourself to apply the saved configuration.</p><button type="button" id="save-settings" class="btn primary">Save settings</button></div>
         </div>
       </div>
-    </div>
+    </section>
+  </main>
+  <button id="divider" type="button" role="separator" aria-label="Resize the page beside the main view" aria-orientation="vertical" aria-controls="main pages" aria-valuemin="25" aria-valuemax="75" aria-valuenow="55" title="Drag to resize. Arrow keys adjust; Home and End set the limits."></button>
+  <section id="pages" aria-label="Open page">
+    <header class="panel-head">
+      <h2 id="page-title"></h2>
+      <span class="meta" id="page-meta"></span>
+      <div class="panel-tools">
+        <button type="button" id="reload-page" class="btn" title="Reload this page; unsaved page edits may be lost"><svg class="icon"><use href="#i-reload"/></svg><span id="reload-label">Reload</span></button>
+        <button type="button" id="task-page" class="btn icon-only" aria-label="Use as your tasks page" title="Use as your tasks page: Today's to-dos link to it"><svg class="icon"><use href="#i-home"/></svg></button>
+        <button type="button" id="expand-page" class="btn icon-only" aria-pressed="false" aria-label="Use the whole window" title="Use the whole window"><svg class="icon i-expand"><use href="#i-expand"/></svg><svg class="icon i-shrink"><use href="#i-shrink"/></svg></button>
+        <button type="button" id="close-page" class="btn icon-only" aria-label="Close page" title="Close page"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+    </header>
+    <div id="frames"></div>
   </section>
-</main>
+</div>
 <script>
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const log = $("log"), input = $("text"), bar = $("bar"), hello = $("hello");
+  const log = $("log"), input = $("text"), hello = $("hello"), work = $("work");
   const URLS = /(?<url>https?:\/\/[^\s<>"']*[^\s<>"'.,;:!?)\]])/;
   const KEY = "attache-token";
   let TOKEN = null, current = null, wanted = null, pages = [], isLocked = false;
   let thinking = null, loading = false, early = [], connection = null, leaving = false;
-  let reconnectTimer = null, reconnectDelay = 1000;
-  const asks = new Map(); // ask_id -> the bubble of a question still waiting for your answer
+  let reconnectTimer = null, reconnectDelay = 1000, unread = false, todos = null, todoTimer = null;
+  const asks = new Map(); // ask_id -> the card of a question still waiting for your answer
 
   // Links look like http://127.0.0.1:<port>/#t=<token>&page=<name>; either part may be missing.
   // The token is random per run of Attaché: keep it for other tabs, and out of the address bar.
@@ -330,6 +557,8 @@
       if (token !== stored) storage((s) => s.setItem(KEY, token));
       wanted = link.page;
       connect();
+      loadTodos();
+      loadReminders();
       return loadPages();
     }
     locked();
@@ -342,9 +571,12 @@
     TOKEN = null;
     connection?.close();
     clearTimeout(reconnectTimer);
+    if (thinking) clearInterval(thinking.timer);
     const note = el("p", "empty", "Open Attaché from the link printed in your terminal.");
-    document.querySelector("main").replaceChildren(note);
-    document.querySelectorAll(".views button").forEach((button) => { button.disabled = true; });
+    work.replaceChildren(note);
+    document.body.dataset.panel = "none";
+    $("page-list").replaceChildren();
+    document.querySelectorAll("#sidebar button").forEach((button) => { button.disabled = true; });
   }
 
   async function api(method, path, body) {
@@ -362,14 +594,26 @@
   const el = (tag, className = "", textContent = "") =>
     Object.assign(document.createElement(tag), { className, textContent });
 
+  // An icon from the sprite at the top of the body.
+  function icon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("aria-hidden", "true");
+    svg.appendChild(document.createElementNS(svg.namespaceURI, "use")).setAttribute("href", `#i-${name}`);
+    return svg;
+  }
+
   // Message text is untrusted: elements made here with text nodes, never HTML. Links to a page
-  // of this Attaché (/#page=<name>) open it in the Pages panel.
+  // of this Attaché (/#page=<name>) open it beside the chat.
   function anchor(href) {
     const a = el("a");
     Object.assign(a, { href, target: "_blank", rel: "noopener noreferrer" });
     const url = URL.canParse(href) ? new URL(href) : null;
     const name = url?.origin === location.origin && new URLSearchParams(url.hash.slice(1)).get("page");
-    if (name) a.addEventListener("click", (e) => { e.preventDefault(); show(name, true); });
+    if (name) {
+      a.classList.add("page-link");
+      a.addEventListener("click", (e) => { e.preventDefault(); show(name); });
+    }
     return a;
   }
 
@@ -418,7 +662,7 @@
       if (!line.trim()) i++;
       else if ((m = line.match(FENCE))) i = codeBlock(parent, lines, i, m);
       else if ((m = line.match(HEADING))) {
-        inline(parent.appendChild(el(`h${Math.min(m[1].length + 2, 6)}`)), m[2]); // h1 is Attaché's
+        inline(parent.appendChild(el(`h${Math.min(m[1].length + 2, 6)}`)), m[2]); // h1 and h2 are the page's
         i++;
       } else if (RULE.test(line)) { parent.append(el("hr")); i++; }
       else if (QUOTE.test(line)) {
@@ -430,7 +674,7 @@
       else {
         const text = [line.trim()];
         for (i++; i < lines.length && lines[i].trim() && !starts(lines, i); i++) text.push(lines[i].trim());
-        inline(parent.appendChild(el("p")), text.join("\n")); // the bubble keeps line breaks
+        inline(parent.appendChild(el("p")), text.join("\n")); // the reply keeps line breaks
       }
     }
   }
@@ -546,10 +790,18 @@
   }
 
   // A question for you (an approval, say): one button per option. The first answer counts.
-  // Its text shows as typed, not as Markdown, so you approve exactly what you see.
+  // Its text shows as typed, not as Markdown, so you approve exactly what you see; a long one,
+  // such as an email's preview, in a fixed-width font.
   function showAsk({ ask_id, text, options }) {
     if (asks.has(ask_id)) return; // already shown (it came with the chat and as an event)
-    const msg = add("bot ask", text);
+    hello.remove();
+    const msg = el("section", "msg ask");
+    msg.setAttribute("aria-label", "Question for you");
+    const state = el("span", "ask-state", "open");
+    const head = el("div", "ask-head");
+    head.append(icon("ask"), el("span", "ask-title", "Waiting for your answer"), state);
+    const body = el("div", text.trim().split("\n").length > 2 ? "ask-text preview" : "ask-text");
+    writeText(body, text);
     const choices = el("div", "choices");
     // Answering, by a button or by typing an option: the buttons go, and the choice shows.
     async function choose(option) {
@@ -557,14 +809,19 @@
       renderActivity();
       choices.querySelectorAll("button").forEach((b) => { b.disabled = true; });
       const res = await api("POST", "/api/answer", { ask_id, choice: option }).catch(() => null);
-      choices.replaceChildren(el("span", "files", res?.ok ? `You chose: ${option}` : "No longer open."));
+      msg.classList.add("answered");
+      state.textContent = res?.ok ? "answered" : "closed";
+      choices.replaceChildren(el("span", "note", res?.ok ? `You chose: ${option}` : "No longer open."));
     }
-    for (const option of options) {
-      const button = el("button", "", option);
+    choices.append(el("span", "note", "Shown exactly as written"));
+    options.forEach((option, i) => {
+      const button = el("button", i === 0 ? "btn primary" : "btn outline", option);
       Object.assign(button, { type: "button", onclick: () => choose(option) });
       choices.append(button);
-    }
-    msg.append(choices);
+    });
+    msg.append(head, body, choices);
+    log.append(msg);
+    log.scrollTop = log.scrollHeight;
     asks.set(ask_id, { msg, text, options, choose });
     renderActivity();
   }
@@ -579,23 +836,55 @@
     return option ? () => ask.choose(option) : null;
   }
 
-  // While a turn runs, one bubble shows its latest step ("Thinking…" until the first), Stop
-  // (or Esc), and the first sentence of the model's latest thinking, dimmed; hover for it all.
+  // While a turn runs, one card shows each step as it finishes, the latest with a spinner
+  // ("Thinking…" until the first), the time so far, Stop (or Esc), and the first sentence of
+  // the model's latest thinking, dimmed; hover for it all.
   function setThinking(on) {
     if (on && !thinking) {
-      thinking = add("typing", "");
-      const stop = el("button", "stop", "Stop");
+      hello.remove();
+      thinking = el("div", "msg typing");
+      const card = el("div", "turn"), head = el("div", "turn-head"), elapsed = el("span", "meta", "0:00");
+      const stop = el("button", "btn outline stop");
       Object.assign(stop, { type: "button", title: "Stop this turn (Esc)", onclick: stopTurn });
+      stop.append(icon("stop"), "Stop");
+      head.append(el("strong", "", "Working"), elapsed, stop);
+      thinking.steps = el("ol", "steps");
+      thinking.now = el("li", "step now");
       thinking.step = el("span", "", "Thinking…");
+      thinking.now.append(el("span", "spin"), thinking.step);
+      thinking.steps.append(thinking.now);
       thinking.thought = el("div", "thought");
-      thinking.append(thinking.step, stop, thinking.thought);
+      card.append(head, thinking.steps, thinking.thought);
+      thinking.append(card);
+      const started = Date.now();
+      thinking.timer = setInterval(() => {
+        const seconds = Math.floor((Date.now() - started) / 1000);
+        elapsed.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+      }, 1000);
+      log.append(thinking);
+      log.scrollTop = log.scrollHeight;
     }
-    if (!on && thinking) { thinking.remove(); thinking = null; }
+    if (!on && thinking) { clearInterval(thinking.timer); thinking.remove(); thinking = null; }
+    chatState();
+  }
+
+  // The step that was running is done: it moves up the list, and the new one runs.
+  function stepTo(label) {
+    const previous = thinking.step.textContent;
+    if (previous !== "Thinking…") {
+      const done = el("li", "step");
+      done.append(icon("check"), previous.replace(/…$/, ""));
+      thinking.now.before(done);
+      const finished = thinking.steps.querySelectorAll(".step:not(.now)");
+      if (finished.length > 5) finished[0].remove(); // the last few are enough
+    }
+    thinking.step.textContent = `${label}…`;
+    log.scrollTop = log.scrollHeight;
   }
 
   async function stopTurn() {
     const res = await api("POST", "/api/stop").catch((err) => add("error", `Not stopped: ${err.message}`));
-    if (res && !res.stopped) setThinking(false); // nothing was running: the bubble was stale
+    if (res && !res.stopped) setThinking(false); // nothing was running: the card was stale
   }
   addEventListener("keydown", (event) => {
     if (event.key === "Escape" && thinking) { event.preventDefault(); stopTurn(); }
@@ -613,7 +902,7 @@
     recordActivity(event);
     if (event.kind === "finished") return finished(event);
     setThinking(true); // also for a turn begun in the terminal, or before this page loaded
-    if (event.kind === "step") thinking.step.textContent = `${event.label}…`;
+    if (event.kind === "step") stepTo(event.label);
     if (event.kind === "thinking") {
       thinking.thought.textContent = summary(event.text);
       thinking.thought.title = event.text;
@@ -629,6 +918,7 @@
     hello.remove();
     log.append(el("div", "footer", parts.filter(Boolean).join(" · ")));
     log.scrollTop = log.scrollHeight;
+    loadReminders(); // a turn may have set one; reminders have no live feed
   }
 
   // Each time the event stream opens, load the chat, so a reload or reconnect misses nothing.
@@ -640,6 +930,7 @@
     if (chat) {
       const past = chat.messages;
       const wasThinking = Boolean(thinking);
+      if (thinking) clearInterval(thinking.timer);
       thinking = null;
       log.replaceChildren(...(past.length || chat.asks.length ? [] : [hello]));
       const mine = (m) => m.role === "user" && m.sender_name !== "Reminder"; // reminders are ours
@@ -651,6 +942,7 @@
       if (wasThinking && past.length && mine(past.at(-1))) setThinking(true);
       chat.asks.forEach(showAsk); // open questions stay last
       renderActivity();
+      chatState();
       const fresh = past.filter((m) => m.ts >= since).map((m) => m.text);
       early = early.filter((msg) => msg.ask_id || !fresh.includes(msg.text));
     }
@@ -669,103 +961,147 @@
     }
     setThinking(false);
     add("bot", msg.text || "", msg.files);
+    if (view !== "chat") { unread = true; chatState(); }
     loadPages(); // the reply may come with a new page
   }
 
   // A new chat, from the button or typed /new: the server stops what runs, starts the chat
   // afresh and sends a "new" activity event, which reloads every open page.
   async function newChat() {
+    setView("chat");
     await api("POST", "/api/chat", { text: "/new" }).catch((err) => add("error", `No new chat: ${err.message}`));
   }
   $("new-chat").addEventListener("click", newChat);
 
-  $("send").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = "";
+  async function sendText(text) {
     if (text === "/new") return newChat();
     add("you", text);
     const answer = typedAnswer(text);
-    if (answer) return answer(); // an answer, not a request: no turn, so no "Thinking…"
+    if (answer) return answer(); // an answer, not a request: no turn, so no "Working"
     setThinking(true);
     await api("POST", "/api/chat", { text }).catch((err) => {
       setThinking(false);
       add("error", `Not sent: ${err.message}`);
     });
-  });
-  input.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-    event.preventDefault();
-    $("send").requestSubmit();
-  });
+  }
 
-  const press = (all, on) => all.forEach((b) => b.setAttribute("aria-pressed", String(on(b))));
+  // Two message boxes, one conversation: Today's sends and then shows the chat.
+  function composer(form, box, before = () => {}) {
+    const fit = () => { box.style.height = "auto"; box.style.height = `${Math.min(box.scrollHeight, 200)}px`; };
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = box.value.trim();
+      if (!text) return;
+      box.value = "";
+      fit();
+      before();
+      sendText(text);
+    });
+    box.addEventListener("input", fit);
+    box.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      event.preventDefault();
+      form.requestSubmit();
+    });
+  }
+  composer($("send"), input);
+  composer($("today-send"), $("today-text"), () => setView("chat"));
+  document.querySelectorAll("[data-prompt]").forEach((chip) => chip.addEventListener("click", () => {
+    const box = $("today-text");
+    box.value = chip.dataset.prompt;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }));
+
+  // The views (Today, Chat, Pages, Settings) and the page beside them. The browser remembers
+  // which, the page, its width, and the tasks page.
   const label = (name) => name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " ");
-  const PREFS_KEY = "attache-workspace-v1";
+  const PREFS_KEY = "attache-workspace-v2";
   const preferences = storage((s) => JSON.parse(s.getItem(PREFS_KEY))) || {};
-  const layouts = ["chat", "split", "workspace"];
-  const workspaces = ["tasks", "library", "page", "analysis", "analysis-page", "activity", "settings"];
-  let layout = layouts.includes(preferences.layout) ? preferences.layout : "chat";
-  let workspace = workspaces.includes(preferences.workspace) ? preferences.workspace : "tasks";
-  let mobileView = preferences.mobile === "workspace" ? "workspace" : "chat";
-  let chatWidth = Number.isFinite(preferences.width) ? preferences.width : 40;
+  const VIEWS = { today: "today-view", chat: "chat", library: "library-view", settings: "settings-view" };
+  let view = Object.hasOwn(VIEWS, preferences.view ?? "") ? preferences.view : "today";
+  let shown = preferences.shown === true; // whether the page panel is open
+  let wide = preferences.wide === true; // the page has the whole window
+  let mainWidth = Number.isFinite(preferences.width) ? preferences.width : 55;
   let taskPage = typeof preferences.taskPage === "string" ? preferences.taskPage : null;
   current = typeof preferences.page === "string" ? preferences.page : null;
-  const narrow = matchMedia("(max-width: 760px)");
+  const narrow = matchMedia("(max-width: 1100px)"); // too narrow for a page beside a view
   const frames = new Map();
   const activityLog = [];
   let settings = null, settingsMode = "fields", settingsPayload = null, settingsBusy = false;
 
-  function persistWorkspace() {
+  function persist() {
     storage((s) => s.setItem(PREFS_KEY, JSON.stringify({
-      layout, workspace, mobile: mobileView, width: chatWidth, page: current, taskPage,
+      view, shown, wide, width: mainWidth, page: current, taskPage,
     })));
   }
 
-  function paintLayout() {
+  function paint() {
     if (isLocked) return;
-    document.body.dataset.layout = layout;
-    document.body.dataset.mobile = mobileView;
-    press(document.querySelectorAll(".views button"), (b) => b.dataset.layout === (narrow.matches ? mobileView : layout));
-    resizeChat(chatWidth, false, false);
+    const open = shown && frames.has(current);
+    document.body.dataset.view = view;
+    document.body.dataset.panel = open ? (wide ? "wide" : "side") : "none";
+    for (const [name, id] of Object.entries(VIEWS)) $(id).hidden = name !== view;
+    document.querySelectorAll("#sidebar button[data-view]").forEach((button) => {
+      if (button.dataset.view === view && !(open && wide)) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
+    document.querySelectorAll("#page-list .pg").forEach((button) => {
+      button.setAttribute("aria-current", String(open && button.dataset.page === current));
+    });
+    $("expand-page").setAttribute("aria-pressed", String(wide));
+    resizeMain(mainWidth, false, false);
   }
 
-  function setLayout(name) {
-    if (narrow.matches) mobileView = name === "workspace" ? "workspace" : "chat";
-    else { layout = name; mobileView = name === "workspace" ? "workspace" : "chat"; }
-    paintLayout();
-    persistWorkspace();
+  function setView(name) {
+    view = name;
+    wide = false;
+    if (narrow.matches) shown = false; // a small screen shows one thing at a time
+    if (name === "chat") unread = false;
+    if (name === "settings" && !settings && TOKEN) loadSettings();
+    if (name === "today" && TOKEN) loadReminders();
+    paint();
+    persist();
+    chatState();
+    if (name === "chat") log.scrollTop = log.scrollHeight;
   }
-  document.querySelectorAll(".views button").forEach((b) => b.addEventListener("click", () => setLayout(b.dataset.layout)));
-  narrow.addEventListener("change", paintLayout);
+  document.querySelectorAll("#sidebar button[data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+  $("recent-all").addEventListener("click", () => setView("library"));
+  narrow.addEventListener("change", paint);
+
+  // The Chat item says when Attaché is working, or has replied while you looked elsewhere.
+  function chatState() {
+    const nav = document.querySelector('#sidebar .nav[data-view="chat"]');
+    nav.dataset.state = thinking ? "busy" : unread ? "unread" : "";
+    nav.title = thinking ? "Chat: Attaché is working" : unread ? "Chat: a new reply" : "Chat";
+  }
 
   function resizeBounds() {
-    const width = document.querySelector("main").getBoundingClientRect().width - 10;
-    const min = Math.min(45, Math.max(25, 300 / width * 100));
+    const width = work.getBoundingClientRect().width - 9;
+    const min = Math.min(45, Math.max(25, 320 / width * 100));
     return [min, 100 - min];
   }
 
-  function resizeChat(value, save = true, remember = true) {
+  function resizeMain(value, save = true, remember = true) {
     if (isLocked) return;
     const [min, max] = resizeBounds();
     const visibleWidth = Math.max(min, Math.min(max, value));
-    if (remember) chatWidth = visibleWidth;
-    document.querySelector("main").style.setProperty("--chat-width", `${visibleWidth}%`);
+    if (remember) mainWidth = visibleWidth;
+    work.style.setProperty("--main-width", `${visibleWidth}%`);
     const divider = $("divider");
     divider.setAttribute("aria-valuemin", String(Math.round(min)));
     divider.setAttribute("aria-valuemax", String(Math.round(max)));
     divider.setAttribute("aria-valuenow", String(Math.round(visibleWidth)));
-    divider.setAttribute("aria-valuetext", `${Math.round(visibleWidth)} percent chat`);
-    if (save) persistWorkspace();
+    divider.setAttribute("aria-valuetext", `${Math.round(visibleWidth)} percent ${view === "library" ? "pages" : view}`);
+    if (save) persist();
   }
   $("divider").addEventListener("keydown", (event) => {
     const step = event.shiftKey ? 10 : 2;
     const [min, max] = resizeBounds();
-    const values = { ArrowLeft: chatWidth - step, ArrowRight: chatWidth + step, Home: min, End: max };
+    const values = { ArrowLeft: mainWidth - step, ArrowRight: mainWidth + step, Home: min, End: max };
     if (!(event.key in values)) return;
     event.preventDefault();
-    resizeChat(values[event.key]);
+    resizeMain(values[event.key]);
   });
   $("divider").addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
@@ -776,40 +1112,19 @@
   });
   $("divider").addEventListener("pointermove", (event) => {
     if (!$("divider").hasPointerCapture(event.pointerId)) return;
-    const box = document.querySelector("main").getBoundingClientRect();
-    resizeChat((event.clientX - box.left) / (box.width - 10) * 100, false);
+    const box = work.getBoundingClientRect();
+    resizeMain((event.clientX - box.left) / (box.width - 9) * 100, false);
   });
-  function finishResize() { document.body.classList.remove("resizing"); persistWorkspace(); }
+  function finishResize() { document.body.classList.remove("resizing"); persist(); }
   $("divider").addEventListener("pointerup", (event) => {
     if ($("divider").hasPointerCapture(event.pointerId)) $("divider").releasePointerCapture(event.pointerId);
     finishResize();
   });
   $("divider").addEventListener("lostpointercapture", finishResize);
-  addEventListener("resize", () => resizeChat(chatWidth, false, false));
+  addEventListener("resize", () => resizeMain(mainWidth, false, false));
 
-  function focusWorkspace() {
-    if (narrow.matches) mobileView = "workspace";
-    else if (layout === "chat") layout = "split";
-    paintLayout();
-    persistWorkspace();
-  }
-
-  function setWorkspace(name) {
-    workspace = name;
-    const pageView = ["tasks", "page", "analysis-page"].includes(name);
-    for (const panel of ["page", "library", "analysis", "activity", "settings"]) {
-      $(panel + "-view").hidden = panel === "page" ? !pageView : panel !== name;
-    }
-    const tab = name === "page" ? "library" : name === "analysis-page" ? "analysis" : name;
-    press(bar.querySelectorAll("button"), (b) => b.dataset.workspace === tab);
-    if (name === "tasks" && taskPage && pages.some((p) => p.name === taskPage)) openFrame(taskPage);
-    if (name === "settings" && !settings && TOKEN) loadSettings();
-    if (name === "activity") { renderActivity(); if (TOKEN) loadReminders(); }
-    persistWorkspace();
-  }
-  bar.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setWorkspace(b.dataset.workspace)));
-
-  // Frames stay mounted when changing tabs/layouts. Only explicit Reload discards page state.
+  // Frames stay mounted when changing views or closing the panel. Only explicit Reload discards
+  // page state.
   function openFrame(name) {
     const page = pages.find((p) => p.name === name);
     if (!page) return false;
@@ -824,82 +1139,184 @@
     }
     frames.forEach((frame, key) => { frame.hidden = key !== name; });
     current = name;
-    $("page-select").value = name;
-    $("task-page").disabled = name === taskPage;
-    $("task-page").textContent = name === taskPage ? "Tasks page" : "Use for Tasks";
-    $("reload-page").textContent = page.version && page.version !== frames.get(name).dataset.version ? "Updated — reload" : "Reload";
+    renderPanelHead();
     return true;
   }
 
-  function show(name, focus = false) {
-    if (!openFrame(name)) return void (wanted = name);
-    setWorkspace(name === taskPage ? "tasks" : name.startsWith("analysis-") ? "analysis-page" : "page");
-    if (focus) focusWorkspace();
+  const changed = (page) => frames.has(page.name) && Boolean(page.version) && page.version !== frames.get(page.name).dataset.version;
+
+  function renderPanelHead() {
+    const page = pages.find((p) => p.name === current);
+    if (!page || isLocked) return;
+    const isTasks = current === taskPage;
+    $("page-title").textContent = label(current);
+    $("page-meta").textContent = isTasks ? "your tasks page" : page.modified ? `updated ${ago(page.modified)}` : "";
+    $("task-page").disabled = isTasks;
+    $("task-page").title = isTasks ? "Your tasks page" : "Use as your tasks page: Today's to-dos link to it";
+    $("reload-page").classList.toggle("updated", changed(page));
+    $("reload-label").textContent = changed(page) ? "Updated — reload" : "Reload";
   }
-  $("page-select").addEventListener("change", (event) => show(event.target.value));
-  $("all-pages").addEventListener("click", () => setWorkspace(workspace === "analysis-page" ? "analysis" : "library"));
-  $("task-page").addEventListener("click", () => { taskPage = current; setWorkspace("tasks"); });
+
+  function show(name) {
+    if (!openFrame(name)) return void (wanted = name);
+    shown = true;
+    paint();
+    persist();
+  }
+  $("close-page").addEventListener("click", () => { shown = false; wide = false; paint(); persist(); });
+  $("expand-page").addEventListener("click", () => { wide = !wide; paint(); persist(); });
+  $("task-page").addEventListener("click", () => {
+    taskPage = current;
+    renderPages();
+    persist();
+  });
   $("reload-page").addEventListener("click", () => {
     const page = pages.find((p) => p.name === current);
     if (page && confirm("Reload this page? Unsaved changes inside it may be lost.")) {
       frames.get(current).src = page.src;
       frames.get(current).dataset.version = page.version || "";
-      $("reload-page").textContent = "Reload";
+      renderPages();
     }
   });
   $("refresh-pages").addEventListener("click", loadPages);
   $("start-analysis").addEventListener("click", () => {
-    setLayout("chat");
+    setView("chat");
     if (!input.value.trim()) input.value = "Help me analyse a dataset in a saved notebook";
     input.focus();
   });
 
-  function renderLibrary(id, list, empty) {
-    $(id).replaceChildren(...(list.length ? list.map(({ name }) => {
-      const button = el("button", "card");
+  const pageIcon = (name) => name === taskPage ? "home" : name.startsWith("analysis-") ? "chart" : "page";
+  // The tasks page first, then the most recently changed.
+  const ordered = (list) => [...list].sort((a, b) => (b.name === taskPage) - (a.name === taskPage) ||
+    (b.modified || 0) - (a.modified || 0) || a.name.localeCompare(b.name));
+
+  function renderPages() {
+    if (isLocked) return;
+    $("page-count").textContent = pages.length ? String(pages.length) : "";
+    $("page-list").replaceChildren(...(pages.length ? ordered(pages).slice(0, 8).map((page) => {
+      const button = el("button", "pg");
       button.type = "button";
-      button.append(el("strong", "", label(name)), el("span", "", name === taskPage ? "Your Tasks page" : "Open page"));
+      button.dataset.page = page.name;
+      button.append(icon(pageIcon(page.name)), el("span", "name", label(page.name)));
+      if (page.name === taskPage) button.append(el("span", "tag", "tasks"));
+      if (changed(page)) button.append(Object.assign(el("span", "fresh"), { title: "Updated: reload to see it" }));
+      button.addEventListener("click", () => show(page.name));
+      return button;
+    }) : [el("p", "sb-empty", "No pages yet")]));
+    const tile = ({ name, modified }) => {
+      const button = el("button", "tile");
+      button.type = "button";
+      const box = el("span", name === taskPage ? "ico tint" : "ico");
+      box.append(icon(pageIcon(name)));
+      const text = el("span", "grow");
+      text.append(el("strong", "title", label(name)), el("span", "meta", name === taskPage ? "your tasks page" : `updated ${ago(modified)}`));
+      button.append(box, text);
       button.addEventListener("click", () => show(name));
       return button;
-    }) : [el("p", "muted", empty)]));
+    };
+    const analyses = pages.filter((p) => p.name.startsWith("analysis-"));
+    const others = pages.filter((p) => !p.name.startsWith("analysis-"));
+    $("page-library").replaceChildren(...(others.length ? ordered(others).map(tile) : [el("p", "muted", "No pages yet. Ask Attaché to create a page in chat.")]));
+    $("analysis-library").replaceChildren(...(analyses.length ? ordered(analyses).map(tile) : [el("p", "muted", "No saved analyses yet. Start in chat to set up the optional Analysis skill and open a dataset.")]));
+    const recent = [...pages].sort((a, b) => (b.modified || 0) - (a.modified || 0)).slice(0, 4);
+    $("recent-pages").replaceChildren(...(recent.length ? recent.map((page) => {
+      const button = el("button", "row");
+      button.type = "button";
+      const box = el("span", "ico");
+      box.append(icon(pageIcon(page.name)));
+      button.append(box, el("span", "title grow", label(page.name)), el("span", "meta", ago(page.modified)));
+      button.addEventListener("click", () => show(page.name));
+      return button;
+    }) : [el("p", "empty-row", "No pages yet. Ask for a to-do board or a trip page.")]));
+    $("open-tasks").hidden = !taskPage;
+    $("open-tasks").textContent = taskPage ? `Open ${label(taskPage)}` : "";
+    renderPanelHead();
+    paint();
   }
+  $("open-tasks").addEventListener("click", () => taskPage && show(taskPage));
 
   async function loadPages() {
     const list = await api("GET", "/api/artifacts").catch(() => null);
-    if (!list) return;
+    if (!list || isLocked) return;
     pages = list;
     const has = (name) => list.some((p) => p.name === name);
     frames.forEach((frame, name) => { if (!has(name)) { frame.remove(); frames.delete(name); } });
     if (!has(taskPage)) taskPage = ["todo", "todos", "todo-list", "tasks", "home"].find(has) || null;
-    $("page-select").replaceChildren(...list.map(({ name }) => new Option(label(name), name)));
-    $("pages-empty").hidden = Boolean(list.length);
-    document.querySelector(".page-tools").hidden = !list.length;
-    renderLibrary("page-library", list, "No pages yet. Ask Attaché to create a page in chat.");
-    renderLibrary("analysis-library", list.filter((p) => p.name.startsWith("analysis-")), "No saved analyses yet. Start in chat to set up the optional Analysis skill and open a dataset.");
-    if (wanted && has(wanted)) show(wanted, true);
-    else if (list.length) {
-      openFrame(workspace === "tasks" && taskPage ? taskPage : has(current) ? current : taskPage || list[0].name);
-      setWorkspace(workspace);
-    } else { current = null; persistWorkspace(); }
-    if (wanted && has(wanted)) wanted = null;
+    if (wanted && has(wanted)) { openFrame(wanted); shown = true; wanted = null; }
+    else if (current && has(current)) openFrame(current);
+    else { current = null; shown = false; }
+    renderPages();
+    persist();
+  }
+
+  // Times as people say them: a page changed at "21:40", "Mon" or "12 Oct"; a reminder due
+  // "Today 15:15", "Tomorrow 09:00" or "Fri 09:00".
+  const pad = (n) => String(n).padStart(2, "0");
+  const localDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const clock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function daysAway(date) {
+    const day = new Date(date), today = new Date();
+    day.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+    return Math.round((day - today) / 86400000);
+  }
+  function ago(epoch) {
+    if (!epoch) return "";
+    const d = new Date(epoch * 1000), days = daysAway(d);
+    if (days === 0) return clock(d);
+    if (days > -7) return d.toLocaleDateString([], { weekday: "short" });
+    return d.toLocaleDateString([], { day: "numeric", month: "short" });
+  }
+  function dayName(d) {
+    const days = daysAway(d);
+    if (days <= 0) return "Today";
+    if (days === 1) return "Tomorrow";
+    if (days < 7) return d.toLocaleDateString([], { weekday: "short" });
+    return d.toLocaleDateString([], { day: "numeric", month: "short" });
+  }
+
+  // Today: the greeting, then what is waiting, the open to-dos, reminders, activity and pages.
+  function renderToday() {
+    if (isLocked) return;
+    const now = new Date(), hour = now.getHours();
+    $("greeting").textContent = hour >= 5 && hour < 12 ? "Good morning." : hour >= 12 && hour < 18 ? "Good afternoon." : "Good evening.";
+    $("today-date").textContent = now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+    const n = asks.size, parts = [];
+    parts.push(n === 0 ? "Nothing is waiting for you." : n === 1 ? "One question is waiting for your answer." : `${n} questions are waiting for your answer.`);
+    const due = (todos || []).filter((t) => t && t.status !== "done" && t.due && String(t.due).slice(0, 10) <= localDay(now)).length;
+    if (due) parts.push(due === 1 ? "One to-do is due." : `${due} to-dos are due.`);
+    $("today-summary").textContent = parts.join(" ");
   }
 
   function renderActivity() {
-    $("activity-asks").replaceChildren(...(asks.size ? [...asks.values()].map((ask) => {
-      const item = el("div", "record");
-      const button = el("button", "", "Answer in chat");
-      button.type = "button";
-      button.addEventListener("click", () => { setLayout("chat"); ask.msg.scrollIntoView({ block: "center" }); });
-      item.append(el("p", "", ask.text), button);
-      return item;
-    }) : [el("p", "muted", "No open questions or approvals.")]));
-    $("activity-events").replaceChildren(...(activityLog.length ? activityLog.map(({ text, at }) => {
-      const item = el("div", "record", text);
-      const time = el("time", "", at.toLocaleTimeString());
+    if (isLocked) return;
+    const n = asks.size;
+    for (const id of ["waiting-count", "waiting-badge"]) { $(id).hidden = !n; $(id).textContent = String(n); }
+    document.querySelector('#sidebar .nav[data-view="today"]').title = n ? `Today: ${n} waiting for you` : "Today";
+    $("waiting-card").classList.toggle("hot", n > 0);
+    $("waiting-list").replaceChildren(...(n ? [...asks.values()].map((ask) => {
+      const row = el("div", "row"), box = el("span", "ico tint"), text = el("div", "grow");
+      const [first, ...rest] = ask.text.trim().split("\n");
+      box.append(icon("ask"));
+      text.append(el("div", "title", first), el("div", "sub", rest.join(" ").trim() || ask.options.join(" · ")));
+      const review = el("button", "btn outline", "Review");
+      Object.assign(review, { type: "button", title: "Answer in the chat, where it shows in full" });
+      review.setAttribute("aria-label", `Review: ${first}`);
+      review.addEventListener("click", () => {
+        setView("chat");
+        ask.msg.scrollIntoView({ block: "center" });
+        ask.msg.querySelector(".choices button")?.focus({ preventScroll: true });
+      });
+      row.append(box, text, review);
+      return row;
+    }) : [el("p", "empty-row", "Nothing is waiting for you.")]));
+    $("activity-list").replaceChildren(...(activityLog.length ? activityLog.slice(0, 6).map(({ text, at }) => {
+      const row = el("div", "tl"), time = el("time", "t", clock(at));
       time.dateTime = at.toISOString();
-      item.append(time);
-      return item;
-    }) : [el("p", "muted", "Turn progress will appear here while Attaché works.")]));
+      row.append(time, el("span", "", text));
+      return row;
+    }) : [el("p", "empty-row", "Attaché's steps show here while it works.")]));
+    renderToday();
   }
 
   function recordActivity(event) {
@@ -910,16 +1327,72 @@
     renderActivity();
   }
 
+  // Open to-dos from the todos collection, soonest due first; ticking one marks it done, as
+  // the Home page does.
+  async function loadTodos() {
+    try {
+      todos = await api("GET", "/api/db/todos");
+    } catch (error) {
+      if (!isLocked) $("todo-list").replaceChildren(el("p", "empty-row error-text", `Could not load to-dos: ${error.message}`));
+      return;
+    }
+    renderTodos();
+  }
+
+  function renderTodos() {
+    if (isLocked || !Array.isArray(todos)) return;
+    const today = localDay(new Date());
+    const open = todos.filter((t) => t && t.status !== "done").sort((a, b) =>
+      String(a.due || "9999").localeCompare(String(b.due || "9999")) || String(a.title || "").localeCompare(String(b.title || "")));
+    const rows = open.slice(0, 6).map((todo) => {
+      const row = el("label", "row"), box = el("input");
+      box.type = "checkbox";
+      box.setAttribute("aria-label", `Done: ${todo.title || "untitled"}`);
+      box.addEventListener("change", () => tick(todo, box));
+      row.append(box, el("span", "title grow", todo.title || "(untitled)"));
+      if (todo.status === "waiting") row.append(el("span", "badge", "waiting"));
+      const day = todo.due ? String(todo.due).slice(0, 10) : "";
+      if (day) {
+        const [y, m, d] = day.split("-").map(Number);
+        const kind = day < today ? "badge late" : day === today ? "badge today" : "badge";
+        row.append(el("span", kind, day < today ? "overdue" : day === today ? "today" : dayName(new Date(y, m - 1, d))));
+      }
+      return row;
+    });
+    $("todo-list").replaceChildren(...(rows.length ? rows : [el("p", "empty-row", "No open to-dos. Try “add milk to my shopping list”.")]));
+    if (open.length > rows.length) $("todo-list").append(el("p", "more", `and ${open.length - rows.length} more`));
+    $("todo-count").textContent = open.length ? `${open.length} open` : "";
+    renderToday();
+  }
+
+  async function tick(todo, box) {
+    box.disabled = true;
+    const { id, _updated, _by, ...data } = todo; // the store sets these itself
+    try {
+      await api("PUT", `/api/db/todos/${encodeURIComponent(id)}`, { ...data, status: "done" });
+    } catch (error) {
+      box.checked = false;
+      box.disabled = false;
+      if (!isLocked) $("todo-list").append(el("p", "more error-text", `Not saved: ${error.message}`));
+      return;
+    }
+    loadTodos();
+  }
+
   async function loadReminders() {
     try {
       const tasks = await api("GET", "/api/db/_tasks");
-      $("activity-reminders").replaceChildren(...(tasks.length ? tasks.map((task) => {
-        const item = el("div", "record", task.text);
-        const due = new Date(task.due * 1000);
-        item.append(el("div", "hint", `${due.toLocaleString()} · ${task.chat_key}${task.cron ? " · repeats" : ""}`));
-        return item;
-      }) : [el("p", "muted", "No scheduled reminders.")]));
-    } catch (error) { if (!isLocked) $("activity-reminders").textContent = `Could not load reminders: ${error.message}`; }
+      if (isLocked) return;
+      const soonest = [...tasks].sort((a, b) => a.due - b.due).slice(0, 6);
+      $("reminder-list").replaceChildren(...(soonest.length ? soonest.map((task) => {
+        const row = el("div", "row"), box = el("span", "ico"), text = el("div", "grow"), due = new Date(task.due * 1000);
+        const when = [`${dayName(due)} ${clock(due)}`, task.chat_key !== "local:me" && task.chat_key, task.cron && "repeats"];
+        box.append(icon("clock"));
+        text.append(el("div", "title", task.text), el("div", "meta", when.filter(Boolean).join(" · ")));
+        row.append(box, text);
+        return row;
+      }) : [el("p", "empty-row", "No reminders. Try “remind me at 5pm to call Sam”.")]));
+    } catch (error) { if (!isLocked) $("reminder-list").replaceChildren(el("p", "empty-row error-text", `Could not load reminders: ${error.message}`)); }
   }
   $("refresh-reminders").addEventListener("click", loadReminders);
 
@@ -1050,6 +1523,7 @@
     if (!settingsDirty() || confirm("Discard your unsaved settings changes and reload the saved configuration?")) loadSettings();
   });
 
+  const press = (all, on) => all.forEach((b) => b.setAttribute("aria-pressed", String(on(b))));
   document.querySelectorAll("[data-editor]").forEach((button) => button.addEventListener("click", async () => {
     if (settingsBusy || settingsMode === button.dataset.editor || !settings) return;
     settingsBusyState(true);
@@ -1111,16 +1585,17 @@
     const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
     connection = events;
     const status = $("status");
+    const say = (text) => { status.title = text; status.setAttribute("aria-label", text); };
     events.onopen = () => {
       reconnectDelay = 1000;
       status.className = "dot live";
-      status.title = "Connected";
+      say("Connected");
       loadHistory();
     };
     events.onerror = () => {
       if (leaving || isLocked || connection !== events) return;
       status.className = "dot";
-      status.title = "Reconnecting…";
+      say("Reconnecting…");
       // CLOSED also happens during navigation. Only an actual 401 may discard the token.
       if (events.readyState === EventSource.CLOSED) {
         api("GET", "/api/messages").catch(() => null).finally(() => {
@@ -1138,23 +1613,27 @@
     });
     events.addEventListener("ask", (event) => receive(JSON.parse(event.data)));
     events.addEventListener("activity", (event) => receive({ activity: JSON.parse(event.data) }));
+    events.addEventListener("doc", (event) => { // a to-do changed: on a page, by Attaché or here
+      if (JSON.parse(event.data).collection !== "todos") return;
+      clearTimeout(todoTimer);
+      todoTimer = setTimeout(loadTodos, 150); // a board may change several at once
+    });
   }
 
   addEventListener("hashchange", () => {
     const { page } = fromHash(); // a #page= link followed in this tab
-    if (page && TOKEN) show(page, true);
+    if (page && TOKEN) show(page);
   });
   addEventListener("pagehide", () => { leaving = true; connection?.close(); clearTimeout(reconnectTimer); });
   addEventListener("pageshow", (event) => {
     leaving = false;
-    if (event.persisted && TOKEN && !isLocked) { connect(); loadPages(); }
+    if (event.persisted && TOKEN && !isLocked) { connect(); loadPages(); loadTodos(); }
   });
-  paintLayout();
-  setWorkspace(workspace);
+  setInterval(() => { if (TOKEN && !isLocked) { loadReminders(); renderToday(); } }, 60000);
+  paint();
+  renderActivity();
   begin().then(() => {
-    if (isLocked) return;
-    if (workspace === "settings") loadSettings();
-    if (workspace === "activity") loadReminders();
+    if (!isLocked && view === "settings") loadSettings();
   });
 </script>
 </body>
