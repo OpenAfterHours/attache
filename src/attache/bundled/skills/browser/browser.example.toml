@@ -1,0 +1,15 @@
+# The sites the browser skill may open with your sign-in: `attache skill browser setup`
+# copies this file to browser.toml. Pages from any other site are refused, so list each one
+# you want read. A name covers its subdomains too. The guide is docs/browser.md.
+
+sites = [
+  # "contoso.sharepoint.com",     # SharePoint Online: your company's name, then .sharepoint.com
+  # "contoso-my.sharepoint.com",  # OneDrive for work
+  # "app.powerbi.com",            # Power BI
+  # "intranet.contoso.local",     # an on-premises site: Windows sign-in works for it too
+  # "sts.contoso.com",            # your company's own sign-in page, if it has one (ADFS)
+]
+
+# The browser: "edge" (the default on Windows), "chrome" (the default elsewhere), or the full
+# path of another Chromium-based browser. Each one keeps its own sign-in.
+# browser = "edge"

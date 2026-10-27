@@ -103,7 +103,7 @@ The file tools work only inside the home folder. Attaché refuses, before touchi
 - absolute paths, drive letters (also `C:foo`), UNC paths, and any path with a `:`;
 - anything that resolves outside the home folder, including through symlinks and junctions;
 - the files it keeps to itself, in any case and at any depth: `.git`, `.claude`,
-  `CLAUDE.md`, `.secret` and `attache.db*`.
+  `CLAUDE.md`, `.secret`, `.mail`, `.approvals`, `.browser` and `attache.db*`.
 
 !!! warning "The shell is not sandboxed"
 
@@ -156,6 +156,27 @@ the store's access controls. Environment credentials retain their existing behav
 may be inherited by owner shell and skill processes. A headless service without an
 accessible user store can continue using `key_env`. See
 [configuration](configuration.md#store-an-api-key-in-the-os-keyring) for setup and rotation.
+
+## The web
+
+The `web` skill searches the web and reads pages for you and for members. Its script goes
+only to the public internet: every address, and every address a page redirects to, must
+resolve to public IP addresses only, so this machine, your local network, Tailscale peers and
+cloud metadata addresses are refused, whoever asks and whatever a page links to. Without a
+proxy, the address each connection actually uses is checked too. Page text comes back
+labelled as untrusted content, with text hidden from readers left out. See [Web](web.md#safety).
+
+## The browser
+
+The `browser` skill drives Edge or Chrome with a profile signed in to your work, so it is
+yours alone: it has no `attache-roles`, and its script refuses any request without owner
+rights, so never in a group chat. It opens only addresses on the sites you list in its
+`browser.toml`, and blocks a page or frame from anywhere else before the request goes; a
+redirect elsewhere is followed by the browser, but nothing from that page is read. Its
+profile, in `.browser/`, is one of the files the file tools refuse. The list keeps the signed-in
+browser on your sites; it doesn't stop a page that talks the assistant into sending what it
+read elsewhere, which is what the rule that pages are data is for. See
+[Browser](browser.md#safety).
 
 ## The page sandbox
 

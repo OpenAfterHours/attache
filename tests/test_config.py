@@ -322,7 +322,8 @@ def test_init_home_creates_a_home(home: Path, no_git: None, restricted: list[Pat
     assert "{owner}" not in (home / "memory" / "USER.md").read_text(encoding="utf-8")
     assert "Alex" in (home / "memory" / "ATTACHE.md").read_text(encoding="utf-8")
     ignored = (home / ".gitignore").read_text(encoding="utf-8").split()
-    assert ignored == ["attache.db*", ".secret", "files/", "logs/", ".mail/", ".approvals/"]
+    ignored_dirs = ["files/", "logs/", ".mail/", ".approvals/", ".browser/"]
+    assert ignored == ["attache.db*", ".secret", *ignored_dirs]
     assert restricted == [home]  # the folder is made yours alone
 
 

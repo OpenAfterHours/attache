@@ -31,8 +31,9 @@ HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 OUTPUT_CAP = 20_000  # characters of command output kept: the end, where errors are
 SHELL = "cmd.exe" if os.name == "nt" else "sh"
 # What file tools may not touch, in any case and at any depth (and attache.db*): .mail holds
-# mail logins, and .approvals the owner's approvals for mail sends (see ask).
-PRIVATE = {".secret", ".git", ".claude", "claude.md", ".mail", ".approvals"}
+# mail logins, .approvals the owner's approvals for mail sends (see ask), and .browser the
+# browser skill's signed-in profiles.
+PRIVATE = {".secret", ".git", ".claude", "claude.md", ".mail", ".approvals", ".browser"}
 # Script arguments that are data, never paths, so they may hold / and : without owner rights:
 # web addresses, and inline JSON objects (_json; members pass docx, xlsx and pptx specs so).
 WEB = ("http://", "https://")
