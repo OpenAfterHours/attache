@@ -124,6 +124,15 @@ only that it failed (or the line the script chose for them), never its output, a
 notice in your approvals chat with what the script chose to tell you
 ([Long jobs](skills.md#long-jobs-in-the-background)).
 
+## The web
+
+The `web` skill searches the web and reads pages for you and for members. Its script goes
+only to the public internet: every address, and every address a page redirects to, must
+resolve to public IP addresses only, so this machine, your local network, Tailscale peers and
+cloud metadata addresses are refused, whoever asks and whatever a page links to. Without a
+proxy, the address each connection actually uses is checked too. Page text comes back
+labelled as untrusted content, with text hidden from readers left out. See [Web](web.md#safety).
+
 ## The page sandbox
 
 Pages are untrusted HTML: the assistant writes them, and they may quote emails or web pages.

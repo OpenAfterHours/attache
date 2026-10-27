@@ -87,6 +87,9 @@ key_env = "ANTHROPIC_API_KEY"
   diary, never what is in it ([docs/diary.md](docs/diary.md)), or a job you defined, run in the
   background, with "done" or "failed" back to them and the details to you
   ([docs/jobs.md](docs/jobs.md)). Setup is in [docs/channels.md](docs/channels.md).
+- **The web.** The `web` skill searches (DuckDuckGo, or Brave with a key) and reads pages as
+  text, for you and your group chats, and reaches only the public internet, never your own
+  machine or network: see [docs/web.md](docs/web.md).
 - **Share links.** With `[web] public_url` set and Tailscale Funnel pointed at a second local
   port, a group's page gets a link that works on anyone's phone, for that group's shared data
   only: see [docs/pages.md](docs/pages.md).

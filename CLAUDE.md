@@ -43,7 +43,7 @@ src/attache/
   cli.py        argparse entry point; `attache skill NAME [ARGS]` runs a skill's script
   static/       ui.html, bridge.js
   bundled/      attache.toml template, memory templates, bundled skills (copied by init:
-                mail, mailbox, docx, xlsx, pptx, service, slack, signal, render, ...)
+                mail, mailbox, docx, xlsx, pptx, service, slack, signal, render, web, ...)
 ```
 
 ## Rules
