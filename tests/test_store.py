@@ -141,6 +141,33 @@ def test_sessions(store: Store) -> None:
     assert store.session_get(ME, "claude") == {"session_id": "def"}
 
 
+def test_new_chat_starts_history_afresh_and_drops_its_sessions(store: Store) -> None:
+    store.add_message(ME, "user", "old")
+    store.add_message(FAMILY, "user", "elsewhere")
+    store.session_set(ME, "claude", {"session_id": "abc"})
+    store.session_set(ME, "claude-api", {"other": 1})
+    store.session_set(FAMILY, "claude", {"session_id": "def"})
+    store.new_chat(ME)
+    assert store.history(ME) == []
+    assert store.session_get(ME, "claude") == {} and store.session_get(ME, "claude-api") == {}
+    later = store.add_message(ME, "user", "new")
+    assert [m["text"] for m in store.history(ME)] == ["new"]
+    assert store.history(ME, before=later) == []
+    store.new_chat(ME)
+    store.add_message(ME, "assistant", "newer")
+    assert [m["text"] for m in store.history(ME)] == ["newer"]  # from the latest new_chat
+    assert [m["text"] for m in store.history(FAMILY)] == ["elsewhere"]  # other chats as they were
+    assert store.session_get(FAMILY, "claude") == {"session_id": "def"}
+    rows = store._db.execute("SELECT role, text FROM messages WHERE chat_key = ?", (ME,))
+    assert [tuple(row) for row in rows] == [
+        ("user", "old"),  # kept, only out of the history
+        ("new", ""),
+        ("user", "new"),
+        ("new", ""),
+        ("assistant", "newer"),
+    ]
+
+
 # db_access: the rules shared by the db tool and the web bridge
 
 

@@ -8,6 +8,34 @@ Attaché reads its settings from `attache.toml` in the home folder: `~/.attache/
 or the folder that `--home` or `ATTACHE_HOME` points to. `attache init` writes a commented
 starting file.
 
+## Editing in the web workspace
+
+Open **Settings** in the [web workspace](workspace.md) to inspect the saved configuration
+and the configuration Attaché is currently running. The forms and **Editable settings
+(TOML)** view change the same supported fields: assistant name, model endpoints and routing,
+web settings, rate limits, and whether existing channels are enabled.
+
+Review the changes before saving. Attaché validates the proposal, checks that the file has
+not changed since you loaded it, and saves it atomically with a previous-version backup.
+If another editor changed the file, reload Settings and review your changes again. A restore
+uses the same validation and conflict checks as a save.
+
+The TOML view is an editable selection, not the complete source file. Comments, credentials,
+identity rules and other file-managed options are preserved in the original file. Secret
+values are never sent to the browser; endpoint credentials show their configured status.
+Create new endpoints or channels, or edit options outside the selection, in `attache.toml`.
+Some unusual TOML layouts cannot be changed safely in the browser; Settings will tell you
+to edit that field in the file instead.
+
+Saving does not restart Attaché or change an active conversation. Settings indicates when
+a restart is needed. Stop and restart `attache` or `attache run`, then open the new launch
+link; if you installed the startup service, restart it using the service's normal controls.
+
+Settings is available only in the owner's local interface. Generated pages and public
+share links cannot access it.
+
+## Managing the configuration file
+
 After upgrading Attaché, run `attache init` to add new bundled skills; it never overwrites
 your files.
 
@@ -163,11 +191,39 @@ is yours to choose; it is what `[routing]` and `[chats]` refer to.
 | `key_env` | Optional. The name of the environment variable that holds the API key. The key itself never goes in `attache.toml`. |
 | `key_ref` | Optional. An opaque reference created by `attache skill credentials login NAME`. The API key is in your OS credential store. Mutually exclusive with `key_env`. |
 | `timeout` | Optional. Seconds a turn may take before Attaché gives up. Default `900`. |
+| `max_steps` | Optional, not `claude-cli`. The most model calls one of your own turns may make (see below). Default `100`. Other people's turns never get more than `20`. |
+| `context_tokens` | Optional, not `claude-cli`. How big a turn's context may grow, in tokens, before it starts afresh from the model's notes (see below). Default `150000`. Set it well below the model's context window. |
+| `cache` | Optional, `anthropic` only. Prompt caching, `true` or `false`. Default `true` for Anthropic's own API, `false` with a `base_url`. |
 | `max_tokens` | Optional, `anthropic` only. The most tokens a single model response may use. Default `4096`. |
 | `bin` | Optional, `claude-cli` only. The Claude Code command, if it isn't `claude` on your `PATH`. |
 
 If `key_env` is set but the variable is empty, the first turn on that endpoint fails with a
 message naming the variable, and `attache doctor` reports it before that.
+
+**Long jobs.** On the `anthropic`, `openai-chat` and `openai-responses` routes, Attaché runs the
+tool loop, and a turn keeps going for as long as it is getting somewhere. It is wound up when
+it goes round in circles (the same call has given the same result three times; the model is
+told the second time), reaches `max_steps`, or has used most (80%) of its `timeout`. Winding
+up never just cuts it off: the model is told to stop and gets one last step, with no tools, to
+say what it did and what is left. The reply ends by saying why it stopped; say "continue" and
+the next turn picks the work up from there. `timeout` stays the hard limit, and **Stop** (or
+Esc, or Ctrl+C in the terminal) ends a turn at once. For a job longer than one turn should
+take, raise both `max_steps` and `timeout`, or give it to a [background job](jobs.md).
+On `claude-cli`, Claude Code runs its own loop, and only `timeout` and **Stop** bound it.
+
+**Context.** Within a turn nothing is dropped: every tool call and its result stays in the
+model's context until the turn ends, so a long turn's context keeps growing. Once one step's
+context reaches `context_tokens`, the model is told to write notes on what it has done, found
+and still has to do, and the turn carries on in a fresh context holding only your request and
+those notes. It can happen more than once in a turn, and it works the same on every `api`.
+Between turns, the model sees the chat's last 30 messages: what you and it said, not the tool
+calls, which is why a reply that stops early says where it got to. Whatever should outlast
+that belongs in memory (`memory/USER.md`, or the chat's notes in `memory/chats/`).
+
+Each step sends the whole context again. On the `anthropic` route Attaché marks it for prompt
+caching (`cache`), so the part already sent costs a tenth. OpenAI caches long prompts on its
+own, and local servers such as Ollama, vLLM and llama.cpp reuse a prompt's unchanged start.
+On `claude-cli`, Claude Code manages its own context and compacts it when it fills up.
 
 | `api` | Use it for | Who runs the tool loop |
 |---|---|---|
@@ -270,7 +326,8 @@ the local web server. `model` is passed to `claude --model`.
 
 - It keeps one Claude Code session per chat and resumes it, so a long chat doesn't resend
   its history. A fresh session gets the recent conversation (the last 30 messages, up to
-  20,000 characters) as a transcript.
+  20,000 characters) as a transcript. [`/new`](quickstart.md#start-a-new-chat) starts a
+  fresh session with no transcript.
 - It runs in a folder next to your home, `~/.attache-claude`, so a `CLAUDE.md` or
   `.claude/settings.json` inside `~/.attache` never loads as Claude Code project settings.
   Your own `~/.claude` settings still apply.
@@ -321,11 +378,14 @@ ollama pull qwen3:32b
 api = "openai-chat"
 base_url = "http://localhost:11434/v1"
 model = "qwen3:32b"
+context_tokens = 24000  # well below the context length the server gives the model
 ```
 
 An unauthenticated local server needs no key, so leave both `key_env` and `key_ref` out.
-Pick a model that supports tool
-calling: Attaché's to-dos, reminders and pages all work through tools.
+Pick a model that supports tool calling: Attaché's to-dos, reminders and pages all work
+through tools. A local model's context is often far smaller than a hosted one's, and a server
+may cut a longer prompt short without saying so, so set `context_tokens` below it (in Ollama,
+the context length is a setting of the server or the model).
 
 For a hosted service, set its `base_url` and the variable that holds its key:
 

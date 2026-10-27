@@ -31,7 +31,7 @@ Bundled skills live in `src/attache/bundled/skills/` and are copied into a user'
 
 ## The size budget
 
-`tests/test_budget.py` fails when the core passes 2,240 lines of code. Blank lines, comments
+`tests/test_budget.py` fails when the core passes 2,710 lines of code. Blank lines, comments
 and docstrings don't count, so write the clearest version of the code, not the shortest.
 
 ## Before you open a pull request
@@ -40,3 +40,17 @@ and docstrings don't count, so write the clearest version of the code, not the s
 uv run ruff check . && uv run ruff format --check .
 uv run pytest
 ```
+
+For workspace UI changes, also run the browser checks. They start the actual web app in a
+temporary home with sample pages, without a model or personal configuration:
+
+```console
+npm install --no-save --package-lock=false playwright@1.62.1
+npx playwright install chromium
+node --test tests/ui_workspace.cjs
+```
+
+Run `uv sync` first; the fixture uses `.venv` by default. `ATTACHE_TEST_PYTHON` and
+`ATTACHE_TEST_BROWSER` can select another Python or Chromium executable. If Playwright is
+installed elsewhere, set `NODE_PATH` to its containing `node_modules` directory. CI runs
+these checks in Chromium as well as the Python suite on Windows, macOS and Linux.

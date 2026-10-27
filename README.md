@@ -2,7 +2,7 @@
 
 A personal assistant you install with one command. It runs on your own machine, keeps your
 to-dos and reminders, makes interactive pages on demand, and learns how you work through a
-folder of skills it can edit itself. The core is under 2,390 lines of Python code, the cap
+folder of skills it can edit itself. The core is under 2,860 lines of Python code, the cap
 CI enforces; everything else is a skill.
 
 > **Status:** phase 3 of the [roadmap](docs/proposal.html): the local core, terminal and web
@@ -29,11 +29,19 @@ attache skill tui                # a full-screen terminal app (docs/terminal.md)
 While a turn runs, the terminal shows what Attaché is doing: `working…`, each step with its
 time, a line of Claude's thinking, and a footer with time and tokens. Ctrl+C stops a turn.
 
-![The web page: chat on the left, the Home page with to-dos and reminders on the right](docs/phase-1-ui.png)
+![The resizable web workspace, with chat beside Tasks and tabs for Pages, Analysis, Activity and Settings](docs/workspace-ui.png)
 
 The terminal and the web page are one conversation. Attaché prints a link like
 `http://127.0.0.1:8765/#t=...` when it starts; open that link to use the web page. The token in
 it changes every run, so other programs on your machine can't drive your assistant.
+
+The [web workspace](docs/workspace.md) has Chat, Split and Workspace layouts with a
+resizable divider. Switch between tasks, saved pages, activity and owner-only Settings;
+your draft and open pages stay in place. Settings validates and previews changes before
+saving, preserves file-managed options, and shows when a restart is needed.
+
+The optional [analysis skill](docs/analysis.md) connects the same conversation to a Hailer
+notebook. Saved result pages appear in the workspace; the live notebook opens separately.
 
 Attaché talks to models through four adapters, chosen in `~/.attache/attache.toml`:
 

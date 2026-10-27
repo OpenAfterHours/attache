@@ -58,8 +58,8 @@ src/attache/
 
 ## Rules
 
-1. **Size is a test.** `tests/test_budget.py` fails above 2,240 lines of code in
-   `src/attache` (the target is about 2,235). Blank lines, comments and docstrings don't
+1. **Size is a test.** `tests/test_budget.py` fails above 2,710 lines of code in
+   `src/attache` (including the owner settings service). Blank lines, comments and docstrings don't
    count, so never make code denser to fit: write the readable version. If a feature doesn't
    fit, it belongs in a skill.
 2. **No new runtime dependencies** without discussion. Skill scripts declare their own with
@@ -98,11 +98,11 @@ Metadata keys Attaché reads:
 
 Bundled skills live in `src/attache/bundled/skills/` and are copied into a user's home by
 `attache init`. Each bundled skill's scripts are capped at 300 lines of code by
-`tests/test_budget.py`. The [Skills guide](../skills.md) covers writing one in full.
+`tests/test_budget.py` (1,390 for `mail`, 310 for `tui`). The [Skills guide](../skills.md) covers writing one in full.
 
 ## The size budget
 
-`tests/test_budget.py` fails when the core passes 2,240 lines of code. Blank lines, comments
+`tests/test_budget.py` fails when the core passes 2,710 lines of code. Blank lines, comments
 and docstrings don't count, so write the clearest version of the code, not the shortest.
 Bundled skills, static files and tests don't count toward it.
 

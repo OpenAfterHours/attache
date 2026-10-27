@@ -143,7 +143,8 @@ class ChannelManager:
     async def activity(self, chat_key: str, kind: str, **data: Any) -> None:
         """How a turn with owner rights is going, for the chat's channels that show it (those
         with an activity() method; others are skipped): kind "started" {route}, "step"
-        {label, seconds}, "thinking" {text} or "finished" {seconds, tokens, route, stopped}.
+        {label, seconds}, "thinking" {text} or "finished" {seconds, tokens, route, stopped};
+        or "new" {} when the owner started the chat afresh (/new, Router.new_chat).
         docs/channels.md has the contract."""
         for channel in self._targets(chat_key):
             if hasattr(channel, "activity"):
@@ -152,9 +153,12 @@ class ChannelManager:
     def stop_turns(self, chat_key: str) -> bool:
         """Cancel what is running for chat_key's messages, such as a turn: the owner's Stop or
         Ctrl+C. That includes messages queued behind the running turn (each waits for the
-        chat's lock in a task of its own): Stop means stop what I asked. True if something
-        was running."""
-        running = [t for t in self.tasks if t.get_name() == chat_key and not t.done()]
+        chat's lock in a task of its own): Stop means stop what I asked. Never the task that
+        calls it: /new runs as one of the chat's messages. True if something was running."""
+        caller = asyncio.current_task()
+        running = [
+            t for t in self.tasks if t.get_name() == chat_key and not t.done() and t is not caller
+        ]
         for task in running:
             task.cancel()
         return bool(running)
@@ -238,7 +242,9 @@ class TerminalChannel:
 
     async def start(self, on_message: OnMessage) -> None:
         threading.Thread(target=self._read, args=(asyncio.get_running_loop(),), daemon=True).start()
-        print(f"Chat here, or open {self.url}\nType /quit to leave.", flush=True)
+        print(
+            f"Chat here, or open {self.url}\nType /new for a new chat, /quit to leave.", flush=True
+        )
         while (line := (await self.lines.get()).strip()) not in ("/quit", "/exit"):
             msg = Inbound("local", "me", "owner", self.owner_name, line, origin="terminal")
             await on_message(msg)

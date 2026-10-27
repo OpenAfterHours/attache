@@ -54,7 +54,9 @@ port = 8765
 # guest_daily = 50      # turns per day across all guests and pages' attache.ask, kept apart
 
 # Models. api: anthropic | openai-chat | openai-responses | claude-cli. Other keys, such as
-# max_tokens, are passed to the backend as options.
+# max_tokens, are passed to the backend as options. timeout (seconds, default 900) and
+# max_steps (default 100; other people's turns 20 at most) bound a turn, and context_tokens
+# (default 150000) is how big its context grows before it starts afresh: docs/configuration.md.
 # Store an API key in the OS keyring: `attache skill credentials login ENDPOINT`.
 # This replaces that endpoint's key_env with an opaque key_ref. Use only one source.
 [endpoints.claude]
@@ -75,6 +77,7 @@ key_env = "ANTHROPIC_API_KEY"
 # api = "openai-chat"
 # base_url = "http://localhost:11434/v1"
 # model = "qwen3:32b"
+# context_tokens = 24000  # well below the context length the server gives the model
 
 # People you share chats with. Keys other than name, role and ids are their ids per chat app.
 # [people.sam]

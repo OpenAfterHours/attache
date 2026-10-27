@@ -1,5 +1,8 @@
 """One SQLite file for messages, documents, scheduled tasks and backend sessions.
 
+A chat starts afresh with new_chat(): a marker row (role "new") in messages, after which
+history() begins. Earlier messages stay in the file.
+
 Documents are JSON objects in named collections. The store maintains "id", "_updated" (epoch
 seconds) and "_by" (who wrote it). Callers write "_shared", a list of chat keys. Collections
 starting with "_" are internal (e.g. "_artifacts").
@@ -37,7 +40,8 @@ CREATE TABLE IF NOT EXISTS sessions (chat_key TEXT, endpoint TEXT, json TEXT,
 """
 PENDING_TASKS = "SELECT * FROM tasks WHERE status = 'pending'"
 HISTORY = """SELECT role, text, sender_id, sender_name, ts FROM messages
-WHERE chat_key = ? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?"""
+WHERE chat_key = ? AND (? IS NULL OR id < ?) AND id > (SELECT COALESCE(MAX(id), 0)
+FROM messages WHERE chat_key = ? AND role = 'new') ORDER BY id DESC LIMIT ?"""
 # An update keeps `created`, so doc_list order stays oldest first.
 UPSERT_DOC = """INSERT INTO docs VALUES (?, ?, ?, ?, ?) ON CONFLICT (collection, id)
 DO UPDATE SET json = excluded.json, updated = excluded.updated"""
@@ -79,9 +83,15 @@ class Store:
     def history(
         self, chat_key: str, limit: int = 30, before: int | None = None
     ) -> list[dict[str, Any]]:
-        """The last `limit` messages with id < `before` (if given), oldest first:
-        {"role", "text", "sender_id", "sender_name", "ts"}."""
-        return self._rows(HISTORY, chat_key, before, before, limit)[::-1]  # oldest first
+        """The last `limit` messages with id < `before` (if given) since the chat's latest
+        new_chat(), oldest first: {"role", "text", "sender_id", "sender_name", "ts"}."""
+        return self._rows(HISTORY, chat_key, before, before, chat_key, limit)[::-1]  # oldest first
+
+    def new_chat(self, chat_key: str) -> None:
+        """Start the chat afresh: history() leaves out what came before, and the chat's backend
+        sessions go, so a resumed one cannot bring it back. Nothing else is deleted."""
+        self.add_message(chat_key, "new", "")
+        self._write("DELETE FROM sessions WHERE chat_key = ?", chat_key)
 
     # documents
     def doc_list(self, collection: str, *, shared_with: str | None = None) -> list[dict[str, Any]]:

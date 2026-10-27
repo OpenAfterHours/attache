@@ -49,6 +49,22 @@ jobs:
       - name: Run tests (includes the core size budget)
         run: uv run pytest
 
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.13"
+      - name: Install isolated browser test dependencies
+        run: |
+          uv sync
+          npm install --prefix "$RUNNER_TEMP/attache-browser-tests" --no-save --package-lock=false playwright@1.62.1
+          "$RUNNER_TEMP/attache-browser-tests/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Exercise workspace in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/attache-browser-tests/node_modules" node --test tests/ui_workspace.cjs
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10

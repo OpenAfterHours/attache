@@ -161,7 +161,7 @@ def test_index_holds_no_token(env: Any) -> None:
     assert "thinking.step.textContent = `${event.label}…`" in r.text
     assert 'api("POST", "/api/stop")' in r.text and 'event.key === "Escape"' in r.text
     assert '["stopped", time]' in r.text and "tokens`, route]" in r.text
-    assert 'sandbox="allow-scripts allow-forms"' in r.text
+    assert 'frame.setAttribute("sandbox", "allow-scripts allow-forms")' in r.text
     assert "new tab" not in r.text.lower() and "allow-popups" not in r.text
 
 
@@ -213,7 +213,10 @@ def test_artifact_list_gives_each_page_with_its_token(env: Any) -> None:
     page(env.sv, "home")
     (env.sv.config.home / "artifacts" / "Not A Slug.html").write_text("x", encoding="utf-8")
     r = env.client.get("/api/artifacts", headers=UI)
-    assert r.json() == [{"name": "home", "src": src("home")}, {"name": "trip", "src": src("trip")}]
+    assert r.json() == [
+        {"name": name, "src": src(name), "version": web._version(env.sv, name)}
+        for name in ("home", "trip")
+    ]
     assert env.client.get(r.json()[0]["src"]).status_code == 200
     assert "access-control-allow-origin" not in r.headers
     assert env.client.get("/api/artifacts", headers=auth("home")).status_code == 403

@@ -180,6 +180,7 @@ def test_anthropic_tool_round_trip() -> None:
     assert first["model"] == "claude-x"
     assert first["max_tokens"] == 99
     assert first["system"] == "be brief"
+    assert first["extra_body"] == {"cache_control": {"type": "ephemeral"}}  # steps resend it
     assert first["tools"] == [
         {"name": "add", "description": "Add two numbers", "input_schema": ADD.schema}
     ]
@@ -224,6 +225,17 @@ def test_anthropic_without_tools_sends_none() -> None:
     assert run(AnthropicAdapter(endpoint, client=client), turn).text == "hi"
     assert "tools" not in create.requests[0]
     assert create.requests[0]["max_tokens"] == 4096
+
+
+def test_anthropic_caches_on_another_server_only_when_asked() -> None:
+    for options, cached in [({}, False), ({"cache": True}, True)]:
+        create = Recorder(anthropic_message({"type": "text", "text": "hi"}))
+        endpoint = Endpoint(
+            "c", "anthropic", "m", base_url="http://localhost:4000", options=options
+        )
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        run(AnthropicAdapter(endpoint, client=client), make_turn(endpoint))
+        assert (create.requests[0]["extra_body"] is not None) is cached
 
 
 # OpenAI Chat Completions
