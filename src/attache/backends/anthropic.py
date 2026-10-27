@@ -2,25 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from attache.agent import TOKENS, Step, api_key, tool_spec
+from attache import credentials
+from attache.agent import TOKENS, Step, tool_spec
 from attache.types import Endpoint, ToolCall, Turn
 
 
 class AnthropicAdapter:
     def __init__(self, endpoint: Endpoint, client: Any = None) -> None:
         """client: an AsyncAnthropic-like object; tests pass a fake. None builds one lazily from
-        endpoint.base_url and the env var named by endpoint.key_env."""
+        endpoint.base_url and its selected credential source."""
         self.endpoint = endpoint
         self.client = client
+        self._client_lock = asyncio.Lock()
 
-    def _client(self) -> Any:
-        if self.client is None:
-            key = api_key(self.endpoint)
-            import anthropic
+    async def _client(self) -> Any:
+        async with self._client_lock:
+            if self.client is None:
+                options = await asyncio.to_thread(credentials.client_options, self.endpoint)
+                import anthropic
 
-            self.client = anthropic.AsyncAnthropic(api_key=key, base_url=self.endpoint.base_url)
+                if self.endpoint.key_ref:
+                    options["http_client"] = anthropic.DefaultAsyncHttpxClient(
+                        follow_redirects=False
+                    )
+                self.client = anthropic.AsyncAnthropic(**options)
+                if self.endpoint.key_ref:
+                    self.client.auth_token = None  # older SDKs also read ANTHROPIC_AUTH_TOKEN
         return self.client
 
     def start(self, turn: Turn) -> list[dict[str, Any]]:
@@ -39,7 +49,8 @@ class AnthropicAdapter:
         # default for Anthropic's own API only, as another server may not know the field. In
         # extra_body, as SDKs before 1.x (anthropic>=0.40) have no cache_control argument.
         cache = self.endpoint.options.get("cache", self.endpoint.base_url is None)
-        resp = await self._client().messages.create(
+        client = await self._client()
+        resp = await client.messages.create(
             model=self.endpoint.model,
             max_tokens=self.endpoint.options.get("max_tokens", 4096),
             system=turn.system,

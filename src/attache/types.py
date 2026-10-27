@@ -31,6 +31,7 @@ class Endpoint:
     base_url: str | None = None
     key_env: str | None = None
     options: dict[str, Any] = field(default_factory=dict)  # e.g. max_tokens, bin
+    key_ref: str | None = None  # opaque reference to a destination-bound OS keyring record
 
 
 @dataclass

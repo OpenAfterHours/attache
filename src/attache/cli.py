@@ -27,7 +27,7 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from attache import __version__, channels, config, skills
+from attache import __version__, channels, config, credentials, skills
 
 NEXT = """Next:
   1. Tell Attaché about yourself in {home}/memory/USER.md.
@@ -93,7 +93,11 @@ def _skill(home: Path, argv: list[str]) -> int:
         hint = "new bundled skills arrive with `attache init`, which never overwrites"
         raise SystemExit(f"No skills/{name}/scripts/{name}.py in {home}: {hint}.")
     # ATTACHE_CLI: how to start this same Attaché, for a skill that runs one (the tui skill)
-    env = {**os.environ, "ATTACHE_CLI": json.dumps([sys.executable, "-m", "attache"])}
+    env = {
+        **os.environ,
+        "ATTACHE_CLI": json.dumps([sys.executable, "-m", "attache"]),
+        "ATTACHE_PACKAGE_ROOT": str(Path(__file__).resolve().parent.parent),
+    }
     return subprocess.run(["uv", "run", str(script), *rest], env=env).returncode
 
 
@@ -113,10 +117,19 @@ def _doctor(home: Path) -> int:
         elif ep.api == "claude-cli":
             need = ep.options.get("bin", "claude")
             ok = shutil.which(need) is not None
+        elif ep.key_ref is not None:
+            try:
+                credentials.api_key(ep)
+                need, ok = "", True
+            except credentials.CredentialError as e:
+                need, ok = str(e).removeprefix(f"endpoint '{name}': "), False
         else:
             need, ok = ep.key_env, not ep.key_env or bool(os.environ.get(ep.key_env))
         mark = "✓" if ok else "✗" if name == cfg.own_chats else "!"  # "!": only groups need it
-        checks.append((mark, f"endpoint {name}" + ("" if ok else f" needs {need}")))
+        detail = " (keyring credential available)" if ok and ep and ep.key_ref else ""
+        if not ok:
+            detail = f": {need}" if ep and ep.key_ref else f" needs {need}"
+        checks.append((mark, f"endpoint {name}{detail}"))
     checks += [("✓" if shutil.which(tool) else "✗", f"{tool} installed") for tool in ("git", "uv")]
     if cfg:
         found = {s.name: s for s in skills.discover(home)}

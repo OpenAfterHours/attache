@@ -240,7 +240,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
 <span class="prompt">$</span> uv tool install attache     <span class="c"># keep it</span>
 <span class="prompt">$</span> attache init &amp;&amp; attache run</code></pre>
       <ul class="specline">
-        <li>Python 3.11+</li><li>under 2,710 lines of code</li><li>6 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
+        <li>Python 3.11+</li><li>under 2,860 lines of code</li><li>7 direct dependencies</li><li>Claude API, Claude Code, OpenAI, any compatible endpoint</li><li>Slack and Signal first, more channels as skills</li><li>Outlook, Gmail and Titan mail</li>
       </ul>
     </div>
     <p class="namenote">The name is <code>attache</code>, after the assistant on an ambassador's staff and the case an executive carries. It was unclaimed on PyPI on 19 October 2026, so register it before the first release.</p>
@@ -250,7 +250,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
         <li>People you list can email you with <code>@attache</code>. A new <code>email</code> channel skill watches one inbox, admits a message only when the topmost Authentication-Results shows DMARC passing for the sender's domain, and answers in the thread, to the sender alone. An email address can never be the owner or the approvals chat.</li>
         <li>The new <code>diary</code> skill offers free slots only, from Outlook (through the mail skill) or a Google secret iCal address, ranked by the owner's prefer and avoid entries. Titles, attendees, locations and notes never leave the script.</li>
         <li>The new <code>jobs</code> skill runs commands the owner defined, for the people each job lists, as background scripts: the requester hears only that it finished or failed, and the owner gets the failure notice. Every script run now gets <code>ATTACHE_SENDER</code>, <code>ATTACHE_ROLE</code> and <code>ATTACHE_CHAT</code> from the core.</li>
-        <li>The core cap is now 2,710 lines of code (the core is at 2,702, with <code>/new</code> and long turns), and the mail skill's 1,390 (D9, §10).</li>
+        <li>The core cap is now 2,860 lines of code (the core is at 2,850, with <code>/new</code>, long turns and model keyring lookup), and the mail skill's 1,390 (D9, §10). Credential management is a bundled skill.</li>
         <li>v0.8: phase 3 built (pull request #35): mail, Office files, share links and starting at login. v0.7: phase 2 built (pull request #34). v0.6: phase 1 built (pull request #28, version 0.0.1).</li>
       </ul>
     </div>
@@ -291,7 +291,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
           <li><span class="d-id">D6</span><div><h3>Artifacts are local pages over real data</h3><p>The agent writes HTML. The built-in server adds a small <code>attache</code> bridge to the SQLite store, with live updates. People in chat apps get a PNG snapshot and a signed link.</p></div></li>
           <li><span class="d-id">D7</span><div><h3>Group chats follow a fixed policy</h3><p>Access, then trigger, then role. Each role has its own toolset, and a guest's turn never has private data and outbound sending at the same time.</p></div></li>
           <li><span class="d-id">D8</span><div><h3>Three surfaces, each with one job</h3><p>The CLI sets up and operates. One local web page holds chat and artifacts. Chat apps cover the phone and the group.</p></div></li>
-          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 2,710 lines of code. Blank lines, comments and docstrings don't count, so the budget never rewards dense code. New features arrive as skills, and the contribution guide says so.</p></div></li>
+          <li><span class="d-id">D9</span><div><h3>Size is a test</h3><p>CI fails if the core passes 2,860 lines of code. Blank lines, comments and docstrings don't count, so the budget never rewards dense code. New features arrive as skills, and the contribution guide says so.</p></div></li>
           <li><span class="d-id">D10</span><div><h3>One mail skill for every account</h3><p>Outlook through Outlook classic's COM interface or Microsoft Graph with OAuth, your choice per account. Gmail and Titan over IMAP. All behind the same commands. It reads and files on its own, saves replies as drafts, and sends only after your yes.</p></div></li>
         </ol>
       </section>
@@ -305,7 +305,7 @@ footer{margin-top:56px;padding-top:16px;border-top:1px solid var(--rule);font-fa
             <thead><tr><th></th><th>nanoclaw v1</th><th>nanoclaw v2</th><th>OpenClaw</th><th>nanobot</th><th>Attaché</th></tr></thead>
             <tbody>
               <tr><th>Language</th><td>TypeScript</td><td>TypeScript</td><td>TypeScript</td><td>Python</td><td>Python</td></tr>
-              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>2,702 lines of code after long turns, 2,710 cap</td></tr>
+              <tr><th>Core size</th><td>~2,700 lines (Feb), 3,800 (Mar)</td><td>~47,000 lines, not counting tests</td><td>nanoclaw's README cites “nearly half a million lines”</td><td>~4,000 at launch, ~195,000 now (estimate)</td><td>2,850 lines of code after model keyring support, 2,860 cap</td></tr>
               <tr><th>Install</th><td>Fork, then <code>/setup</code> in Claude Code</td><td>Same, Docker required</td><td>npm, gateway daemon</td><td><code>uv tool install nanobot-ai</code></td><td><code>uvx attache</code></td></tr>
               <tr><th>Models</th><td>Claude via the Agent SDK</td><td>Claude; Codex, OpenCode, Ollama as skills</td><td>Many, via config</td><td>Native OpenAI and Anthropic SDKs</td><td>Four adapters, any endpoint</td></tr>
               <tr><th>Extending it</th><td>Skills that rewrite your fork</td><td>Skills copy code from registry branches</td><td>Plugins, ClawHub skills</td><td>Built-in channels, skills</td><td>Runtime skills folder, no code changes</td></tr>
@@ -976,21 +976,22 @@ const answer = await attache.ask("Suggest three more items")</code></pre>
       <!-- §9 -->
       <section id="budget">
         <div class="sec-head"><span class="sec-no">§10</span><h2>Code budget</h2></div>
-        <p>Phase 1 came in at 1,576 lines of code in <code>src/attache</code>, against a cap of 1,600 that CI enforces. Phase 2 added the sidecar runner, approvals, rate limits and the hardening its reviews asked for. The simplicity review cut 54 lines first, and the owner then raised the cap to 1,900, with a target of about 1,850. For phase 3 the owner raised it to 2,050, then to 2,100 for the review fixes: sharing, <code>attache.ask</code> from pages, persisted requests and their hardening. The terminal's progress work then raised it to 2,180, and email requests to 2,240, for script identity and background runs. The owner workspace adds validated configuration editing, safe source preservation and recovery, raising the cap to 2,700. Starting a chat afresh (<code>/new</code>) and long turns, which wind up on a loop and carry on in a fresh context, raised it to 2,710; the core is at 2,702. The optional Hailer adapter remains a skill. Mail, files, the triage and the service are all skills. Blank lines, comments and docstrings don't count, so the budget never pushes code to be denser than it should be. Bundled skills, static files and tests don't count either, but each bundled skill has its own cap: 300 lines by default, 1,390 for <code>mail</code>, which has three backends, and 310 for <code>tui</code>, which clears its screen on <code>/new</code>.</p>
+        <p>Phase 1 came in at 1,576 lines of code in <code>src/attache</code>, against a cap of 1,600 that CI enforces. Phase 2 added the sidecar runner, approvals, rate limits and the hardening its reviews asked for. The simplicity review cut 54 lines first, and the owner then raised the cap to 1,900, with a target of about 1,850. For phase 3 the owner raised it to 2,050, then to 2,100 for the review fixes: sharing, <code>attache.ask</code> from pages, persisted requests and their hardening. The terminal's progress work then raised it to 2,180, and email requests to 2,240, for script identity and background runs. The owner workspace adds validated configuration editing, safe source preservation and recovery, raising the cap to 2,700. Starting a chat afresh (<code>/new</code>) and long turns, which wind up on a loop and carry on in a fresh context, raised it to 2,710. The owner's model keyring plan adds 148 core code lines and raises the cap to 2,860; the core is at 2,850. Login, rotation, status and logout live in the credentials skill, at 180 lines. The optional Hailer adapter remains a skill. Mail, files, the triage and the service are all skills. Blank lines, comments and docstrings don't count, so the budget never pushes code to be denser than it should be. Bundled skills, static files and tests don't count either, but each bundled skill has its own cap: 300 lines by default, 1,390 for <code>mail</code>, which has three backends, and 310 for <code>tui</code>, which clears its screen on <code>/new</code>.</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Module</th><th>Job</th><th>Code lines</th><th class="bar">Share</th></tr></thead>
             <tbody>
-              <tr><th>cli.py</th><td>init, chat, run, doctor, skills, skill</td><td class="num">122</td><td class="bar"><span style="--w:35.4%"></span></td></tr>
+              <tr><th>cli.py</th><td>init, chat, run, doctor, skills, skill</td><td class="num">135</td><td class="bar"><span style="--w:39.1%"></span></td></tr>
               <tr><th>app.py</th><td>Wiring, the two servers, clean shutdown</td><td class="num">97</td><td class="bar"><span style="--w:28.1%"></span></td></tr>
-              <tr><th>config.py</th><td>attache.toml and its checks, init_home, restrict</td><td class="num">178</td><td class="bar"><span style="--w:51.6%"></span></td></tr>
-              <tr><th>settings.py</th><td>Owner settings projection, validation, atomic saves and recovery</td><td class="num">343</td><td class="bar"><span style="--w:99.4%"></span></td></tr>
+              <tr><th>config.py</th><td>attache.toml and its checks, init_home, restrict</td><td class="num">184</td><td class="bar"><span style="--w:53.3%"></span></td></tr>
+              <tr><th>credentials.py</th><td>Explicit environment or destination-bound OS keyring lookup</td><td class="num">111</td><td class="bar"><span style="--w:32.2%"></span></td></tr>
+              <tr><th>settings.py</th><td>Owner settings projection, validation, atomic saves and recovery</td><td class="num">345</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
               <tr><th>store.py</th><td>SQLite: messages, docs, tasks; the db rules</td><td class="num">160</td><td class="bar"><span style="--w:46.4%"></span></td></tr>
               <tr><th>router.py</th><td>Access, roles, fencing, prompt, limits, turns, page turns</td><td class="num">233</td><td class="bar"><span style="--w:67.5%"></span></td></tr>
-              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">121</td><td class="bar"><span style="--w:35.1%"></span></td></tr>
-              <tr><th>types.py</th><td>Shared types</td><td class="num">92</td><td class="bar"><span style="--w:26.7%"></span></td></tr>
-              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">45</td><td class="bar"><span style="--w:13.0%"></span></td></tr>
-              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">72</td><td class="bar"><span style="--w:20.9%"></span></td></tr>
+              <tr><th>agent.py</th><td>Shared tool loop</td><td class="num">115</td><td class="bar"><span style="--w:33.3%"></span></td></tr>
+              <tr><th>types.py</th><td>Shared types</td><td class="num">93</td><td class="bar"><span style="--w:27.0%"></span></td></tr>
+              <tr><th>backends/anthropic.py</th><td>Messages API</td><td class="num">56</td><td class="bar"><span style="--w:16.2%"></span></td></tr>
+              <tr><th>backends/openai.py</th><td>Chat Completions and Responses</td><td class="num">82</td><td class="bar"><span style="--w:23.8%"></span></td></tr>
               <tr><th>backends/claude_cli.py</th><td><code>claude -p</code>, sessions, transcript</td><td class="num">134</td><td class="bar"><span style="--w:38.8%"></span></td></tr>
               <tr><th>backends/__init__.py</th><td>Picks a backend</td><td class="num">25</td><td class="bar"><span style="--w:7.2%"></span></td></tr>
               <tr><th>tools.py</th><td>Tools by role, path confinement, ask, request, mail approvals, background scripts</td><td class="num">314</td><td class="bar"><span style="--w:91.0%"></span></td></tr>
@@ -998,7 +999,7 @@ const answer = await attache.ask("Suggest three more items")</code></pre>
               <tr><th>channels.py</th><td>Channel manager, questions and answers, terminal, sidecars</td><td class="num">280</td><td class="bar"><span style="--w:81.2%"></span></td></tr>
               <tr><th>scheduler.py</th><td>Due-task loop, DST-safe cron</td><td class="num">44</td><td class="bar"><span style="--w:12.8%"></span></td></tr>
               <tr><th>web.py</th><td>Chat page, artifacts, bridge, SSE, MCP, attache.ask, share links</td><td class="num">345</td><td class="bar"><span style="--w:100.0%"></span></td></tr>
-              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>2,702</strong></td><td class="bar"></td></tr>
+              <tr><th>Total</th><td>plus 3 lines in __init__ and __main__</td><td class="num"><strong>2,850</strong></td><td class="bar"></td></tr>
             </tbody>
           </table>
         </div>
@@ -1012,6 +1013,7 @@ dependencies = [
   "anthropic", "openai",
   "starlette", "uvicorn",
   "pyyaml", "cronsim",
+  "keyring&gt;=25,&lt;26",
 ]
 
 [project.optional-dependencies]
@@ -1022,14 +1024,14 @@ attache = "attache.cli:main"</code></pre>
           </div>
           <div>
             <div class="code-label">tests/test_budget.py</div>
-<pre><code>CORE_LIMIT = 2710  <span class="c"># blanks, comments, docstrings free</span>
+<pre><code>CORE_LIMIT = 2860  <span class="c"># blanks, comments, docstrings free</span>
 
 def test_core_stays_small():
     lines = sum(code_lines(p) for p in core_files())
     assert lines &lt;= CORE_LIMIT, (
         f"core is {lines} lines of code; "
         "move the feature into a skill")</code></pre>
-            <p class="small muted">pyyaml and cronsim have no dependencies of their own. Starlette needs only anyio. Everything else, such as slack-bolt, pywin32, IMAPClient or python-docx, is declared by the skill script that needs it and never touches the core install.</p>
+            <p class="small muted">pyyaml and cronsim have no dependencies of their own. Starlette needs only anyio. keyring supplies OS credential access; the credentials skill declares tomlkit for preserving configuration comments. Other integrations, such as slack-bolt, pywin32, IMAPClient or python-docx, are declared by the skill script that needs them and never touch the core install.</p>
           </div>
         </div>
       </section>

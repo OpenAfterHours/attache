@@ -24,7 +24,6 @@ label() names the tool and a few arguments, never contents.
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections import Counter
@@ -78,14 +77,6 @@ class Adapter(Protocol):
 
     def add_results(self, state: Any, results: list[tuple[ToolCall, str]]) -> None:
         """Append tool results in the protocol's native form."""
-
-
-def api_key(endpoint: Endpoint) -> str | None:
-    """The value of $key_env, or None when no key_env is set; RuntimeError when it is empty."""
-    env = endpoint.key_env
-    if env and not os.environ.get(env):
-        raise RuntimeError(f"endpoint '{endpoint.name}' needs the {env} environment variable")
-    return os.environ[env] if env else None
 
 
 def tool_spec(tool: Tool, key: str = "parameters") -> dict[str, Any]:
