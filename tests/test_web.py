@@ -156,9 +156,10 @@ def test_index_holds_no_token(env: Any) -> None:
     assert "access-control-allow-origin" not in r.headers
     assert not re.search(r"""(src|href)=["']?(https?:)?//""", r.text)  # no external requests
     assert ".innerHTML" not in r.text and "insertAdjacentHTML" not in r.text
-    # A turn's progress: the latest step, its thinking dimmed, Stop or Esc, and a footer.
+    # A turn's progress: each step, its thinking dimmed, Stop or Esc, and a footer.
     assert 'events.addEventListener("activity"' in r.text
-    assert "thinking.step.textContent = `${event.label}…`" in r.text
+    assert 'if (event.kind === "step") stepTo(event.label);' in r.text
+    assert "thinking.step.textContent = `${label}…`" in r.text
     assert 'api("POST", "/api/stop")' in r.text and 'event.key === "Escape"' in r.text
     assert '["stopped", time]' in r.text and "tokens`, route]" in r.text
     assert 'frame.setAttribute("sandbox", "allow-scripts allow-forms")' in r.text
@@ -213,8 +214,14 @@ def test_artifact_list_gives_each_page_with_its_token(env: Any) -> None:
     page(env.sv, "home")
     (env.sv.config.home / "artifacts" / "Not A Slug.html").write_text("x", encoding="utf-8")
     r = env.client.get("/api/artifacts", headers=UI)
+    folder = env.sv.config.home / "artifacts"
     assert r.json() == [
-        {"name": name, "src": src(name), "version": web._version(env.sv, name)}
+        {
+            "name": name,
+            "src": src(name),
+            "version": web._version(env.sv, name),
+            "modified": (folder / f"{name}.html").stat().st_mtime,
+        }
         for name in ("home", "trip")
     ]
     assert env.client.get(r.json()[0]["src"]).status_code == 200

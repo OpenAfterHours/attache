@@ -18,7 +18,7 @@ uv tool install attache      # keep it
 attache init && attache run  # set up ~/.attache, then start the web page
 ```
 
-![The Attaché web page: the chat on the left, and the Home page with to-dos and reminders on the right](phase-1-ui.png){ .oah-shot }
+![The Attaché web page: the sidebar, the chat, and the Home page with to-dos and reminders beside it](phase-1-ui.png){ .oah-shot }
 
 You chat with Attaché in a terminal and on a local web page, and both are the same
 conversation. Ask it for a to-do, a reminder or a board, and the Home page updates while you

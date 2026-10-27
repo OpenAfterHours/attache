@@ -14,7 +14,8 @@ Local routes (create_app(services, channel, router)), on [web] host:port
                                it (Sec-Fetch-Dest: iframe), except that snapshot_url's extra
                                &r=<snapshot token> lets the render skill's browser open it
                                top-level, for 10 minutes
-  GET  /api/artifacts          [{name, src, version}], src = "/a/<name>?t=<token>"   UI token
+  GET  /api/artifacts          [{name, src, version, modified}], src = "/a/<name>?t=<token>",
+                               modified the file's mtime in seconds (recent pages) UI token
   GET|PUT /api/settings        safe editable settings and revision-checked save    UI token
   POST /api/settings/validate  preview {revision, changes|toml}, without saving     UI token
   POST /api/settings/restore   restore {revision, backup_revision}                 UI token
@@ -358,14 +359,15 @@ def create_app(
     async def artifacts(request: Request) -> Response:
         ui_only(request)
         files = (home / "artifacts").glob("*.html")
-        names = sorted(p.stem for p in files if SLUG.fullmatch(p.stem))
+        pages = sorted(p for p in files if SLUG.fullmatch(p.stem))
         listing = [
             {
-                "name": n,
-                "src": f"/a/{n}?t={page_token(services, n)}",
-                "version": _version(services, n),
+                "name": p.stem,
+                "src": f"/a/{p.stem}?t={page_token(services, p.stem)}",
+                "version": _version(services, p.stem),
+                "modified": p.stat().st_mtime,
             }
-            for n in names
+            for p in pages
         ]
         return JSONResponse(listing)
 

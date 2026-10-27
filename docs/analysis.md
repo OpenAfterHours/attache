@@ -4,10 +4,11 @@ icon: lucide/chart-no-axes-combined
 
 # Data analysis
 
-The **Analysis** workspace shows saved results pages. Ask Attaché to analyse a dataset and
-it can use the optional bundled `analysis` skill to keep calculations in a persistent
-[Hailer](https://github.com/OpenAfterHours/hailer) notebook. Attaché remains the chat and
-uses your existing model configuration; no second Hailer model or API key is needed.
+The web workspace's **Pages** list shows saved results pages under **Analyses**. Ask
+Attaché to analyse a dataset and it can use the optional bundled `analysis` skill to keep
+calculations in a persistent [Hailer](https://github.com/OpenAfterHours/hailer) notebook.
+Attaché remains the chat and uses your existing model configuration; no second Hailer model
+or API key is needed.
 
 After upgrading an existing installation, run `attache init` to add the bundled analysis
 skill, using the same `--home` if you use a custom home. Existing files are preserved.
@@ -19,12 +20,12 @@ analysis workspace and refuses to replace an existing copy.
 
 ## Saved results and live notebooks
 
-The in-app Analysis view contains saved HTML results pages, named `analysis-<name>`. These
+Saved results are HTML pages named `analysis-<name>`, listed under **Analyses**. These
 are snapshots of verified calculations; ask in chat to refresh them after data changes.
 They use the same sandbox as every other Attaché page.
 
 The **live editable notebook opens in a separate browser window on the machine running
-Attaché**. It is not embedded in the Analysis panel. Keep the notebook open while working;
+Attaché**. It is not embedded in the workspace. Keep the notebook open while working;
 opening a notebook establishes the session its calculations use. Tables, charts and Python
 cells remain saved in the workspace, so Attaché can reopen them later.
 

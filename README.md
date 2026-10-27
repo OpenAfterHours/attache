@@ -29,16 +29,17 @@ attache skill tui                # a full-screen terminal app (docs/terminal.md)
 While a turn runs, the terminal shows what Attaché is doing: `working…`, each step with its
 time, a line of Claude's thinking, and a footer with time and tokens. Ctrl+C stops a turn.
 
-![The resizable web workspace, with chat beside Tasks and tabs for Pages, Analysis, Activity and Settings](docs/workspace-ui.png)
+![The web workspace: a sidebar with Today, Chat, pages and Settings, and the chat beside the Home page](docs/workspace-ui.png)
 
 The terminal and the web page are one conversation. Attaché prints a link like
 `http://127.0.0.1:8765/#t=...` when it starts; open that link to use the web page. The token in
 it changes every run, so other programs on your machine can't drive your assistant.
 
-The [web workspace](docs/workspace.md) has Chat, Split and Workspace layouts with a
-resizable divider. Switch between tasks, saved pages, activity and owner-only Settings;
-your draft and open pages stay in place. Settings validates and previews changes before
-saving, preserves file-managed options, and shows when a restart is needed.
+The [web workspace](docs/workspace.md) opens on Today: what is waiting for your answer,
+open to-dos, coming reminders and recent pages, under a message box. A sidebar switches
+between Today, Chat and owner-only Settings, and opens any page beside them, with a
+resizable divider; your drafts and open pages stay in place. Settings validates and previews
+changes before saving, preserves file-managed options, and shows when a restart is needed.
 
 The optional [analysis skill](docs/analysis.md) connects the same conversation to a Hailer
 notebook. Saved result pages appear in the workspace; the live notebook opens separately.

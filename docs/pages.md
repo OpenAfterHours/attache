@@ -9,9 +9,10 @@ page shows. A to-do board, a trip checklist, a reading tracker: anything interac
 read and write your real data through a small bridge, so a tick on a board changes the same
 to-do the assistant sees, and every open copy updates at once.
 
-The [web workspace](workspace.md) can show a page beside chat or use the full window. Its
-Pages view lists your saved pages; Tasks opens the Home or to-do page. Changing views keeps
-pages loaded. Use the page's Reload control to load a fresh copy after editing its HTML.
+The [web workspace](workspace.md) lists your pages in its sidebar and opens one beside
+Today or the chat, or across the whole window. Your Home or to-do page comes first, and
+Today's to-dos link to it. Changing views keeps pages loaded. Use the page's Reload control
+to load a fresh copy after editing its HTML.
 
 ## Getting a page
 
