@@ -96,7 +96,16 @@ def main() -> None:
             )
             return JSONResponse({"ok": True})
 
+        async def reply(request: Request) -> JSONResponse:
+            body = await request.json()  # a reply, or with "ask" a question; neither is stored
+            if body.get("ask"):
+                await channel.ask("me", "fixture-ask", body["text"], ["Send", "Not now"])
+            else:
+                await channel.send(Outbound("local:me", body["text"]))
+            return JSONResponse({"ok": True})
+
         app.routes.append(Route("/__test/republish", republish, methods=["POST"]))
+        app.routes.append(Route("/__test/reply", reply, methods=["POST"]))
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

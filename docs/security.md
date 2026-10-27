@@ -167,6 +167,11 @@ only the collections named in its `attache-collections` meta tag. It opens only 
 Attaché window, except from a snapshot link (for the `render` skill) or a share link. The
 details are in [Pages](pages.md#the-sandbox).
 
+The chat on the web page is not a page and has no sandbox, so it never treats message text
+as HTML. It builds a reply's Markdown from text nodes and a few plain elements. Links are
+made only to `http`, `https` and `mailto` addresses, and images are shown as links, never
+loaded.
+
 ## Pages that ask
 
 A page in the Attaché window can ask the assistant with `attache.ask`. That turn belongs to
